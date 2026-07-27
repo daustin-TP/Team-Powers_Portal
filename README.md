@@ -4,6 +4,8 @@ Standalone employee operations portal with passwordless email sign-in, invitatio
 
 ## Access model
 
+
+
 - Employees sign in with a one-time email link.
 - A valid work email does not grant access by itself.
 - An administrator must first add the address to `invited_employees`.
