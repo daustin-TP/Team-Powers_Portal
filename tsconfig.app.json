@@ -1,13 +1,20 @@
--- Managers and accounting users need employee names for operational queues.
--- Personal profile edits remain restricted to administrators.
-create policy "operations read active profiles"
-on public.profiles for select
-using (
-  active = true
-  and public.current_portal_role() in ('manager', 'accounting', 'admin')
-);
-
--- Administrators can see inactive accounts so access can be restored.
-create policy "admins read all profiles"
-on public.profiles for select
-using (public.current_portal_role() = 'admin');
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["src"]
+}

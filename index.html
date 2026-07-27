@@ -1,19 +1,14 @@
--- Run this before the first administrator signs in.
--- The migration's auth trigger will create the administrator profile
--- automatically when this email completes its first passwordless login.
-insert into public.invited_employees (email, full_name, role, location, active)
-values (
-  'daustin@powerspizza.com',
-  'Delaney Austin',
-  'admin',
-  'Operations',
-  true
-)
-on conflict (email) do update
-set role = 'admin', active = true;
-
-insert into public.invited_employees (email, full_name, role, location)
-values
-  ('manager@powerspizza.com', 'Sample Manager', 'manager', 'Powers Pizza'),
-  ('employee@powerspizza.com', 'Sample Employee', 'employee', 'Powers Pizza')
-on conflict (email) do nothing;
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#173f35" />
+    <meta name="description" content="Team Powers employee operations portal" />
+    <title>Team Powers Employee Portal</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
