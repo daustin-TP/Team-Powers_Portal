@@ -12,11 +12,33 @@ export type Profile = {
 export type PortalSection =
   | "home"
   | "uniforms"
+  | "smallwares"
   | "payroll"
   | "receipts"
   | "approvals"
   | "reconciliation"
+  | "catalog"
   | "team";
+
+export type CatalogCategory = "uniform" | "smallware";
+
+export type CatalogItem = {
+  id: string;
+  category: CatalogCategory;
+  name: string;
+  description: string;
+  price: number;
+  imagePath: string | null;
+  imageUrl: string | null;
+  sizes: string[];
+  active: boolean;
+};
+
+export type CartLine = {
+  item: CatalogItem;
+  quantity: number;
+  size?: string;
+};
 
 export type ActivityItem = {
   id: string;

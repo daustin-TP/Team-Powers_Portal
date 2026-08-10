@@ -9,6 +9,8 @@ import {
   LogOut,
   Menu,
   Package,
+  Settings,
+  ShoppingBag,
   Receipt,
   ShieldCheck,
   Users,
@@ -26,6 +28,7 @@ import Receipts from "./components/Receipts";
 import Approvals from "./components/Approvals";
 import Reconciliation from "./components/Reconciliation";
 import Team from "./components/Team";
+import CatalogAdmin from "./components/CatalogAdmin";
 
 const navigation: {
   id: PortalSection;
@@ -35,6 +38,7 @@ const navigation: {
 }[] = [
   { id: "home", label: "Home", icon: Home },
   { id: "uniforms", label: "Uniforms", icon: Package },
+  { id: "smallwares", label: "Smallwares", icon: ShoppingBag },
   { id: "payroll", label: "Payroll authorization", icon: WalletCards },
   { id: "receipts", label: "Card receipts", icon: Receipt },
   {
@@ -50,6 +54,7 @@ const navigation: {
     roles: ["accounting", "admin"],
   },
   { id: "team", label: "Team access", icon: Users, roles: ["admin"] },
+  { id: "catalog", label: "Catalog management", icon: Settings, roles: ["admin"] },
 ];
 
 async function loadProfile(userId: string, email: string): Promise<Profile | null> {
@@ -166,11 +171,13 @@ export default function App() {
   const content = {
     home: <Dashboard profile={profile} onNavigate={selectSection} />,
     uniforms: <Uniforms profile={profile} />,
+    smallwares: <Uniforms profile={profile} category="smallware" />,
     payroll: <Payroll profile={profile} />,
     receipts: <Receipts profile={profile} />,
     approvals: <Approvals profile={profile} />,
     reconciliation: <Reconciliation />,
     team: <Team />,
+    catalog: <CatalogAdmin profile={profile} />,
   }[section];
 
   return (

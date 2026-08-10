@@ -1,91 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, CheckCircle2, Download, Search } from "lucide-react";
+import { AlertCircle, CheckCircle2, Eye, Search, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
-type Transaction = {
-  id: string;
-  date: string;
-  person: string;
-  vendor: string;
-  amount: number;
-  status: "Matched" | "Needs review";
-};
-
-const demoTransactions: Transaction[] = [
-  { id: "1", date: "Jul 23", person: "Jordan Manager", vendor: "Restaurant Depot", amount: 184.62, status: "Needs review" },
-  { id: "2", date: "Jul 22", person: "Delaney Austin", vendor: "Office Depot", amount: 47.18, status: "Matched" },
-  { id: "3", date: "Jul 21", person: "Taylor Employee", vendor: "Home Depot", amount: 92.41, status: "Matched" },
-];
-
-export default function Reconciliation() {
-  const [transactions, setTransactions] = useState<Transaction[]>(supabase ? [] : demoTransactions);
-  const [search, setSearch] = useState("");
-  const [message, setMessage] = useState("");
-
-  useEffect(() => {
-    if (!supabase) return;
-    supabase
-      .from("card_receipts")
-      .select("id,purchase_date,vendor,amount,status,profiles!card_receipts_employee_id_fkey(full_name)")
-      .order("purchase_date", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) {
-          setMessage("Transactions could not be loaded.");
-          return;
-        }
-        setTransactions((data ?? []).map((receipt: any) => ({
-          id: receipt.id,
-          date: new Date(`${receipt.purchase_date}T12:00:00`).toLocaleDateString([], { month: "short", day: "numeric" }),
-          person: receipt.profiles?.full_name ?? "Team member",
-          vendor: receipt.vendor,
-          amount: Number(receipt.amount),
-          status: receipt.status === "matched" ? "Matched" : "Needs review",
-        })));
-      });
-  }, []);
-
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return transactions;
-    return transactions.filter((transaction) =>
-      `${transaction.person} ${transaction.vendor} ${transaction.amount}`.toLowerCase().includes(query),
-    );
-  }, [search, transactions]);
-
-  const statementTotal = transactions.reduce((sum, transaction) => sum + transaction.amount, 0);
-  const matched = transactions.filter((transaction) => transaction.status === "Matched").length;
-  const needsReview = transactions.length - matched;
-  const matchedPercent = transactions.length ? Math.round((matched / transactions.length) * 100) : 100;
-
-  return (
-    <div className="page">
-      <div className="page-heading heading-with-action">
-        <div><p className="eyebrow">Accounting</p><h1>Card reconciliation.</h1><p>Review submitted receipts and close the gaps before statement cutoff.</p></div>
-        <button className="button secondary"><Download size={17} /> Export</button>
-      </div>
-      <div className="metric-grid">
-        <div className="metric-card"><span>Submitted total</span><strong>${statementTotal.toFixed(2)}</strong><small>Current receipt records</small></div>
-        <div className="metric-card"><span>Receipts matched</span><strong>{matchedPercent}%</strong><small>{matched} of {transactions.length} receipts</small></div>
-        <div className="metric-card attention"><span>Needs attention</span><strong>{needsReview}</strong><small>Receipts awaiting review</small></div>
-      </div>
-      {message && <p className="inline-message">{message}</p>}
-      <section className="panel table-panel">
-        <div className="table-toolbar">
-          <div><h2>Recent transactions</h2><p>Receipts submitted by cardholders</p></div>
-          <label className="search-field"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search transactions" /></label>
-        </div>
-        <div className="responsive-table">
-          <table>
-            <thead><tr><th>Date</th><th>Cardholder</th><th>Vendor</th><th>Amount</th><th>Status</th></tr></thead>
-            <tbody>{filtered.map((transaction) => (
-              <tr key={transaction.id}>
-                <td>{transaction.date}</td><td>{transaction.person}</td><td>{transaction.vendor}</td><td><strong>${transaction.amount.toFixed(2)}</strong></td>
-                <td><span className={`table-status ${transaction.status === "Matched" ? "matched" : "review"}`}>{transaction.status === "Matched" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}{transaction.status}</span></td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
-      </section>
-    </div>
-  );
-}
+type Transaction={id:string;purchaseDate:string;person:string;vendor:string;amount:number;status:string;category:string;purpose:string;storagePath:string};
+export default function Reconciliation(){
+  const today=new Date().toISOString().slice(0,10), start=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  const [from,setFrom]=useState(start),[to,setTo]=useState(today),[transactions,setTransactions]=useState<Transaction[]>([]),[search,setSearch]=useState(""),[selected,setSelected]=useState<Transaction|null>(null),[fileUrl,setFileUrl]=useState(""),[message,setMessage]=useState("");
+  const load=async()=>{if(!supabase)return;setMessage("Loading…");const {data,error}=await supabase.from("card_receipts").select("id,purchase_date,vendor,amount,status,category,business_purpose,storage_path,profiles!card_receipts_employee_id_fkey(full_name)").gte("purchase_date",from).lte("purchase_date",to).order("purchase_date",{ascending:false});if(error){setMessage(error.message);return;}setTransactions((data??[]).map((x:any)=>({id:x.id,purchaseDate:x.purchase_date,person:x.profiles?.full_name??"Team member",vendor:x.vendor,amount:Number(x.amount),status:x.status,category:x.category,purpose:x.business_purpose,storagePath:x.storage_path})));setMessage("")};
+  useEffect(()=>{load()},[]);
+  const view=async(x:Transaction)=>{setSelected(x);setFileUrl("");if(supabase){const {data}=await supabase.storage.from("receipts").createSignedUrl(x.storagePath,900);setFileUrl(data?.signedUrl??"")}};
+  const filtered=useMemo(()=>transactions.filter(x=>`${x.person} ${x.vendor} ${x.amount} ${x.category} ${x.purpose}`.toLowerCase().includes(search.toLowerCase())),[transactions,search]);
+  const total=transactions.reduce((s,x)=>s+x.amount,0), matched=transactions.filter(x=>x.status==="matched").length;
+  return <div className="page"><div className="page-heading"><p className="eyebrow">Accounting</p><h1>Receipt review.</h1><p>Choose any date range, review every entry, and open the attached receipt.</p></div>
+    <section className="panel receipt-filters"><label>From<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>Through<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label><button className="button primary" onClick={load}>Apply dates</button><label className="search-field"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search entries"/></label></section>
+    <div className="metric-grid"><div className="metric-card"><span>Selected period</span><strong>${total.toFixed(2)}</strong><small>{transactions.length} transactions</small></div><div className="metric-card"><span>Matched</span><strong>{matched}</strong><small>Reviewed receipts</small></div><div className="metric-card attention"><span>Needs review</span><strong>{transactions.length-matched}</strong><small>Open entries</small></div></div>{message&&<p className="inline-message">{message}</p>}
+    <section className="panel table-panel"><div className="responsive-table"><table><thead><tr><th>Date</th><th>Employee</th><th>Vendor</th><th>Category</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map(x=><tr key={x.id}><td>{new Date(x.purchaseDate+"T12:00:00").toLocaleDateString()}</td><td>{x.person}</td><td>{x.vendor}</td><td>{x.category}</td><td><strong>${x.amount.toFixed(2)}</strong></td><td><span className={`table-status ${x.status==="matched"?"matched":"review"}`}>{x.status==="matched"?<CheckCircle2 size={15}/>:<AlertCircle size={15}/>} {x.status}</span></td><td><button className="text-button" onClick={()=>view(x)}><Eye size={16}/> Review</button></td></tr>)}</tbody></table></div></section>
+    {selected&&<div className="modal-backdrop" onClick={()=>setSelected(null)}><section className="receipt-modal" onClick={e=>e.stopPropagation()}><button className="icon-button modal-close" onClick={()=>setSelected(null)}><X/></button><div><p className="eyebrow">Full receipt entry</p><h2>{selected.vendor}</h2><dl className="receipt-details"><div><dt>Employee</dt><dd>{selected.person}</dd></div><div><dt>Purchase date</dt><dd>{new Date(selected.purchaseDate+"T12:00:00").toLocaleDateString()}</dd></div><div><dt>Amount</dt><dd>${selected.amount.toFixed(2)}</dd></div><div><dt>Category</dt><dd>{selected.category}</dd></div><div><dt>Business purpose</dt><dd>{selected.purpose}</dd></div><div><dt>Status</dt><dd>{selected.status}</dd></div></dl></div><div className="receipt-preview">{fileUrl?(selected.storagePath.toLowerCase().endsWith(".pdf")?<iframe src={fileUrl} title="Receipt PDF"/>:<img src={fileUrl} alt={`Receipt from ${selected.vendor}`}/>):<p>Preparing receipt image…</p>}</div></section></div>}
+  </div>}
