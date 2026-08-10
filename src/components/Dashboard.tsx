@@ -1,0 +1,131 @@
+import {
+  ArrowRight,
+  ClipboardCheck,
+  Package,
+  Receipt,
+  WalletCards,
+} from "lucide-react";
+import { recentActivity } from "../data/demo";
+import type { PortalSection, Profile } from "../types";
+
+export default function Dashboard({
+  profile,
+  onNavigate,
+}: {
+  profile: Profile;
+  onNavigate: (section: PortalSection) => void;
+}) {
+  const firstName = profile.fullName.split(" ")[0];
+  const actions: {
+    title: string;
+    detail: string;
+    icon: typeof Package;
+    section: PortalSection;
+    tone: string;
+  }[] = [
+    {
+      title: "Order uniforms",
+      detail: "Request shirts, hats, and other approved items.",
+      icon: Package,
+      section: "uniforms",
+      tone: "green",
+    },
+    {
+      title: "Payroll authorization",
+      detail: "Review and sign a deduction authorization.",
+      icon: WalletCards,
+      section: "payroll",
+      tone: "gold",
+    },
+    {
+      title: "Submit a receipt",
+      detail: "Upload and categorize a corporate-card purchase.",
+      icon: Receipt,
+      section: "receipts",
+      tone: "blue",
+    },
+    {
+      title: "Review approvals",
+      detail: "See requests waiting for your attention.",
+      icon: ClipboardCheck,
+      section: "approvals",
+      tone: "plum",
+    },
+  ];
+
+  return (
+    <div className="page dashboard">
+      <section className="welcome">
+        <div>
+          <p className="eyebrow">Employee portal</p>
+          <h1>Good to see you, {firstName}.</h1>
+          <p>What would you like to take care of today?</p>
+        </div>
+        <div className="welcome-date">
+          <span>Friday</span>
+          <strong>24</strong>
+          <span>July</span>
+        </div>
+      </section>
+
+      <section>
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Quick actions</p>
+            <h2>Start a request</h2>
+          </div>
+        </div>
+        <div className="action-grid">
+          {actions
+            .filter(
+              (action) =>
+                action.section !== "approvals" || profile.role !== "employee",
+            )
+            .map((action) => {
+              const Icon = action.icon;
+              return (
+                <button
+                  className="action-card"
+                  key={action.title}
+                  onClick={() => onNavigate(action.section)}
+                >
+                  <span className={`action-icon ${action.tone}`}>
+                    <Icon size={23} />
+                  </span>
+                  <span>
+                    <strong>{action.title}</strong>
+                    <small>{action.detail}</small>
+                  </span>
+                  <ArrowRight className="action-arrow" size={19} />
+                </button>
+              );
+            })}
+        </div>
+      </section>
+
+      <section className="activity-section">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">At a glance</p>
+            <h2>Recent activity</h2>
+          </div>
+        </div>
+        <div className="activity-card">
+          {recentActivity.map((item) => (
+            <div className="activity-row" key={item.id}>
+              <span className={`status-dot ${item.status.replace(" ", "-").toLowerCase()}`} />
+              <div>
+                <strong>{item.title}</strong>
+                <small>{item.detail}</small>
+              </div>
+              <span className={`status-pill ${item.status.replace(" ", "-").toLowerCase()}`}>
+                {item.status}
+              </span>
+              <time>{item.date}</time>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
