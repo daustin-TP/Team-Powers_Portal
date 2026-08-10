@@ -22,7 +22,7 @@ export default function Uniforms({ profile, category = "uniform" }: { profile: P
   useEffect(() => {
     if (!supabase) { setItems(fallback.filter(x => x.category === category)); return; }
     supabase.from("catalog_items").select("*").eq("category", category).eq("active", true).order("name").then(({data}) => {
-      setItems((data ?? []).map((x:any) => ({ id:x.id, category:x.category, name:x.name, description:x.description, price:Number(x.price), imagePath:x.image_path, imageUrl:x.image_path ? supabase!.storage.from("catalog-images").getPublicUrl(x.image_path).data.publicUrl : null, sizes:x.sizes ?? [], active:x.active }))
+      setItems((data ?? []).map((x:any) => ({ id:x.id, category:x.category, name:x.name, description:x.description, price:Number(x.price), imagePath:x.image_path, imageUrl:x.image_path ? supabase!.storage.from("catalog-images").getPublicUrl(x.image_path).data.publicUrl : null, sizes:x.sizes ?? [], active:x.active })));
     });
     supabase.from("profiles").select("id,full_name").eq("active", true).order("full_name").then(({data}) => setEmployees(data ?? []));
   }, [category]);
