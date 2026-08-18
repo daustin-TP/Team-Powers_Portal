@@ -91,3 +91,4 @@ export default function Receipts({ profile }: { profile: Profile }) {
     </div>
   );
 }
+

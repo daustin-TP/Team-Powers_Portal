@@ -207,3 +207,4 @@ using (
     or public.current_portal_role() in ('accounting', 'admin')
   )
 );
+

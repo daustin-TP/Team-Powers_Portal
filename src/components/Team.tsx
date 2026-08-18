@@ -1,13 +1,15 @@
 import { FormEvent, useEffect, useState } from "react";
-import { MailPlus, MoreHorizontal, Search, ShieldCheck, UserCheck, UserX } from "lucide-react";
+import { MailPlus, MoreHorizontal, Plus, Search, ShieldCheck, UserCheck, UserX } from "lucide-react";
 import { teamMembers } from "../data/demo";
 import type { Profile, Role } from "../types";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 
 const OWNER_EMAIL = "daustin@powerspizza.com";
+type Store={id:string;name:string;active:boolean}; type Member=Profile&{storeId?:string|null;capabilities?:string[]};
 
 export default function Team({ currentProfile }: { currentProfile: Profile }) {
-  const [members, setMembers] = useState<Profile[]>(teamMembers);
+  const [members, setMembers] = useState<Member[]>(teamMembers);
+  const [stores,setStores]=useState<Store[]>([]); const [newStore,setNewStore]=useState("");
   const [showInvite, setShowInvite] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("employee");
@@ -20,7 +22,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
     if (!supabase) return;
     supabase
       .from("profiles")
-      .select("id,email,full_name,role,location,active")
+      .select("id,email,full_name,role,location,active,store_id,profile_capabilities(capability)")
       .order("full_name")
       .then(({ data }) => {
         if (!data) return;
@@ -30,10 +32,16 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
           fullName: member.full_name,
           role: member.role,
           location: member.location,
-          active: member.active,
+          active: member.active,storeId:member.store_id,capabilities:(member.profile_capabilities??[]).map((x:any)=>x.capability),
         })));
       });
   }, []);
+  const loadStores=()=>supabase?.from("stores").select("id,name,active").order("name").then(({data})=>setStores(data??[])); useEffect(()=>{loadStores()},[]);
+  const addStore=async()=>{if(!supabase||!newStore.trim())return;const{error}=await supabase.from("stores").insert({name:newStore.trim()});if(error)setMessage(error.message);else{setNewStore("");loadStores()}};
+  const renameStore=async(s:Store)=>{const name=window.prompt("Store name",s.name)?.trim();if(!name||!supabase)return;await supabase.from("stores").update({name,updated_at:new Date().toISOString()}).eq("id",s.id);loadStores()};
+  const toggleStore=async(s:Store)=>{if(!supabase)return;await supabase.from("stores").update({active:!s.active}).eq("id",s.id);loadStores()};
+  const assignStore=async(m:Member,id:string)=>{if(!supabase)return;const s=stores.find(x=>x.id===id),{error}=await supabase.from("profiles").update({store_id:id||null,location:s?.name??"Unassigned"}).eq("id",m.id);if(error)setMessage(error.message);else setMembers(v=>v.map(x=>x.id===m.id?{...x,storeId:id,location:s?.name??"Unassigned"}:x))};
+  const setCapability=async(m:Member,c:"maintenance"|"technology",enabled:boolean)=>{if(!supabase)return;const r=enabled?await supabase.from("profile_capabilities").insert({profile_id:m.id,capability:c}):await supabase.from("profile_capabilities").delete().eq("profile_id",m.id).eq("capability",c);if(r.error)setMessage(r.error.message);else setMembers(v=>v.map(x=>x.id===m.id?{...x,capabilities:enabled?[...(x.capabilities??[]),c]:(x.capabilities??[]).filter(y=>y!==c)}:x))};
 
   const invite = async (event: FormEvent) => {
     event.preventDefault();
@@ -48,6 +56,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
           full_name: fullName,
           role,
           location: location || "Unassigned",
+          store_id:stores.find(s=>s.name===location)?.id??null,
           active: true,
         },
         { onConflict: "email" },
@@ -104,13 +113,14 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
         <button className="button primary" onClick={() => setShowInvite(true)}><MailPlus size={18} /> Invite team member</button>
       </div>
       <div className="admin-note"><ShieldCheck size={20} /><div><strong>Invitation-only access</strong><p>A valid work Gmail address is not enough by itself. Only people in this directory can enter the portal.</p></div></div>
+      <section className="panel store-admin"><div><h2>Stores</h2><p>Add, rename, deactivate, and assign stores.</p></div><div className="store-add"><input value={newStore} onChange={e=>setNewStore(e.target.value)} placeholder="New store name"/><button className="button secondary" onClick={addStore}><Plus/> Add store</button></div><div className="store-chips">{stores.map(s=><span className={!s.active?"inactive":""} key={s.id}>{s.name}<button onClick={()=>renameStore(s)}>Edit</button><button onClick={()=>toggleStore(s)}>{s.active?"Remove":"Restore"}</button></span>)}</div></section>
       {message && <p className="inline-message">{message}</p>}
       {showInvite && (
         <form className="invite-card" onSubmit={invite}>
           <div><p className="eyebrow">New team member</p><h2>Send an invitation</h2></div>
           <label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@powerspizza.com" required /></label>
           <label>Portal role<select value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="employee">Employee</option><option value="manager">Manager</option><option value="accounting">Accounting</option><option value="admin">Administrator</option></select></label>
-          <label>Location<input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Store or department" /></label>
+          <label>Store<select value={location} onChange={e=>setLocation(e.target.value)}><option value="">Unassigned</option>{stores.filter(s=>s.active).map(s=><option key={s.id}>{s.name}</option>)}</select></label>
           <div className="button-row"><button type="button" className="button secondary" onClick={() => setShowInvite(false)}>Cancel</button><button className="button primary" disabled={saving}>{saving ? "Authorizing…" : "Authorize email"}</button></div>
         </form>
       )}
@@ -130,6 +140,9 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
                     {member.email.toLowerCase() === OWNER_EMAIL || member.id === currentProfile.id
                       ? <span>This administrator account is protected.</span>
                       : <button type="button" onClick={() => toggle(member.id)}>{member.active ? <><UserX size={15}/> Deactivate access</> : <><UserCheck size={15}/> Reactivate access</>}</button>}
+                    <label>Assigned store<select value={member.storeId??""} onChange={e=>assignStore(member,e.target.value)}><option value="">Unassigned</option>{stores.filter(s=>s.active).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label>
+                    <label className="menu-check"><input type="checkbox" checked={member.capabilities?.includes("maintenance")??false} onChange={e=>setCapability(member,"maintenance",e.target.checked)}/> Maintenance responder</label>
+                    <label className="menu-check"><input type="checkbox" checked={member.capabilities?.includes("technology")??false} onChange={e=>setCapability(member,"technology",e.target.checked)}/> Technology responder</label>
                   </div>}
                 </td>
               </tr>

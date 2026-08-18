@@ -11,10 +11,11 @@ import {
   Package,
   Settings,
   ShoppingBag,
+  Wrench,
+  MonitorCog,
   Receipt,
   ShieldCheck,
   Users,
-  WalletCards,
   X,
 } from "lucide-react";
 import { supabase, isSupabaseConfigured } from "./lib/supabase";
@@ -23,12 +24,12 @@ import type { PortalSection, Profile, Role } from "./types";
 import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
 import Uniforms from "./components/Uniforms";
-import Payroll from "./components/Payroll";
 import Receipts from "./components/Receipts";
 import Approvals from "./components/Approvals";
 import Reconciliation from "./components/Reconciliation";
 import Team from "./components/Team";
 import CatalogAdmin from "./components/CatalogAdmin";
+import SupportTickets from "./components/SupportTickets";
 
 const navigation: {
   id: PortalSection;
@@ -39,7 +40,8 @@ const navigation: {
   { id: "home", label: "Home", icon: Home },
   { id: "uniforms", label: "Uniforms", icon: Package },
   { id: "smallwares", label: "Smallwares", icon: ShoppingBag },
-  { id: "payroll", label: "Payroll authorization", icon: WalletCards },
+  { id: "maintenance", label: "Maintenance", icon: Wrench },
+  { id: "technology", label: "Technology", icon: MonitorCog },
   { id: "receipts", label: "Card receipts", icon: Receipt },
   {
     id: "approvals",
@@ -172,7 +174,8 @@ export default function App() {
     home: <Dashboard profile={profile} onNavigate={selectSection} />,
     uniforms: <Uniforms profile={profile} />,
     smallwares: <Uniforms profile={profile} category="smallware" />,
-    payroll: <Payroll profile={profile} />,
+    maintenance: <SupportTickets profile={profile} area="maintenance" />,
+    technology: <SupportTickets profile={profile} area="technology" />,
     receipts: <Receipts profile={profile} />,
     approvals: <Approvals profile={profile} />,
     reconciliation: <Reconciliation />,

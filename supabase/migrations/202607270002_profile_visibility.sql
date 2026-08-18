@@ -11,3 +11,4 @@ using (
 create policy "admins read all profiles"
 on public.profiles for select
 using (public.current_portal_role() = 'admin');
+

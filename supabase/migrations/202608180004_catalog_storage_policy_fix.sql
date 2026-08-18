@@ -39,3 +39,4 @@ using (
   bucket_id = 'catalog-images'
   and public.current_portal_role() = 'admin'
 );
+

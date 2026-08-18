@@ -3,7 +3,8 @@ import {
   ClipboardCheck,
   Package,
   Receipt,
-  WalletCards,
+  Wrench,
+  MonitorCog,
 } from "lucide-react";
 import { recentActivity } from "../data/demo";
 import type { PortalSection, Profile } from "../types";
@@ -31,12 +32,13 @@ export default function Dashboard({
       tone: "green",
     },
     {
-      title: "Payroll authorization",
-      detail: "Review and sign a deduction authorization.",
-      icon: WalletCards,
-      section: "payroll",
+      title: "Maintenance request",
+      detail: "Report a store repair and track its progress.",
+      icon: Wrench,
+      section: "maintenance",
       tone: "gold",
     },
+    {title:"Technology request",detail:"Report a system or equipment issue.",icon:MonitorCog,section:"technology",tone:"blue"},
     {
       title: "Submit a receipt",
       detail: "Upload and categorize a corporate-card purchase.",

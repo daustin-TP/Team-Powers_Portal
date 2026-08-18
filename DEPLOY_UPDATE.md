@@ -24,3 +24,4 @@ The Worker build must retain both build variables:
 ## 4. Test
 
 Sign out, request a fresh magic link for `daustin@powerspizza.com`, and confirm that **Catalog management** and **Team access** appear. Add one uniform and one smallware product, including a picture, then submit test orders. Finally, open **Reconciliation**, choose a date range, and review a receipt attachment.
+

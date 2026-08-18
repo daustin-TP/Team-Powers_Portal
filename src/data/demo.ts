@@ -52,3 +52,4 @@ export const teamMembers: Profile[] = [
     active: true,
   },
 ];
+

@@ -17,3 +17,4 @@ values
   ('manager@powerspizza.com', 'Sample Manager', 'manager', 'Powers Pizza'),
   ('employee@powerspizza.com', 'Sample Employee', 'employee', 'Powers Pizza')
 on conflict (email) do nothing;
+

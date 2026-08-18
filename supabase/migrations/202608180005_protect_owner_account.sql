@@ -48,3 +48,4 @@ drop trigger if exists protect_portal_owner_invitation_trigger on public.invited
 create trigger protect_portal_owner_invitation_trigger
 before update on public.invited_employees
 for each row execute function public.protect_portal_owner_invitation();
+

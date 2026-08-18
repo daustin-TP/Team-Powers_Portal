@@ -143,3 +143,4 @@ set email = excluded.email,
     location = excluded.location,
     active = true,
     updated_at = now();
+

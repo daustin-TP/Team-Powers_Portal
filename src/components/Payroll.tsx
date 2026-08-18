@@ -76,3 +76,4 @@ export default function Payroll({ profile }: { profile: Profile }) {
     </div>
   );
 }
+

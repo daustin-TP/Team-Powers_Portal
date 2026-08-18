@@ -45,3 +45,4 @@ Without Supabase environment values, the app opens in a local administrator demo
 - Review payroll authorization wording with the company’s payroll/legal adviser.
 - Test each role with a separate work Gmail account.
 - Configure backups and retention expectations for receipts and authorization records.
+
