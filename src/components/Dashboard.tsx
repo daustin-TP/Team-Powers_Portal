@@ -88,12 +88,7 @@ export default function Dashboard({
           </div>
         </div>
         <div className="action-grid">
-          {actions
-            .filter(
-              (action) =>
-                action.section !== "approvals" || profile.role !== "employee",
-            )
-            .map((action) => {
+          {actions.map((action) => {
               const Icon = action.icon;
               return (
                 <button

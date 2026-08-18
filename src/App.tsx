@@ -47,7 +47,7 @@ const navigation: {
     id: "approvals",
     label: "Approvals",
     icon: ClipboardCheck,
-    roles: ["supervisor", "manager", "accounting", "admin"],
+    roles: ["employee", "supervisor", "manager", "accounting", "admin"],
   },
   {
     id: "reconciliation",
