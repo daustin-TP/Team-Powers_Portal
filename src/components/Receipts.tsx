@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Camera, Check, FileImage, Upload } from "lucide-react";
 import type { Profile } from "../types";
 import { supabase } from "../lib/supabase";
@@ -9,6 +9,8 @@ export default function Receipts({ profile }: { profile: Profile }) {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [categories,setCategories]=useState<string[]>(["Food and supplies","Repairs and maintenance","Office","Travel","Other"]);
+  useEffect(()=>{supabase?.from("receipt_categories").select("name").eq("active",true).order("name").then(({data})=>{if(data?.length)setCategories(data.map(x=>x.name))})},[]);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!file) return;
@@ -78,7 +80,7 @@ export default function Receipts({ profile }: { profile: Profile }) {
             <label>Purchase date<input name="purchase_date" type="date" required /></label>
             <label>Total amount<input name="amount" inputMode="decimal" placeholder="$0.00" required /></label>
             <label>Vendor<input name="vendor" placeholder="Vendor or store name" required /></label>
-            <label>Category<select name="category" required defaultValue=""><option value="" disabled>Select a category</option><option>Food and supplies</option><option>Repairs and maintenance</option><option>Office</option><option>Travel</option><option>Other</option></select></label>
+            <label>Category<select name="category" required defaultValue=""><option value="" disabled>Select a category</option>{categories.map(category=><option key={category}>{category}</option>)}</select></label>
           </div>
           <label>Business purpose<textarea name="business_purpose" rows={3} placeholder="Briefly explain what was purchased and why" required /></label>
           <div className="security-note"><span>Submitting as <strong>{profile.fullName}</strong> · {profile.location}</span></div>
@@ -91,4 +93,3 @@ export default function Receipts({ profile }: { profile: Profile }) {
     </div>
   );
 }
-
