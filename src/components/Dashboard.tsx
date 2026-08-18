@@ -39,6 +39,13 @@ export default function Dashboard({
       tone: "green",
     },
     {
+      title: "Order smallwares",
+      detail: "Request approved tools, supplies, and store equipment.",
+      icon: Package,
+      section: "smallwares",
+      tone: "gold",
+    },
+    {
       title: "Maintenance request",
       detail: "Report a store repair and track its progress.",
       icon: Wrench,
