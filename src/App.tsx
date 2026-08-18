@@ -226,6 +226,11 @@ export default function App() {
           })}
         </nav>
 
+        <a className="sidebar-support" href="mailto:daustin@powerspizza.com?subject=Team%20Powers%20Portal%20support">
+          <span>Support or suggestions</span>
+          <small>daustin@powerspizza.com</small>
+        </a>
+
         <div className="sidebar-user">
           <div className="avatar">{profile.fullName.slice(0, 1)}</div>
           <div>
