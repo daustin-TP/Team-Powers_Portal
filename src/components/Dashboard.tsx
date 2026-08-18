@@ -17,6 +17,13 @@ export default function Dashboard({
   onNavigate: (section: PortalSection) => void;
 }) {
   const firstName = profile.fullName.split(" ")[0];
+  const today = new Date();
+  const weekday = new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+  }).format(today);
+  const month = new Intl.DateTimeFormat(undefined, { month: "long" }).format(
+    today,
+  );
   const actions: {
     title: string;
     detail: string;
@@ -63,10 +70,13 @@ export default function Dashboard({
           <h1>Good to see you, {firstName}.</h1>
           <p>What would you like to take care of today?</p>
         </div>
-        <div className="welcome-date">
-          <span>Friday</span>
-          <strong>24</strong>
-          <span>July</span>
+        <div
+          className="welcome-date"
+          aria-label={`${weekday}, ${month} ${today.getDate()}`}
+        >
+          <span>{weekday}</span>
+          <strong>{today.getDate()}</strong>
+          <span>{month}</span>
         </div>
       </section>
 

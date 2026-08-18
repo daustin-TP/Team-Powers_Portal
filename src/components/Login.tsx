@@ -29,7 +29,11 @@ export default function Login() {
     <main className="login-page">
       <section className="login-panel">
         <div className="login-brand">
-          <div className="brand-mark">TP</div>
+          <img
+            className="brand-logo login-logo"
+            src="/team-powers-logo.png"
+            alt="Team Powers"
+          />
           <div>
             <strong>Team Powers</strong>
             <span>Employee portal</span>
@@ -96,4 +100,3 @@ export default function Login() {
     </main>
   );
 }
-

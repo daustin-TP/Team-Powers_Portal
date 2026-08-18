@@ -141,7 +141,11 @@ export default function App() {
   if (loading) {
     return (
       <main className="center-screen">
-        <div className="brand-mark compact">TP</div>
+        <img
+          className="brand-logo compact"
+          src="/team-powers-logo.png"
+          alt="Team Powers"
+        />
         <p>Opening your portal…</p>
       </main>
     );
@@ -187,7 +191,11 @@ export default function App() {
     <div className="app-shell">
       <aside className={`sidebar ${menuOpen ? "open" : ""}`}>
         <div className="sidebar-brand">
-          <div className="brand-mark">TP</div>
+          <img
+            className="brand-logo"
+            src="/team-powers-logo.png"
+            alt="Team Powers"
+          />
           <div>
             <strong>Team Powers</strong>
             <span>Employee portal</span>
@@ -247,7 +255,10 @@ export default function App() {
           >
             <Menu size={23} />
           </button>
-          <strong>Team Powers</strong>
+          <span className="mobile-brand">
+            <img src="/team-powers-logo.png" alt="" />
+            <strong>Team Powers</strong>
+          </span>
           <CheckCircle2 size={21} />
         </header>
         {content}
