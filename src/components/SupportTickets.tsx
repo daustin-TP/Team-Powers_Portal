@@ -22,8 +22,10 @@ export default function SupportTickets({ profile, area }: { profile: Profile; ar
 
   const load = async () => {
     if (!supabase) return;
+    let ticketQuery = supabase.from("support_tickets").select("id,severity,description,steps_taken,external_ticket_number,image_path,status,acknowledged_at,created_at,stores(name),profiles!support_tickets_submitted_by_fkey(full_name),support_ticket_updates(id,note,status,image_path,created_at,profiles!support_ticket_updates_author_id_fkey(full_name))").eq("area", area);
+    if (!canSeeAll) ticketQuery = ticketQuery.eq("submitted_by", profile.id);
     const [ticketResult, storeResult, capabilityResult] = await Promise.all([
-      supabase.from("support_tickets").select("id,severity,description,steps_taken,external_ticket_number,image_path,status,acknowledged_at,created_at,stores(name),profiles!support_tickets_submitted_by_fkey(full_name),support_ticket_updates(id,note,status,image_path,created_at,profiles!support_ticket_updates_author_id_fkey(full_name))").eq("area", area).order("created_at", { ascending: false }),
+      ticketQuery.order("created_at", { ascending: false }),
       supabase.from("stores").select("id,name").eq("active", true).order("name"),
       supabase.from("profile_capabilities").select("capability").eq("profile_id", profile.id).eq("capability", area),
     ]);
