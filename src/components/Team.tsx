@@ -2,13 +2,15 @@ import { FormEvent, useEffect, useState } from "react";
 import { MailPlus, MoreHorizontal, Plus, Search, ShieldCheck, UserCheck, UserX } from "lucide-react";
 import { teamMembers } from "../data/demo";
 import type { Profile, Role } from "../types";
-import { isSupabaseConfigured, supabase } from "../lib/supabase";
+import { supabase } from "../lib/supabase";
 
 const OWNER_EMAIL = "daustin@powerspizza.com";
 type Store={id:string;name:string;active:boolean}; type Member=Profile&{storeId?:string|null;capabilities?:string[]};
+type Invitation={id:string;email:string;fullName:string;role:Role;location:string;storeId:string|null;active:boolean};
 
 export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const [members, setMembers] = useState<Member[]>(teamMembers);
+  const [pendingInvites,setPendingInvites]=useState<Invitation[]>([]);
   const [stores,setStores]=useState<Store[]>([]); const [newStore,setNewStore]=useState("");
   const [showInvite, setShowInvite] = useState(false);
   const [email, setEmail] = useState("");
@@ -18,15 +20,15 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const [saving, setSaving] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!supabase) return;
-    supabase
-      .from("profiles")
-      .select("id,email,full_name,role,location,active,store_id,profile_capabilities(capability)")
-      .order("full_name")
-      .then(({ data }) => {
-        if (!data) return;
-        setMembers(data.map((member) => ({
+  const loadDirectory=async()=>{
+    if(!supabase)return;
+    const[profileResult,inviteResult]=await Promise.all([
+      supabase.from("profiles").select("id,email,full_name,role,location,active,store_id,profile_capabilities(capability)").order("full_name"),
+      supabase.from("invited_employees").select("id,email,full_name,role,location,active,store_id").eq("active",true).order("full_name"),
+    ]);
+    if(profileResult.error||inviteResult.error){setMessage(`Team directory could not be loaded: ${profileResult.error?.message??inviteResult.error?.message}`);return}
+    const profileEmails=new Set((profileResult.data??[]).map(member=>member.email.toLowerCase()));
+    setMembers((profileResult.data??[]).map((member) => ({
           id: member.id,
           email: member.email,
           fullName: member.full_name,
@@ -34,8 +36,9 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
           location: member.location,
           active: member.active,storeId:member.store_id,capabilities:(member.profile_capabilities??[]).map((x:any)=>x.capability),
         })));
-      });
-  }, []);
+    setPendingInvites((inviteResult.data??[]).filter(invite=>!profileEmails.has(invite.email.toLowerCase())).map(invite=>({id:invite.id,email:invite.email,fullName:invite.full_name,role:invite.role,location:invite.location,storeId:invite.store_id,active:invite.active})));
+  };
+  useEffect(() => {loadDirectory()}, []);
   const loadStores=()=>supabase?.from("stores").select("id,name,active").order("name").then(({data})=>setStores(data??[])); useEffect(()=>{loadStores()},[]);
   const addStore=async()=>{if(!supabase||!newStore.trim())return;const{error}=await supabase.from("stores").insert({name:newStore.trim()});if(error)setMessage(error.message);else{setNewStore("");loadStores()}};
   const renameStore=async(s:Store)=>{const name=window.prompt("Store name",s.name)?.trim();if(!name||!supabase)return;await supabase.from("stores").update({name,updated_at:new Date().toISOString()}).eq("id",s.id);loadStores()};
@@ -63,10 +66,11 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
         { onConflict: "email" },
       );
       if (error) {
-        setMessage("This email could not be authorized. Please try again.");
+        setMessage(`This email could not be authorized: ${error.message}`);
         setSaving(false);
         return;
       }
+      await loadDirectory();
     } else {
       setMembers((current) => [...current, {
         id: crypto.randomUUID(),
@@ -125,6 +129,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
           <div className="button-row"><button type="button" className="button secondary" onClick={() => setShowInvite(false)}>Cancel</button><button className="button primary" disabled={saving}>{saving ? "Authorizing…" : "Authorize email"}</button></div>
         </form>
       )}
+      {pendingInvites.length>0&&<section className="panel pending-invitations"><div><p className="eyebrow">Awaiting first sign-in</p><h2>Pending invitations</h2><p>These emails are authorized in Supabase. They will move into the employee directory after their first successful sign-in.</p></div><div className="pending-invite-list">{pendingInvites.map(invite=><div key={invite.id}><div><strong>{invite.fullName}</strong><small>{invite.email}</small></div><span className="role-pill">{invite.role}</span><span>{invite.location}</span></div>)}</div></section>}
       <section className="panel table-panel">
         <div className="table-toolbar"><div><h2>Employee directory</h2><p>{members.filter((member) => member.active).length} active accounts</p></div><label className="search-field"><Search size={17} /><input placeholder="Search team" /></label></div>
         <div className="responsive-table">

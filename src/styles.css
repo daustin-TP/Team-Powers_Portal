@@ -172,6 +172,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .admin-note p, .admin-note strong { margin: 0; }.admin-note p { font-size: .84rem; }
 .invite-card { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; border: 1px solid #d9cfb7; background: #fffaf0; border-radius: 13px; padding: 1.2rem; margin-bottom: 1rem; }
 .invite-card > div:first-child, .invite-card .button-row { grid-column: 1 / -1; }
+.pending-invitations { margin-bottom:1rem; display:grid; gap:1rem; }.pending-invitations p { margin-bottom:0; }.pending-invite-list { display:grid; }.pending-invite-list>div { display:grid; grid-template-columns:1fr auto minmax(120px,auto); gap:1rem; align-items:center; padding:.8rem 0; border-top:1px solid var(--line); }.pending-invite-list>div>div { display:grid; gap:.15rem; }.pending-invite-list small { color:var(--muted); }
 .person-cell { display: flex; align-items: center; gap: .7rem; }
 .person-cell > span:last-child { display: grid; gap: .15rem; }
 .role-pill { text-transform: capitalize; background: #e5ece8; color: var(--green-800); }
@@ -274,4 +275,5 @@ tbody tr:last-child td { border-bottom: 0; }
   .login-content { padding: 4rem 0 2rem; }
   .receipt-modal { grid-template-columns:1fr; }.receipt-preview,.receipt-preview img,.receipt-preview iframe { min-height:360px; }
   .order-detail-heading { flex-direction:column; }.payment-badge { width:100%; }.decision-form { grid-template-columns:1fr; }.category-add { flex-direction:column; }.category-list>div { grid-template-columns:1fr auto; }.category-list>div button { justify-self:start; }
+  .pending-invite-list>div { grid-template-columns:1fr auto; }.pending-invite-list>div>span:last-child { grid-column:1/-1; }
 }
