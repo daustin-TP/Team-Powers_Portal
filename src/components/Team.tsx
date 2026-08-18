@@ -42,6 +42,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const toggleStore=async(s:Store)=>{if(!supabase)return;await supabase.from("stores").update({active:!s.active}).eq("id",s.id);loadStores()};
   const assignStore=async(m:Member,id:string)=>{if(!supabase)return;const s=stores.find(x=>x.id===id),{error}=await supabase.from("profiles").update({store_id:id||null,location:s?.name??"Unassigned"}).eq("id",m.id);if(error)setMessage(error.message);else setMembers(v=>v.map(x=>x.id===m.id?{...x,storeId:id,location:s?.name??"Unassigned"}:x))};
   const setCapability=async(m:Member,c:"maintenance"|"technology",enabled:boolean)=>{if(!supabase)return;const r=enabled?await supabase.from("profile_capabilities").insert({profile_id:m.id,capability:c}):await supabase.from("profile_capabilities").delete().eq("profile_id",m.id).eq("capability",c);if(r.error)setMessage(r.error.message);else setMembers(v=>v.map(x=>x.id===m.id?{...x,capabilities:enabled?[...(x.capabilities??[]),c]:(x.capabilities??[]).filter(y=>y!==c)}:x))};
+  const changeRole=async(m:Member,nextRole:Role)=>{if(m.email.toLowerCase()===OWNER_EMAIL){setMessage("The portal owner must remain an administrator.");return}if(!supabase)return;const {error}=await supabase.from("profiles").update({role:nextRole,updated_at:new Date().toISOString()}).eq("id",m.id);if(error){setMessage(error.message);return}await supabase.from("invited_employees").update({role:nextRole}).eq("email",m.email.toLowerCase());setMembers(v=>v.map(x=>x.id===m.id?{...x,role:nextRole}:x));setMessage(`${m.fullName} is now assigned the ${nextRole} role.`)};
 
   const invite = async (event: FormEvent) => {
     event.preventDefault();
@@ -119,7 +120,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
         <form className="invite-card" onSubmit={invite}>
           <div><p className="eyebrow">New team member</p><h2>Send an invitation</h2></div>
           <label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@powerspizza.com" required /></label>
-          <label>Portal role<select value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="employee">Employee</option><option value="manager">Manager</option><option value="accounting">Accounting</option><option value="admin">Administrator</option></select></label>
+          <label>Portal role<select value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="employee">Employee</option><option value="supervisor">Supervisor</option><option value="manager">Manager</option><option value="accounting">Accounting</option><option value="admin">Administrator</option></select></label>
           <label>Store<select value={location} onChange={e=>setLocation(e.target.value)}><option value="">Unassigned</option>{stores.filter(s=>s.active).map(s=><option key={s.id}>{s.name}</option>)}</select></label>
           <div className="button-row"><button type="button" className="button secondary" onClick={() => setShowInvite(false)}>Cancel</button><button className="button primary" disabled={saving}>{saving ? "Authorizing…" : "Authorize email"}</button></div>
         </form>
@@ -141,6 +142,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
                       ? <span>This administrator account is protected.</span>
                       : <button type="button" onClick={() => toggle(member.id)}>{member.active ? <><UserX size={15}/> Deactivate access</> : <><UserCheck size={15}/> Reactivate access</>}</button>}
                     <label>Assigned store<select value={member.storeId??""} onChange={e=>assignStore(member,e.target.value)}><option value="">Unassigned</option>{stores.filter(s=>s.active).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label>
+                    <label>Primary role<select value={member.role} disabled={member.email.toLowerCase()===OWNER_EMAIL} onChange={e=>changeRole(member,e.target.value as Role)}><option value="employee">Employee</option><option value="supervisor">Supervisor</option><option value="manager">Manager</option><option value="accounting">Accounting</option><option value="admin">Administrator</option></select></label>
                     <label className="menu-check"><input type="checkbox" checked={member.capabilities?.includes("maintenance")??false} onChange={e=>setCapability(member,"maintenance",e.target.checked)}/> Maintenance responder</label>
                     <label className="menu-check"><input type="checkbox" checked={member.capabilities?.includes("technology")??false} onChange={e=>setCapability(member,"technology",e.target.checked)}/> Technology responder</label>
                   </div>}
