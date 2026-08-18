@@ -4,7 +4,9 @@ import { teamMembers } from "../data/demo";
 import type { Profile, Role } from "../types";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 
-export default function Team() {
+const OWNER_EMAIL = "daustin@powerspizza.com";
+
+export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const [members, setMembers] = useState<Profile[]>(teamMembers);
   const [showInvite, setShowInvite] = useState(false);
   const [email, setEmail] = useState("");
@@ -12,6 +14,7 @@ export default function Team() {
   const [location, setLocation] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supabase) return;
@@ -74,6 +77,11 @@ export default function Team() {
   const toggle = async (id: string) => {
     const member = members.find((item) => item.id === id);
     if (!member) return;
+    if (member.email.toLowerCase() === OWNER_EMAIL) {
+      setMessage("The portal owner account is protected and cannot be deactivated.");
+      setOpenMenu(null);
+      return;
+    }
     if (supabase) {
       const { error } = await supabase
         .from("profiles")
@@ -85,6 +93,8 @@ export default function Team() {
       }
     }
     setMembers((current) => current.map((item) => item.id === id ? { ...item, active: !item.active } : item));
+    setMessage(`${member.fullName} is now ${member.active ? "deactivated" : "active"}.`);
+    setOpenMenu(null);
   };
 
   return (
@@ -112,9 +122,16 @@ export default function Team() {
             <tbody>{members.map((member) => (
               <tr key={member.id}>
                 <td><div className="person-cell"><span className="avatar small">{member.fullName.slice(0, 1).toUpperCase()}</span><span><strong>{member.fullName}</strong><small>{member.email}</small></span></div></td>
-                <td><span className="role-pill">{member.role}</span></td><td>{member.location}</td>
+                <td><span className="role-pill">{member.role}{member.email.toLowerCase() === OWNER_EMAIL ? " · Owner" : ""}</span></td><td>{member.location}</td>
                 <td><span className={`access-status ${member.active ? "active" : "inactive"}`}>{member.active ? <UserCheck size={15} /> : <UserX size={15} />}{member.active ? "Active" : "Disabled"}</span></td>
-                <td><button className="icon-button" aria-label={`Change access for ${member.fullName}`} onClick={() => toggle(member.id)}><MoreHorizontal size={18} /></button></td>
+                <td className="member-actions"><button className="icon-button" aria-label={`Open options for ${member.fullName}`} aria-expanded={openMenu === member.id} onClick={() => setOpenMenu(openMenu === member.id ? null : member.id)}><MoreHorizontal size={18} /></button>
+                  {openMenu === member.id && <div className="member-menu">
+                    <strong>{member.fullName}</strong>
+                    {member.email.toLowerCase() === OWNER_EMAIL || member.id === currentProfile.id
+                      ? <span>This administrator account is protected.</span>
+                      : <button type="button" onClick={() => toggle(member.id)}>{member.active ? <><UserX size={15}/> Deactivate access</> : <><UserCheck size={15}/> Reactivate access</>}</button>}
+                  </div>}
+                </td>
               </tr>
             ))}</tbody>
           </table>

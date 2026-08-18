@@ -187,6 +187,10 @@ tbody tr:last-child td { border-bottom: 0; }
 .center-screen { min-height: 100vh; display: grid; place-content: center; text-align: center; gap: .8rem; padding: 1.5rem; }
 .access-message p { max-width: 500px; }
 .mobile-close, .sidebar-backdrop { display: none; }
+.member-actions { position:relative; }
+.member-menu { position:absolute; right:1rem; top:3.1rem; z-index:8; width:230px; padding:.75rem; border:1px solid var(--line); border-radius:10px; background:white; box-shadow:0 12px 32px rgba(15,35,28,.16); display:grid; gap:.5rem; }
+.member-menu span { color:var(--muted); font-size:.78rem; }
+.member-menu button { border:0; border-radius:7px; padding:.65rem; background:#f5f2eb; color:var(--green-950); display:flex; align-items:center; gap:.45rem; font-weight:700; text-align:left; }
 .catalog-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; padding:1rem; align-content:start; }
 .catalog-card { border:1px solid var(--line); border-radius:13px; padding:1rem; display:grid; gap:.8rem; background:white; }
 .catalog-image { height:150px; border-radius:10px; background:#eef1ec; display:grid; place-items:center; overflow:hidden; color:var(--green-800); }

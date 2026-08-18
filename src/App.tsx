@@ -176,7 +176,7 @@ export default function App() {
     receipts: <Receipts profile={profile} />,
     approvals: <Approvals profile={profile} />,
     reconciliation: <Reconciliation />,
-    team: <Team />,
+    team: <Team currentProfile={profile} />,
     catalog: <CatalogAdmin profile={profile} />,
   }[section];
 
