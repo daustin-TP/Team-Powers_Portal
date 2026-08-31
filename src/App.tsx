@@ -66,11 +66,20 @@ async function loadProfile(userId: string, email: string): Promise<Profile | nul
   if (!supabase) return demoProfile;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id,email,full_name,role,location,active,profile_permissions(permission)")
+    .select("id,email,full_name,role,location,active")
     .eq("id", userId)
     .maybeSingle();
 
   if (error || !data || !data.active) return null;
+
+  // KPI permissions are optional enrichment. A missing or temporarily stale
+  // permissions relation must never prevent an active employee from entering
+  // the rest of Dash-OS.
+  const { data: permissionRows } = await supabase
+    .from("profile_permissions")
+    .select("permission")
+    .eq("profile_id", userId);
+
   return {
     id: data.id,
     email: data.email ?? email,
@@ -78,7 +87,7 @@ async function loadProfile(userId: string, email: string): Promise<Profile | nul
     role: data.role,
     location: data.location ?? "",
     active: data.active,
-    permissions: (data.profile_permissions ?? []).map((item: { permission: string }) => item.permission),
+    permissions: (permissionRows ?? []).map((item: { permission: string }) => item.permission),
   };
 }
 
