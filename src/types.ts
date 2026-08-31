@@ -7,10 +7,12 @@ export type Profile = {
   role: Role;
   location: string;
   active: boolean;
+  permissions?: string[];
 };
 
 export type PortalSection =
   | "home"
+  | "kpi"
   | "uniforms"
   | "smallwares"
   | "maintenance"

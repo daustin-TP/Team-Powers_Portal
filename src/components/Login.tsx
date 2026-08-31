@@ -31,12 +31,12 @@ export default function Login() {
         <div className="login-brand">
           <img
             className="brand-logo login-logo"
-            src="/team-powers-logo.png"
-            alt="Team Powers"
+            src="/dash-sos-logo.png"
+            alt="Dash-OS"
           />
           <div>
-            <strong>Team Powers</strong>
-            <span>Employee portal</span>
+            <strong>Dash-OS</strong>
+            <span>Team Powers Smart Operations System</span>
           </div>
         </div>
 
@@ -58,7 +58,7 @@ export default function Login() {
         ) : (
           <div className="login-content">
             <p className="eyebrow">Welcome back</p>
-            <h1>Everything your team needs, in one simple place.</h1>
+            <h1>Your operation, moving smarter.</h1>
             <p>
               Sign in with your Team Powers work email. No password required.
             </p>
@@ -95,7 +95,7 @@ export default function Login() {
         <blockquote>
           Clear requests, quick approvals, and fewer loose ends.
         </blockquote>
-        <p>Built for the people who keep Team Powers moving.</p>
+        <p>Team Powers Smart Operations System</p>
       </aside>
     </main>
   );

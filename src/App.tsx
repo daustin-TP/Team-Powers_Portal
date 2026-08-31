@@ -5,6 +5,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   CreditCard,
+  Gauge,
   Home,
   LogOut,
   Menu,
@@ -30,6 +31,7 @@ import Reconciliation from "./components/Reconciliation";
 import Team from "./components/Team";
 import CatalogAdmin from "./components/CatalogAdmin";
 import SupportTickets from "./components/SupportTickets";
+import KPITracker from "./components/KPITracker";
 
 const navigation: {
   id: PortalSection;
@@ -38,6 +40,7 @@ const navigation: {
   roles?: Role[];
 }[] = [
   { id: "home", label: "Home", icon: Home },
+  { id: "kpi", label: "KPI dashboard", icon: Gauge },
   { id: "uniforms", label: "Uniforms", icon: Package },
   { id: "smallwares", label: "Smallwares", icon: ShoppingBag },
   { id: "maintenance", label: "Maintenance", icon: Wrench },
@@ -63,7 +66,7 @@ async function loadProfile(userId: string, email: string): Promise<Profile | nul
   if (!supabase) return demoProfile;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id,email,full_name,role,location,active")
+    .select("id,email,full_name,role,location,active,profile_permissions(permission)")
     .eq("id", userId)
     .maybeSingle();
 
@@ -75,6 +78,7 @@ async function loadProfile(userId: string, email: string): Promise<Profile | nul
     role: data.role,
     location: data.location ?? "",
     active: data.active,
+    permissions: (data.profile_permissions ?? []).map((item: { permission: string }) => item.permission),
   };
 }
 
@@ -126,9 +130,15 @@ export default function App() {
 
   const visibleNavigation = useMemo(
     () =>
-      navigation.filter(
-        (item) => !item.roles || (profile && item.roles.includes(profile.role)),
-      ),
+      navigation.filter((item) => {
+        if (!profile) return false;
+        if (item.id === "kpi") {
+          return profile.role === "admin" || profile.role === "supervisor" ||
+            profile.permissions?.includes("kpi_view") ||
+            profile.permissions?.includes("kpi_view_all");
+        }
+        return !item.roles || item.roles.includes(profile.role);
+      }),
     [profile],
   );
 
@@ -143,8 +153,8 @@ export default function App() {
       <main className="center-screen">
         <img
           className="brand-logo compact"
-          src="/team-powers-logo.png"
-          alt="Team Powers"
+          src="/dash-sos-logo.png"
+          alt="Dash-OS"
         />
         <p>Opening your portal…</p>
       </main>
@@ -159,8 +169,8 @@ export default function App() {
         <ShieldCheck size={42} />
         <h1>Access isn’t active yet</h1>
         <p>
-          Your email is verified, but an administrator must add it to the Team
-          Powers employee directory before you can enter.
+          Your email is verified, but an administrator must add it to the
+          Dash-OS team directory before you can enter.
         </p>
         <button className="button secondary" onClick={signOut}>
           Sign out
@@ -176,6 +186,7 @@ export default function App() {
 
   const content = {
     home: <Dashboard profile={profile} onNavigate={selectSection} />,
+    kpi: <KPITracker profile={profile} />,
     uniforms: <Uniforms profile={profile} />,
     smallwares: <Uniforms profile={profile} category="smallware" />,
     maintenance: <SupportTickets profile={profile} area="maintenance" />,
@@ -193,12 +204,12 @@ export default function App() {
         <div className="sidebar-brand">
           <img
             className="brand-logo"
-            src="/team-powers-logo.png"
-            alt="Team Powers"
+            src="/dash-sos-logo.png"
+            alt="Dash-OS"
           />
           <div>
-            <strong>Team Powers</strong>
-            <span>Employee portal</span>
+            <strong>Dash-OS</strong>
+            <span>Smart Operations System</span>
           </div>
           <button
             className="icon-button mobile-close"
@@ -226,7 +237,7 @@ export default function App() {
           })}
         </nav>
 
-        <a className="sidebar-support" href="mailto:daustin@powerspizza.com?subject=Team%20Powers%20Portal%20support">
+        <a className="sidebar-support" href="mailto:daustin@powerspizza.com?subject=Dash-OS%20support">
           <span>Support or suggestions</span>
           <small>daustin@powerspizza.com</small>
         </a>
@@ -261,8 +272,8 @@ export default function App() {
             <Menu size={23} />
           </button>
           <span className="mobile-brand">
-            <img src="/team-powers-logo.png" alt="" />
-            <strong>Team Powers</strong>
+            <img src="/dash-sos-logo.png" alt="" />
+            <strong>Dash-OS</strong>
           </span>
           <CheckCircle2 size={21} />
         </header>

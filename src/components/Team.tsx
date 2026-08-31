@@ -5,7 +5,8 @@ import type { Profile, Role } from "../types";
 import { supabase } from "../lib/supabase";
 
 const OWNER_EMAIL = "daustin@powerspizza.com";
-type Store={id:string;name:string;active:boolean}; type Member=Profile&{storeId?:string|null;capabilities?:string[]};
+type Store={id:string;name:string;active:boolean};
+type Member=Profile&{storeId?:string|null;capabilities?:string[];assignedStoreIds?:string[];permissions?:string[]};
 type Invitation={id:string;email:string;fullName:string;role:Role;location:string;storeId:string|null;active:boolean};
 
 export default function Team({ currentProfile }: { currentProfile: Profile }) {
@@ -23,7 +24,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const loadDirectory=async()=>{
     if(!supabase)return;
     const[profileResult,inviteResult]=await Promise.all([
-      supabase.from("profiles").select("id,email,full_name,role,location,active,store_id,profile_capabilities(capability)").order("full_name"),
+      supabase.from("profiles").select("id,email,full_name,role,location,active,store_id,profile_capabilities(capability),profile_store_assignments(store_id),profile_permissions(permission)").order("full_name"),
       supabase.from("invited_employees").select("id,email,full_name,role,location,active,store_id").eq("active",true).order("full_name"),
     ]);
     if(profileResult.error||inviteResult.error){setMessage(`Team directory could not be loaded: ${profileResult.error?.message??inviteResult.error?.message}`);return}
@@ -34,7 +35,11 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
           fullName: member.full_name,
           role: member.role,
           location: member.location,
-          active: member.active,storeId:member.store_id,capabilities:(member.profile_capabilities??[]).map((x:any)=>x.capability),
+          active: member.active,
+          storeId:member.store_id,
+          capabilities:(member.profile_capabilities??[]).map((x:any)=>x.capability),
+          assignedStoreIds:(member.profile_store_assignments??[]).map((x:any)=>x.store_id),
+          permissions:(member.profile_permissions??[]).map((x:any)=>x.permission),
         })));
     setPendingInvites((inviteResult.data??[]).filter(invite=>!profileEmails.has(invite.email.toLowerCase())).map(invite=>({id:invite.id,email:invite.email,fullName:invite.full_name,role:invite.role,location:invite.location,storeId:invite.store_id,active:invite.active})));
   };
@@ -43,9 +48,12 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const addStore=async()=>{if(!supabase||!newStore.trim())return;const{error}=await supabase.from("stores").insert({name:newStore.trim()});if(error)setMessage(error.message);else{setNewStore("");loadStores()}};
   const renameStore=async(s:Store)=>{const name=window.prompt("Store name",s.name)?.trim();if(!name||!supabase)return;await supabase.from("stores").update({name,updated_at:new Date().toISOString()}).eq("id",s.id);loadStores()};
   const toggleStore=async(s:Store)=>{if(!supabase)return;await supabase.from("stores").update({active:!s.active}).eq("id",s.id);loadStores()};
-  const assignStore=async(m:Member,id:string)=>{if(!supabase)return;const s=stores.find(x=>x.id===id),{error}=await supabase.from("profiles").update({store_id:id||null,location:s?.name??"Unassigned"}).eq("id",m.id);if(error)setMessage(error.message);else setMembers(v=>v.map(x=>x.id===m.id?{...x,storeId:id,location:s?.name??"Unassigned"}:x))};
+  const assignStore=async(m:Member,id:string)=>{if(!supabase)return;const s=stores.find(x=>x.id===id),{error}=await supabase.from("profiles").update({store_id:id||null,location:s?.name??"Unassigned"}).eq("id",m.id);if(error){setMessage(error.message);return}if(id)await supabase.from("profile_store_assignments").upsert({profile_id:m.id,store_id:id,assigned_by:currentProfile.id});setMembers(v=>v.map(x=>x.id===m.id?{...x,storeId:id,location:s?.name??"Unassigned",assignedStoreIds:id?Array.from(new Set([...(x.assignedStoreIds??[]),id])):x.assignedStoreIds}:x))};
+  const setStoreAssignment=async(m:Member,storeId:string,enabled:boolean)=>{if(!supabase)return;const result=enabled?await supabase.from("profile_store_assignments").upsert({profile_id:m.id,store_id:storeId,assigned_by:currentProfile.id}):await supabase.from("profile_store_assignments").delete().eq("profile_id",m.id).eq("store_id",storeId);if(result.error){setMessage(result.error.message);return}if(!enabled&&m.storeId===storeId){await supabase.from("profiles").update({store_id:null,location:"Unassigned"}).eq("id",m.id)}setMembers(v=>v.map(x=>x.id===m.id?{...x,storeId:!enabled&&x.storeId===storeId?null:x.storeId,location:!enabled&&x.storeId===storeId?"Unassigned":x.location,assignedStoreIds:enabled?Array.from(new Set([...(x.assignedStoreIds??[]),storeId])):(x.assignedStoreIds??[]).filter(id=>id!==storeId)}:x))};
+  const setPermission=async(m:Member,permission:"kpi_view"|"kpi_edit_goals"|"kpi_view_all",enabled:boolean)=>{if(!supabase)return;const result=enabled?await supabase.from("profile_permissions").upsert({profile_id:m.id,permission,granted_by:currentProfile.id}):await supabase.from("profile_permissions").delete().eq("profile_id",m.id).eq("permission",permission);if(result.error){setMessage(result.error.message);return}setMembers(v=>v.map(x=>x.id===m.id?{...x,permissions:enabled?Array.from(new Set([...(x.permissions??[]),permission])):(x.permissions??[]).filter(item=>item!==permission)}:x))};
+  const setKpiAccess=async(m:Member,enabled:boolean)=>{await setPermission(m,"kpi_view",enabled);if(!enabled){await setPermission(m,"kpi_edit_goals",false);await setPermission(m,"kpi_view_all",false)}};
   const setCapability=async(m:Member,c:"maintenance"|"technology",enabled:boolean)=>{if(!supabase)return;const r=enabled?await supabase.from("profile_capabilities").insert({profile_id:m.id,capability:c}):await supabase.from("profile_capabilities").delete().eq("profile_id",m.id).eq("capability",c);if(r.error)setMessage(r.error.message);else setMembers(v=>v.map(x=>x.id===m.id?{...x,capabilities:enabled?[...(x.capabilities??[]),c]:(x.capabilities??[]).filter(y=>y!==c)}:x))};
-  const changeRole=async(m:Member,nextRole:Role)=>{if(m.email.toLowerCase()===OWNER_EMAIL){setMessage("The portal owner must remain an administrator.");return}if(!supabase)return;const {error}=await supabase.from("profiles").update({role:nextRole,updated_at:new Date().toISOString()}).eq("id",m.id);if(error){setMessage(error.message);return}await supabase.from("invited_employees").update({role:nextRole}).eq("email",m.email.toLowerCase());setMembers(v=>v.map(x=>x.id===m.id?{...x,role:nextRole}:x));setMessage(`${m.fullName} is now assigned the ${nextRole} role.`)};
+  const changeRole=async(m:Member,nextRole:Role)=>{if(m.email.toLowerCase()===OWNER_EMAIL){setMessage("The portal owner must remain an administrator.");return}if(!supabase)return;const {error}=await supabase.from("profiles").update({role:nextRole,updated_at:new Date().toISOString()}).eq("id",m.id);if(error){setMessage(error.message);return}await supabase.from("invited_employees").update({role:nextRole}).eq("email",m.email.toLowerCase());await loadDirectory();setMessage(`${m.fullName} is now assigned the ${nextRole} role.`)};
 
   const invite = async (event: FormEvent) => {
     event.preventDefault();
@@ -114,7 +122,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
   return (
     <div className="page">
       <div className="page-heading heading-with-action">
-        <div><p className="eyebrow">Administrator</p><h1>Team access.</h1><p>Invite work emails, assign roles, and remove access immediately when needed.</p></div>
+        <div><p className="eyebrow">Administrator</p><h1>Team access.</h1><p>Invite work emails, assign roles and stores, and control KPI visibility for each person.</p></div>
         <button className="button primary" onClick={() => setShowInvite(true)}><MailPlus size={18} /> Invite team member</button>
       </div>
       <div className="admin-note"><ShieldCheck size={20} /><div><strong>Invitation-only access</strong><p>A valid work Gmail address is not enough by itself. Only people in this directory can enter the portal.</p></div></div>
@@ -146,8 +154,10 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
                     {member.email.toLowerCase() === OWNER_EMAIL || member.id === currentProfile.id
                       ? <span>This administrator account is protected.</span>
                       : <button type="button" onClick={() => toggle(member.id)}>{member.active ? <><UserX size={15}/> Deactivate access</> : <><UserCheck size={15}/> Reactivate access</>}</button>}
-                    <label>Assigned store<select value={member.storeId??""} onChange={e=>assignStore(member,e.target.value)}><option value="">Unassigned</option>{stores.filter(s=>s.active).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label>
+                    <label>Primary store<select value={member.storeId??""} onChange={e=>assignStore(member,e.target.value)}><option value="">Unassigned</option>{stores.filter(s=>s.active).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label>
                     <label>Primary role<select value={member.role} disabled={member.email.toLowerCase()===OWNER_EMAIL} onChange={e=>changeRole(member,e.target.value as Role)}><option value="employee">Employee</option><option value="supervisor">Supervisor</option><option value="manager">Manager</option><option value="accounting">Accounting</option><option value="admin">Administrator</option></select></label>
+                    <fieldset className="menu-access-group"><legend>KPI store assignments</legend>{stores.filter(s=>s.active).map(store=><label className="menu-check" key={store.id}><input type="checkbox" checked={member.assignedStoreIds?.includes(store.id)??false} onChange={e=>setStoreAssignment(member,store.id,e.target.checked)}/>{store.name}</label>)}</fieldset>
+                    <fieldset className="menu-access-group"><legend>KPI Dashboard</legend><label className="menu-check"><input type="checkbox" disabled={member.role==="admin"} checked={member.role==="admin"||(member.permissions?.includes("kpi_view")??false)||(member.permissions?.includes("kpi_view_all")??false)} onChange={e=>setKpiAccess(member,e.target.checked)}/> Dashboard access</label><label className="menu-check"><input type="checkbox" disabled={member.role==="admin"||!(member.permissions?.includes("kpi_view")||member.permissions?.includes("kpi_view_all"))} checked={member.role==="admin"||(member.permissions?.includes("kpi_edit_goals")??false)} onChange={e=>setPermission(member,"kpi_edit_goals",e.target.checked)}/> Edit assigned-store goals</label><label className="menu-check"><input type="checkbox" disabled={member.role==="admin"||!(member.permissions?.includes("kpi_view")||member.permissions?.includes("kpi_view_all"))} checked={member.role==="admin"||(member.permissions?.includes("kpi_view_all")??false)} onChange={e=>setPermission(member,"kpi_view_all",e.target.checked)}/> Company &amp; supervisor comparison</label>{member.role==="supervisor"&&<small>Supervisors receive all three KPI view levels by default.</small>}</fieldset>
                     <label className="menu-check"><input type="checkbox" checked={member.capabilities?.includes("maintenance")??false} onChange={e=>setCapability(member,"maintenance",e.target.checked)}/> Maintenance responder</label>
                     <label className="menu-check"><input type="checkbox" checked={member.capabilities?.includes("technology")??false} onChange={e=>setCapability(member,"technology",e.target.checked)}/> Technology responder</label>
                   </div>}
