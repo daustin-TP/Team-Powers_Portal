@@ -6,7 +6,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-type KpiAction = "get_commitments" | "update_commitment";
+type KpiAction = "get_commitments" | "get_weekly_metrics" | "update_commitment";
 
 type RequestBody = {
   action?: KpiAction;
@@ -84,7 +84,7 @@ Deno.serve(async (request) => {
     if (!canView) throw new HttpError(403, "You do not have KPI access.");
 
     const body = (await request.json()) as RequestBody;
-    if (!body.action || !["get_commitments", "update_commitment"].includes(body.action)) {
+    if (!body.action || !["get_commitments", "get_weekly_metrics", "update_commitment"].includes(body.action)) {
       throw new HttpError(400, "A valid KPI action is required.");
     }
     if (!body.week_end || !/^\d{4}-\d{2}-\d{2}$/.test(body.week_end)) {
@@ -99,9 +99,9 @@ Deno.serve(async (request) => {
     }
 
     let bridgeRequest: Record<string, unknown>;
-    if (body.action === "get_commitments") {
+    if (body.action === "get_commitments" || body.action === "get_weekly_metrics") {
       bridgeRequest = {
-        action: "get_commitments",
+        action: body.action,
         week_end: body.week_end,
         stores: canViewAll ? null : allowedStores,
       };

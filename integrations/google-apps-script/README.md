@@ -32,10 +32,10 @@ The bridge writes only these `Goal Commitments` columns:
 - L — Action Plan
 - M — Owner
 - P — Supervisor Labor
-- W — Supervisor SPLH
-- AC — Supervisor Food Variance
-- AI — Supervisor Load
-- AO — Supervisor ADT
+- X — Supervisor SPLH
+- AE — Supervisor Food Variance
+- AL — Supervisor Load
+- AS — Supervisor ADT
 
 All projection, actual, final-goal, variance, and status formulas remain
 read-only.

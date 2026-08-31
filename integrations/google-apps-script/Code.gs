@@ -9,9 +9,12 @@
 const DASH_SOS_CONFIG = Object.freeze({
   spreadsheetId: "1zqG0RJ_pBwom9HDgUuledLrOXyrDLygVgRjZzD0g0nk",
   commitmentsSheet: "Goal Commitments",
+  databaseSheet: "KPI Database",
   headerRow: 3,
   firstDataRow: 4,
-  lastColumn: 47, // AU
+  lastColumn: 54, // BB
+  databaseFirstDataRow: 2,
+  databaseLastColumn: 30, // AD
   signatureWindowSeconds: 300,
 });
 
@@ -20,11 +23,11 @@ const DASH_SOS_EDITABLE_FIELDS = Object.freeze({
   focus_area: { column: 11, type: "focus" }, // K
   action_plan: { column: 12, type: "text" }, // L
   owner: { column: 13, type: "text" }, // M
-  supervisor_labor_goal: { column: 16, type: "number" }, // P
-  supervisor_splh_goal: { column: 23, type: "number" }, // W
-  supervisor_food_variance_goal: { column: 29, type: "number" }, // AC
-  supervisor_load_goal: { column: 35, type: "number" }, // AI
-  supervisor_adt_goal: { column: 41, type: "number" }, // AO
+  supervisor_labor_goal: { column: 16, type: "percent" }, // P
+  supervisor_splh_goal: { column: 24, type: "number" }, // X
+  supervisor_food_variance_goal: { column: 31, type: "percent" }, // AE
+  supervisor_load_goal: { column: 38, type: "number" }, // AL
+  supervisor_adt_goal: { column: 45, type: "number" }, // AS
 });
 
 const DASH_SOS_FOCUS_AREAS = Object.freeze([
@@ -71,11 +74,80 @@ function dashSosHandleRequest_(request) {
       return dashSosHealth_();
     case "get_commitments":
       return dashSosGetCommitments_(request);
+    case "get_weekly_metrics":
+      return dashSosGetWeeklyMetrics_(request);
     case "update_commitment":
       return dashSosUpdateCommitment_(request);
     default:
       throw new Error("Unsupported action.");
   }
+}
+
+function dashSosGetWeeklyMetrics_(request) {
+  const weekEnd = dashSosRequireDateKey_(request.week_end);
+  const allowedStores = dashSosNormalizeStores_(request.stores);
+  const sheet = dashSosDatabaseSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < DASH_SOS_CONFIG.databaseFirstDataRow) return [];
+
+  const rowCount = lastRow - DASH_SOS_CONFIG.databaseFirstDataRow + 1;
+  const range = sheet.getRange(
+    DASH_SOS_CONFIG.databaseFirstDataRow,
+    1,
+    rowCount,
+    DASH_SOS_CONFIG.databaseLastColumn,
+  );
+  const values = range.getValues();
+  const displayValues = range.getDisplayValues();
+  const timeZone = dashSosSpreadsheet_().getSpreadsheetTimeZone();
+  const results = [];
+
+  for (let index = 0; index < values.length; index += 1) {
+    const row = values[index];
+    const store = String(row[0] || "").trim();
+    const rowWeekEnd = dashSosDateKey_(row[1], timeZone);
+    if (!store || rowWeekEnd !== weekEnd) continue;
+    if (allowedStores && !allowedStores.has(store)) continue;
+    results.push(dashSosSerializeWeeklyMetrics_(row, displayValues[index], timeZone));
+  }
+  return results;
+}
+
+function dashSosSerializeWeeklyMetrics_(values, displayValues, timeZone) {
+  return {
+    store: String(values[0] || ""),
+    week_end: dashSosDateKey_(values[1], timeZone),
+    metrics: {
+      avg_adt: displayValues[2],
+      adt_under_30_percent: displayValues[3],
+      extreme_order_count: displayValues[4],
+      extreme_order_percent: displayValues[5],
+      avg_wait: displayValues[6],
+      singles_percent: displayValues[7],
+      new_customers: displayValues[8],
+      cheese_variance: displayValues[9],
+      pepperoni_variance: displayValues[10],
+      dough_variance: displayValues[11],
+      average_ticket: displayValues[12],
+      st_jude_net: displayValues[13],
+      royalty_sales: displayValues[14],
+      sales_last_year: displayValues[15],
+      yoy_sales_percent: displayValues[16],
+      order_count: displayValues[17],
+      orders_last_year: displayValues[18],
+      order_growth_percent: displayValues[19],
+      labor_dollars: displayValues[20],
+      labor_percent: displayValues[21],
+      splh: displayValues[22],
+      ot_hours: displayValues[23],
+      actual_food_percent: displayValues[24],
+      ideal_food_percent: displayValues[25],
+      food_difference_dollars: displayValues[26],
+      food_difference_percent: displayValues[27],
+      cash_over_short: displayValues[28],
+      avg_load: displayValues[29],
+    },
+  };
 }
 
 function dashSosHealth_() {
@@ -225,16 +297,18 @@ function dashSosSerializeCommitment_(rowNumber, values, displayValues, timeZone)
       action_plan: String(values[11] || ""),
       owner: String(values[12] || ""),
     },
-    labor: dashSosMetric_(values, displayValues, 13, 14, 15, 16, 17, 19),
-    splh: dashSosMetric_(values, displayValues, 20, 21, 22, 23, 24, 25),
-    food_variance: dashSosMetric_(values, displayValues, 26, 27, 28, 29, 30, 31),
-    load: dashSosMetric_(values, displayValues, 32, 33, 34, 35, 36, 37),
-    adt: dashSosMetric_(values, displayValues, 38, 39, 40, 41, 42, 43),
+    labor: dashSosMetric_(values, displayValues, 13, 14, 15, 16, 17, 20),
+    splh: dashSosMetric_(values, displayValues, 21, 22, 23, 24, 25, 27),
+    food_variance: dashSosMetric_(values, displayValues, 28, 29, 30, 31, 32, 34),
+    load: dashSosMetric_(values, displayValues, 35, 36, 37, 38, 39, 41),
+    adt: dashSosMetric_(values, displayValues, 42, 43, 44, 45, 46, 48),
     extreme_orders: {
-      actual: displayValues[44],
-      status: displayValues[45],
+      actual: displayValues[49],
+      goal: displayValues[50],
+      variance: displayValues[51],
+      status: displayValues[52],
     },
-    overall_status: displayValues[46],
+    overall_status: displayValues[53],
   };
 }
 
@@ -252,10 +326,14 @@ function dashSosMetric_(values, displayValues, trajectory, suggested, supervisor
 function dashSosValidateValue_(key, value, type) {
   if (value === null || value === undefined || value === "") return "";
 
-  if (type === "number") {
+  if (type === "number" || type === "percent") {
     const number = Number(value);
     if (!Number.isFinite(number)) throw new Error(key + " must be a number.");
     if (Math.abs(number) > 10000000) throw new Error(key + " is outside the allowed range.");
+    if (type === "percent") {
+      if (Math.abs(number) > 100) throw new Error(key + " must be between -100% and 100%.");
+      return Math.abs(number) > 1 ? number / 100 : number;
+    }
     return number;
   }
 
@@ -304,6 +382,12 @@ function dashSosCommitmentsSheet_() {
     DASH_SOS_CONFIG.commitmentsSheet,
   );
   if (!sheet) throw new Error("Goal Commitments sheet was not found.");
+  return sheet;
+}
+
+function dashSosDatabaseSheet_() {
+  const sheet = dashSosSpreadsheet_().getSheetByName(DASH_SOS_CONFIG.databaseSheet);
+  if (!sheet) throw new Error("KPI Database sheet was not found.");
   return sheet;
 }
 
