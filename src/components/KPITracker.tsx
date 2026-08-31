@@ -270,7 +270,8 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   const [viewLevel, setViewLevel] = useState<ViewLevel>("store");
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>("commitments");
   const [draft, setDraft] = useState<Draft>(emptyDraft());
-  const [loading, setLoading] = useState(true);
+  const [commitmentsLoading, setCommitmentsLoading] = useState(true);
+  const [metricsLoading, setMetricsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -291,63 +292,88 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   }, [commitments, selected, selectedGroup, viewLevel]);
   const scopedWeeklyMetrics = useMemo(() => {
     if (viewLevel === "supervisor" && selectedGroup) return weeklyMetrics.filter((item) => selectedGroup.stores.includes(item.store));
-    if (viewLevel === "store" && selected) return weeklyMetrics.filter((item) => item.store === selected.store);
+    if (viewLevel === "store" && selectedStore) return weeklyMetrics.filter((item) => item.store === selectedStore);
     return weeklyMetrics;
-  }, [weeklyMetrics, selected, selectedGroup, viewLevel]);
+  }, [weeklyMetrics, selectedStore, selectedGroup, viewLevel]);
   const canEditSelected = Boolean(selected && access.canEdit && (access.editableStores === null || access.editableStores.includes(selected.store)));
 
-  const load = async () => {
-    setLoading(true);
+  const accessFromResponse = (data: Record<string, any>): KpiAccess => ({
+    canEdit: Boolean(data.access?.can_edit),
+    canViewAll: Boolean(data.access?.can_view_all),
+    editableStores: data.access?.editable_stores === null ? null : (data.access?.editable_stores ?? []),
+    assignedStores: data.access?.assigned_stores ?? [],
+    supervisorGroups: data.access?.supervisor_groups ?? [],
+  });
+
+  const applyAccess = (nextAccess: KpiAccess) => {
+    setAccess(nextAccess);
+    setViewLevel((current) => nextAccess.canViewAll ? current : "store");
+    setSelectedSupervisor((current) => nextAccess.supervisorGroups.some((group) => group.id === current) ? current : nextAccess.supervisorGroups[0]?.id ?? "");
+  };
+
+  const loadCommitments = async () => {
+    setCommitmentsLoading(true);
+    setCommitments([]);
     setError("");
-    setWeeklyMetricsError("");
     setMessage("");
     if (!isSupabaseConfigured || !supabase) {
       const demo = demoCommitments.map((item) => ({ ...item, week_end: weekEnd }));
-      setWeeklyMetrics(demoWeeklyMetrics.map((item) => ({ ...item, week_end: weekEnd })));
       setCommitments(demo);
       setSelectedStore(demo[0]?.store ?? "");
       setAccess((current) => ({ ...current, supervisorGroups: [{ id: "demo-supervisor", name: "North Area", stores: demo.map((item) => item.store) }] }));
       setViewLevel("company");
-      setLoading(false);
+      setCommitmentsLoading(false);
       return;
     }
 
-    const [commitmentResponse, metricResponse] = await Promise.all([
-      supabase.functions.invoke("kpi-bridge", { body: { action: "get_commitments", week_end: weekEnd } }),
-      supabase.functions.invoke("kpi-bridge", { body: { action: "get_weekly_metrics", week_end: weekEnd } }),
-    ]);
-    const { data, error: invokeError } = commitmentResponse;
+    const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_commitments", week_end: weekEnd } });
     if (invokeError || !data?.ok) {
       setError(data?.error || invokeError?.message || "The KPI data could not be loaded.");
       setCommitments([]);
-      setWeeklyMetrics([]);
-      setLoading(false);
+      setCommitmentsLoading(false);
       return;
     }
 
     const rows = (data.result ?? []) as Commitment[];
-    const nextAccess: KpiAccess = {
-      canEdit: Boolean(data.access?.can_edit),
-      canViewAll: Boolean(data.access?.can_view_all),
-      editableStores: data.access?.editable_stores === null ? null : (data.access?.editable_stores ?? []),
-      assignedStores: data.access?.assigned_stores ?? [],
-      supervisorGroups: data.access?.supervisor_groups ?? [],
-    };
+    const nextAccess = accessFromResponse(data);
     setCommitments(rows);
-    if (metricResponse.error || !metricResponse.data?.ok) {
-      setWeeklyMetrics([]);
-      setWeeklyMetricsError(metricResponse.data?.error || metricResponse.error?.message || "The detailed weekly metrics could not be loaded.");
-    } else {
-      setWeeklyMetrics((metricResponse.data.result ?? []) as WeeklyMetricRow[]);
-    }
-    setAccess(nextAccess);
-    setViewLevel((current) => nextAccess.canViewAll ? (current === "store" ? "company" : current) : "store");
+    applyAccess(nextAccess);
     setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? "");
-    setSelectedSupervisor((current) => nextAccess.supervisorGroups.some((group) => group.id === current) ? current : nextAccess.supervisorGroups[0]?.id ?? "");
-    setLoading(false);
+    setCommitmentsLoading(false);
   };
 
-  useEffect(() => { void load(); }, [weekEnd]);
+  const loadWeeklyMetrics = async () => {
+    setMetricsLoading(true);
+    setWeeklyMetrics([]);
+    setWeeklyMetricsError("");
+    setError("");
+    if (!isSupabaseConfigured || !supabase) {
+      const demo = demoWeeklyMetrics.map((item) => ({ ...item, week_end: weekEnd }));
+      setWeeklyMetrics(demo);
+      setSelectedStore((current) => demo.some((item) => item.store === current) ? current : demo[0]?.store ?? "");
+      setMetricsLoading(false);
+      return;
+    }
+
+    const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_weekly_metrics", week_end: weekEnd } });
+    if (invokeError || !data?.ok) {
+      setWeeklyMetrics([]);
+      setWeeklyMetricsError(data?.error || invokeError?.message || "The weekly KPI results could not be loaded.");
+      setMetricsLoading(false);
+      return;
+    }
+
+    const rows = (data.result ?? []) as WeeklyMetricRow[];
+    setWeeklyMetrics(rows);
+    applyAccess(accessFromResponse(data));
+    setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? "");
+    setMetricsLoading(false);
+  };
+
+  useEffect(() => {
+    if (dashboardMode === "details") void loadWeeklyMetrics();
+    else void loadCommitments();
+  }, [weekEnd, dashboardMode]);
   useEffect(() => { setDraft(selected ? draftFromCommitment(selected) : emptyDraft()); }, [selected]);
 
   const save = async (event: FormEvent) => {
@@ -408,6 +434,11 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     value: formatMetricValue(aggregateMetric(scopedWeeklyMetrics, definition), definition.format),
     detail: definition.aggregate === "sum" ? "Total across selected stores" : "Store average",
   }));
+  const currentLoading = dashboardMode === "details" ? metricsLoading : commitmentsLoading;
+  const storeTabs = dashboardMode === "details"
+    ? weeklyMetrics.map((item) => ({ store: item.store, status: "Weekly results" }))
+    : commitments.map((item) => ({ store: item.store, status: item.overall_status }));
+  const refreshCurrentView = () => dashboardMode === "details" ? loadWeeklyMetrics() : loadCommitments();
 
   const levelControls = access.canViewAll && (
     <div className="kpi-view-switcher" role="tablist" aria-label="KPI view level">
@@ -421,7 +452,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     <div className="page kpi-page">
       <section className="page-heading heading-with-action">
         <div><p className="eyebrow">Performance command center</p><h1>KPI Dashboard</h1><p>Compare the company, focus on a supervisor group, or open one store’s weekly plan.</p></div>
-        <div className="kpi-week-controls"><label>Week ending<input type="date" value={weekEnd} onChange={(event) => setWeekEnd(event.target.value)} /></label><button className="button secondary" onClick={() => void load()} disabled={loading}><RefreshCw size={17} /> Refresh</button></div>
+        <div className="kpi-week-controls"><label>Week ending<input type="date" value={weekEnd} onChange={(event) => setWeekEnd(event.target.value)} /></label><button className="button secondary" onClick={() => void refreshCurrentView()} disabled={currentLoading}><RefreshCw size={17} /> Refresh</button></div>
       </section>
 
       {error && <p className="inline-message kpi-error">{error}</p>}
@@ -436,14 +467,12 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       {viewLevel === "supervisor" && access.canViewAll && (
         <section className="kpi-scope-bar"><label>Supervisor group<select value={selectedGroup?.id ?? ""} onChange={(event) => setSelectedSupervisor(event.target.value)}>{access.supervisorGroups.map((group) => <option value={group.id} key={group.id}>{group.name} · {group.stores.length} stores</option>)}</select></label><p>Showing {selectedGroup?.stores.join(", ") || "no assigned stores"}</p></section>
       )}
-      {viewLevel === "store" && commitments.length > 0 && (
-        <div className="kpi-store-tabs" role="tablist" aria-label="Store selection">{commitments.map((item) => <button role="tab" aria-selected={selected?.store === item.store} className={selected?.store === item.store ? "active" : ""} key={item.store} onClick={() => setSelectedStore(item.store)}>Store {item.store}<span>{item.overall_status}</span></button>)}</div>
+      {viewLevel === "store" && storeTabs.length > 0 && (
+        <div className="kpi-store-tabs" role="tablist" aria-label="Store selection">{storeTabs.map((item) => <button role="tab" aria-selected={selectedStore === item.store} className={selectedStore === item.store ? "active" : ""} key={item.store} onClick={() => setSelectedStore(item.store)}>Store {item.store}<span>{item.status}</span></button>)}</div>
       )}
 
-      {loading ? (
-        <div className="empty-card"><RefreshCw className="spin" /><h2>Loading KPI commitments…</h2></div>
-      ) : commitments.length === 0 ? (
-        <div className="empty-card"><Target /><h2>No commitments found</h2><p>There are no visible store rows for this week, or your store assignment still needs to be configured.</p></div>
+      {currentLoading ? (
+        <div className="empty-card"><RefreshCw className="spin" /><h2>{dashboardMode === "details" ? "Loading weekly KPI results…" : "Loading KPI commitments…"}</h2></div>
       ) : dashboardMode === "details" ? (
         weeklyMetricsError ? (
           <div className="empty-card"><TableProperties /><h2>Detailed metrics are not connected yet</h2><p>{weeklyMetricsError}</p><p>Update both the Google Apps Script bridge and the Supabase KPI Edge Function, then refresh this page.</p></div>
@@ -463,6 +492,8 @@ export default function KPITracker({ profile }: { profile: Profile }) {
             </section>
           </>
         )
+      ) : commitments.length === 0 ? (
+        <div className="empty-card"><Target /><h2>No commitments found</h2><p>There are no visible store rows for this week, or your store assignment still needs to be configured.</p></div>
       ) : (
         <>
           <section className="kpi-summary-grid"><article><BarChart3 size={21} /><span>{viewLevel === "supervisor" ? "Group stores" : viewLevel === "store" ? "Selected store" : "Company stores"}</span><strong>{scopedCommitments.length}</strong></article><article><Target size={21} /><span>Goals achieved</span><strong>{measuredGoals ? `${goalsMet}/${measuredGoals}` : "Pending"}</strong></article><article><Trophy size={21} /><span>Current leader</span><strong className="kpi-leader">{rankings[0] && score(rankings[0]).percent !== null ? `Store ${rankings[0].store}` : "Pending"}</strong></article></section>
