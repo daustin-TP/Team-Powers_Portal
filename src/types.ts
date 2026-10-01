@@ -13,6 +13,8 @@ export type Profile = {
 export type PortalSection =
   | "home"
   | "kpi"
+  | "labor"
+  | "imports"
   | "uniforms"
   | "smallwares"
   | "maintenance"

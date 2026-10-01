@@ -6,6 +6,8 @@ import {
   ClipboardCheck,
   CreditCard,
   Gauge,
+  CalendarClock,
+  UploadCloud,
   Home,
   LogOut,
   Menu,
@@ -32,6 +34,8 @@ import Team from "./components/Team";
 import CatalogAdmin from "./components/CatalogAdmin";
 import SupportTickets from "./components/SupportTickets";
 import KPITracker from "./components/KPITracker";
+import LaborManagement from "./components/LaborManagement";
+import ReportImportCenter from "./components/ReportImportCenter";
 
 const navigation: {
   id: PortalSection;
@@ -41,6 +45,8 @@ const navigation: {
 }[] = [
   { id: "home", label: "Home", icon: Home },
   { id: "kpi", label: "KPI dashboard", icon: Gauge },
+  { id: "labor", label: "Labor & scheduling", icon: CalendarClock, roles: ["manager", "supervisor", "admin"] },
+  { id: "imports", label: "Weekly data imports", icon: UploadCloud, roles: ["supervisor", "admin"] },
   { id: "uniforms", label: "Uniforms", icon: Package },
   { id: "smallwares", label: "Smallwares", icon: ShoppingBag },
   { id: "maintenance", label: "Maintenance", icon: Wrench },
@@ -196,6 +202,8 @@ export default function App() {
   const content = {
     home: <Dashboard profile={profile} onNavigate={selectSection} />,
     kpi: <KPITracker profile={profile} />,
+    labor: <LaborManagement profile={profile} />,
+    imports: <ReportImportCenter profile={profile} />,
     uniforms: <Uniforms profile={profile} />,
     smallwares: <Uniforms profile={profile} category="smallware" />,
     maintenance: <SupportTickets profile={profile} area="maintenance" />,
