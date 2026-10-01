@@ -6,6 +6,8 @@ import {
   Receipt,
   Wrench,
   MonitorCog,
+  CalendarClock,
+  Gauge,
 } from "lucide-react";
 import { recentActivity } from "../data/demo";
 import type { ActivityItem, PortalSection, Profile } from "../types";
@@ -103,6 +105,20 @@ export default function Dashboard({
     section: PortalSection;
     tone: string;
   }[] = [
+    {
+      title: "Build a schedule",
+      detail: "Turn current sales and order trends into a staffed weekly plan.",
+      icon: CalendarClock,
+      section: "labor",
+      tone: "blue",
+    },
+    {
+      title: "Review weekly KPIs",
+      detail: "Compare results, goals, trends, and store commitments.",
+      icon: Gauge,
+      section: "kpi",
+      tone: "green",
+    },
     {
       title: "Order uniforms",
       detail: "Request shirts, hats, and other approved items.",

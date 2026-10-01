@@ -25,6 +25,8 @@ type KpiMetric = {
 };
 
 type Commitment = {
+  store_id?: string;
+  source?: "database" | "sheet_bridge";
   row_number: number;
   week_end: string;
   store: string;
@@ -59,6 +61,7 @@ type KpiAccess = {
 type ViewLevel = "company" | "supervisor" | "store";
 type DashboardMode = "commitments" | "details";
 type WeeklyMetricRow = {
+  store_id?: string;
   store: string;
   week_end: string;
   metrics: Record<string, string>;
@@ -260,6 +263,73 @@ function aggregateMetric(rows: WeeklyMetricRow[], definition: MetricDefinition) 
   return definition.aggregate === "sum" ? total : total / values.length;
 }
 
+function metricText(metrics: Record<string, unknown>, key: string, fallback = "") {
+  const value = metrics[key];
+  return value === null || value === undefined ? fallback : String(value);
+}
+
+function goalValue(goals: Record<string, unknown>, key: string) {
+  const value = goals[key];
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function goalStatus(actualText: string, goal: number | null, lowerIsBetter = false) {
+  const actual = numericValue(actualText);
+  if (actual === null || goal === null) return "Pending";
+  return lowerIsBetter ? (actual <= goal ? "Yes" : "No") : (actual >= goal ? "Yes" : "No");
+}
+
+function databaseCommitment(
+  result: { store_id: string; week_end: string; metrics: Record<string, unknown>; stores?: { name?: string } | Array<{ name?: string }> | null },
+  goalRow?: { goals?: Record<string, unknown>; focus_area?: string; action_plan?: string; owner?: string },
+): Commitment {
+  const metrics = result.metrics ?? {};
+  const goals = goalRow?.goals ?? {};
+  const storeName = Array.isArray(result.stores) ? result.stores[0]?.name : result.stores?.name;
+  const store = metricText(metrics, "store_number", storeName ?? "Store").replace(/^Store\s+/i, "").split(" · ")[0];
+  const salesGoal = goalValue(goals, "sales");
+  const laborGoal = goalValue(goals, "labor");
+  const splhGoal = goalValue(goals, "splh");
+  const foodGoal = goalValue(goals, "food_variance");
+  const loadGoal = goalValue(goals, "load");
+  const adtGoal = goalValue(goals, "adt");
+  const salesActual = metricText(metrics, "royalty_sales", "Pending");
+  const laborActual = metricText(metrics, "labor_percent", "Pending");
+  const splhActual = metricText(metrics, "splh", "Pending");
+  const foodActual = metricText(metrics, "food_difference_percent", "Pending");
+  const loadActual = metricText(metrics, "avg_load", "Pending");
+  const adtActual = metricText(metrics, "avg_adt", "Pending");
+  const metric = (trajectory: string, suggested: string, supervisor: number | null, actual: string, lowerIsBetter = false): KpiMetric => ({
+    trajectory, suggested_goal: suggested, supervisor_goal: supervisor,
+    actual, final_goal: supervisor === null ? suggested : String(supervisor),
+    status: goalStatus(actual, supervisor ?? numericValue(suggested), lowerIsBetter),
+  });
+  const commitment: Commitment = {
+    store_id: result.store_id, source: "database", row_number: 0, week_end: result.week_end, store,
+    sales: {
+      model_projection: metricText(metrics, "sales_projection"),
+      recommended_goal: metricText(metrics, "sales_recommended_goal"),
+      supervisor_goal: salesGoal,
+      actual: salesActual,
+      final_goal: salesGoal === null ? metricText(metrics, "sales_recommended_goal") : String(salesGoal),
+      variance: "", variance_percent: "", status: goalStatus(salesActual, salesGoal ?? numericValue(metricText(metrics, "sales_recommended_goal"))),
+    },
+    accountability: { focus_area: goalRow?.focus_area ?? "", action_plan: goalRow?.action_plan ?? "", owner: goalRow?.owner ?? "" },
+    labor: metric(metricText(metrics, "labor_trajectory"), metricText(metrics, "labor_recommended_goal"), laborGoal, laborActual, true),
+    splh: metric(metricText(metrics, "splh_trajectory"), metricText(metrics, "splh_recommended_goal"), splhGoal, splhActual),
+    food_variance: metric(metricText(metrics, "food_variance_trajectory"), metricText(metrics, "food_variance_recommended_goal"), foodGoal, foodActual, true),
+    load: metric(metricText(metrics, "load_trajectory"), metricText(metrics, "load_recommended_goal"), loadGoal, loadActual, true),
+    adt: metric(metricText(metrics, "adt_trajectory"), metricText(metrics, "adt_recommended_goal"), adtGoal, adtActual, true),
+    extreme_orders: { actual: metricText(metrics, "extreme_order_percent", "Pending"), goal: metricText(metrics, "extreme_order_goal", "1.0%"), status: "Pending" },
+    overall_status: "Pending",
+  };
+  const statuses = [commitment.sales.status, commitment.labor.status, commitment.splh.status, commitment.food_variance.status, commitment.load.status, commitment.adt.status];
+  commitment.overall_status = statuses.some((status) => status === "No") ? "Needs Follow-Up" : statuses.some((status) => status === "Yes") ? "Goals Met" : "Pending";
+  return commitment;
+}
+
 export default function KPITracker({ profile }: { profile: Profile }) {
   const [weekEnd, setWeekEnd] = useState(nextSunday());
   const [commitments, setCommitments] = useState<Commitment[]>([]);
@@ -326,6 +396,15 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       return;
     }
 
+    const [resultRows, goalRows] = await Promise.all([
+      supabase.from("kpi_weekly_results").select("store_id,week_end,metrics,stores(name)").eq("week_end", weekEnd),
+      supabase.from("kpi_goal_commitments").select("store_id,goals,focus_area,action_plan,owner").eq("week_end", weekEnd),
+    ]);
+    if (!resultRows.error && (resultRows.data?.length ?? 0) > 0) {
+      const goalsByStore = new Map((goalRows.data ?? []).map((item) => [item.store_id, item]));
+      const rows = (resultRows.data ?? []).map((item) => databaseCommitment(item as Parameters<typeof databaseCommitment>[0], goalsByStore.get(item.store_id)));
+      setCommitments(rows); setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setCommitmentsLoading(false); return;
+    }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_commitments", week_end: weekEnd } });
     if (invokeError || !data?.ok) {
       setError(data?.error || invokeError?.message || "The KPI data could not be loaded.");
@@ -334,7 +413,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       return;
     }
 
-    const rows = (data.result ?? []) as Commitment[];
+    const rows = (data.result ?? []).map((item: Commitment) => ({ ...item, source: "sheet_bridge" as const })) as Commitment[];
     const nextAccess = accessFromResponse(data);
     setCommitments(rows);
     applyAccess(nextAccess);
@@ -355,6 +434,15 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       return;
     }
 
+    const directRows = await supabase.from("kpi_weekly_results").select("store_id,week_end,metrics,stores(name)").eq("week_end", weekEnd);
+    if (!directRows.error && (directRows.data?.length ?? 0) > 0) {
+      const rows = (directRows.data ?? []).map((item) => {
+        const storeRecord = Array.isArray(item.stores) ? item.stores[0] : item.stores;
+        const metrics = item.metrics as Record<string, string>;
+        return { store_id: item.store_id, store: metricText(metrics, "store_number", storeRecord?.name ?? "Store").replace(/^Store\s+/i, "").split(" · ")[0], week_end: item.week_end, metrics } as WeeklyMetricRow;
+      });
+      setWeeklyMetrics(rows); setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setMetricsLoading(false); return;
+    }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_weekly_metrics", week_end: weekEnd } });
     if (invokeError || !data?.ok) {
       setWeeklyMetrics([]);
@@ -389,6 +477,15 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     }
     const numeric = (value: string) => value.trim() === "" ? null : Number(value);
     const percentage = (value: string) => value.trim() === "" ? null : Number(value) / 100;
+    if (selected.source === "database" && selected.store_id) {
+      const { error: databaseError } = await supabase.from("kpi_goal_commitments").upsert({
+        store_id: selected.store_id, week_end: weekEnd,
+        goals: { sales: numeric(draft.supervisor_sales_goal), labor: percentage(draft.supervisor_labor_goal), splh: numeric(draft.supervisor_splh_goal), food_variance: percentage(draft.supervisor_food_variance_goal), load: numeric(draft.supervisor_load_goal), adt: numeric(draft.supervisor_adt_goal) },
+        focus_area: draft.focus_area, action_plan: draft.action_plan, owner: draft.owner, updated_by: profile.id, updated_at: new Date().toISOString(),
+      }, { onConflict: "store_id,week_end" });
+      if (databaseError) { setError(databaseError.message); setSaving(false); return; }
+      setMessage(`Store ${selected.store} commitment saved in Dash-OS.`); setSaving(false); await loadCommitments(); return;
+    }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", {
       body: {
         action: "update_commitment",

@@ -1,18 +1,20 @@
 import { FormEvent, useEffect, useState } from "react";
 import { MailPlus, MoreHorizontal, Plus, Search, ShieldCheck, UserCheck, UserX } from "lucide-react";
-import { teamMembers } from "../data/demo";
 import type { Profile, Role } from "../types";
 import { supabase } from "../lib/supabase";
 
 const OWNER_EMAIL = "daustin@powerspizza.com";
-type Store={id:string;name:string;active:boolean};
+type Store={id:string;name:string;store_number:string|null;active:boolean};
 type Member=Profile&{storeId?:string|null;capabilities?:string[];assignedStoreIds?:string[];permissions?:string[]};
 type Invitation={id:string;email:string;fullName:string;role:Role;location:string;storeId:string|null;active:boolean};
 
 export default function Team({ currentProfile }: { currentProfile: Profile }) {
-  const [members, setMembers] = useState<Member[]>(teamMembers);
+  const [members, setMembers] = useState<Member[]>([]);
   const [pendingInvites,setPendingInvites]=useState<Invitation[]>([]);
-  const [stores,setStores]=useState<Store[]>([]); const [newStore,setNewStore]=useState("");
+  const [directoryLoading,setDirectoryLoading]=useState(Boolean(supabase));
+  const [directoryError,setDirectoryError]=useState("");
+  const [directoryWarning,setDirectoryWarning]=useState("");
+  const [stores,setStores]=useState<Store[]>([]); const [newStore,setNewStore]=useState(""); const [newStoreNumber,setNewStoreNumber]=useState("");
   const [showInvite, setShowInvite] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("employee");
@@ -23,11 +25,32 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
 
   const loadDirectory=async()=>{
     if(!supabase)return;
-    const[profileResult,inviteResult]=await Promise.all([
-      supabase.from("profiles").select("id,email,full_name,role,location,active,store_id,profile_capabilities(capability),profile_store_assignments(store_id),profile_permissions(permission)").order("full_name"),
+    setDirectoryLoading(true);
+    setDirectoryError("");
+    setDirectoryWarning("");
+    const[profileResult,inviteResult,capabilitiesResult,assignmentsResult,permissionsResult]=await Promise.all([
+      supabase.from("profiles").select("id,email,full_name,role,location,active,store_id").order("full_name"),
       supabase.from("invited_employees").select("id,email,full_name,role,location,active,store_id").eq("active",true).order("full_name"),
+      supabase.from("profile_capabilities").select("profile_id,capability"),
+      supabase.from("profile_store_assignments").select("profile_id,store_id"),
+      supabase.from("profile_permissions").select("profile_id,permission"),
     ]);
-    if(profileResult.error||inviteResult.error){setMessage(`Team directory could not be loaded: ${profileResult.error?.message??inviteResult.error?.message}`);return}
+    setDirectoryLoading(false);
+    if(profileResult.error){
+      setMembers([]);
+      setPendingInvites([]);
+      setDirectoryError(profileResult.error.message);
+      return;
+    }
+    const optionalErrors=[inviteResult.error,capabilitiesResult.error,assignmentsResult.error,permissionsResult.error]
+      .filter(error=>error!==null);
+    if(optionalErrors.length) setDirectoryWarning("Some invitations or access details could not be loaded. The employee directory is still shown; retry before editing access.");
+    const capabilitiesByProfile=new Map<string,string[]>();
+    for(const row of capabilitiesResult.data??[]) capabilitiesByProfile.set(row.profile_id,[...(capabilitiesByProfile.get(row.profile_id)??[]),row.capability]);
+    const assignmentsByProfile=new Map<string,string[]>();
+    for(const row of assignmentsResult.data??[]) assignmentsByProfile.set(row.profile_id,[...(assignmentsByProfile.get(row.profile_id)??[]),row.store_id]);
+    const permissionsByProfile=new Map<string,string[]>();
+    for(const row of permissionsResult.data??[]) permissionsByProfile.set(row.profile_id,[...(permissionsByProfile.get(row.profile_id)??[]),row.permission]);
     const profileEmails=new Set((profileResult.data??[]).map(member=>member.email.toLowerCase()));
     setMembers((profileResult.data??[]).map((member) => ({
           id: member.id,
@@ -37,16 +60,16 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
           location: member.location,
           active: member.active,
           storeId:member.store_id,
-          capabilities:(member.profile_capabilities??[]).map((x:any)=>x.capability),
-          assignedStoreIds:(member.profile_store_assignments??[]).map((x:any)=>x.store_id),
-          permissions:(member.profile_permissions??[]).map((x:any)=>x.permission),
+          capabilities:capabilitiesByProfile.get(member.id)??[],
+          assignedStoreIds:assignmentsByProfile.get(member.id)??[],
+          permissions:permissionsByProfile.get(member.id)??[],
         })));
     setPendingInvites((inviteResult.data??[]).filter(invite=>!profileEmails.has(invite.email.toLowerCase())).map(invite=>({id:invite.id,email:invite.email,fullName:invite.full_name,role:invite.role,location:invite.location,storeId:invite.store_id,active:invite.active})));
   };
   useEffect(() => {loadDirectory()}, []);
-  const loadStores=()=>supabase?.from("stores").select("id,name,active").order("name").then(({data})=>setStores(data??[])); useEffect(()=>{loadStores()},[]);
-  const addStore=async()=>{if(!supabase||!newStore.trim())return;const{error}=await supabase.from("stores").insert({name:newStore.trim()});if(error)setMessage(error.message);else{setNewStore("");loadStores()}};
-  const renameStore=async(s:Store)=>{const name=window.prompt("Store name",s.name)?.trim();if(!name||!supabase)return;await supabase.from("stores").update({name,updated_at:new Date().toISOString()}).eq("id",s.id);loadStores()};
+  const loadStores=()=>supabase?.from("stores").select("id,name,store_number,active").order("name").then(({data})=>setStores(data??[])); useEffect(()=>{loadStores()},[]);
+  const addStore=async()=>{if(!supabase||!newStore.trim()||!/^\d{4}$/.test(newStoreNumber.trim())){setMessage("Enter a four-digit store number and store name.");return}const{error}=await supabase.from("stores").insert({name:newStore.trim(),store_number:newStoreNumber.trim()});if(error)setMessage(error.message);else{setNewStore("");setNewStoreNumber("");loadStores()}};
+  const renameStore=async(s:Store)=>{const name=window.prompt("Store name",s.name)?.trim();if(!name||!supabase)return;const storeNumber=window.prompt("Four-digit store number",s.store_number??"")?.trim();if(!storeNumber||!/^\d{4}$/.test(storeNumber)){setMessage("A four-digit store number is required for report imports.");return}await supabase.from("stores").update({name,store_number:storeNumber,updated_at:new Date().toISOString()}).eq("id",s.id);loadStores()};
   const toggleStore=async(s:Store)=>{if(!supabase)return;await supabase.from("stores").update({active:!s.active}).eq("id",s.id);loadStores()};
   const assignStore=async(m:Member,id:string)=>{if(!supabase)return;const s=stores.find(x=>x.id===id),{error}=await supabase.from("profiles").update({store_id:id||null,location:s?.name??"Unassigned"}).eq("id",m.id);if(error){setMessage(error.message);return}if(id)await supabase.from("profile_store_assignments").upsert({profile_id:m.id,store_id:id,assigned_by:currentProfile.id});setMembers(v=>v.map(x=>x.id===m.id?{...x,storeId:id,location:s?.name??"Unassigned",assignedStoreIds:id?Array.from(new Set([...(x.assignedStoreIds??[]),id])):x.assignedStoreIds}:x))};
   const setStoreAssignment=async(m:Member,storeId:string,enabled:boolean)=>{if(!supabase)return;const result=enabled?await supabase.from("profile_store_assignments").upsert({profile_id:m.id,store_id:storeId,assigned_by:currentProfile.id}):await supabase.from("profile_store_assignments").delete().eq("profile_id",m.id).eq("store_id",storeId);if(result.error){setMessage(result.error.message);return}if(!enabled&&m.storeId===storeId){await supabase.from("profiles").update({store_id:null,location:"Unassigned"}).eq("id",m.id)}setMembers(v=>v.map(x=>x.id===m.id?{...x,storeId:!enabled&&x.storeId===storeId?null:x.storeId,location:!enabled&&x.storeId===storeId?"Unassigned":x.location,assignedStoreIds:enabled?Array.from(new Set([...(x.assignedStoreIds??[]),storeId])):(x.assignedStoreIds??[]).filter(id=>id!==storeId)}:x))};
@@ -126,7 +149,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
         <button className="button primary" onClick={() => setShowInvite(true)}><MailPlus size={18} /> Invite team member</button>
       </div>
       <div className="admin-note"><ShieldCheck size={20} /><div><strong>Invitation-only access</strong><p>A valid work Gmail address is not enough by itself. Only people in this directory can enter the portal.</p></div></div>
-      <section className="panel store-admin"><div><h2>Stores</h2><p>Add, rename, deactivate, and assign stores.</p></div><div className="store-add"><input value={newStore} onChange={e=>setNewStore(e.target.value)} placeholder="New store name"/><button className="button secondary" onClick={addStore}><Plus/> Add store</button></div><div className="store-chips">{stores.map(s=><span className={!s.active?"inactive":""} key={s.id}>{s.name}<button onClick={()=>renameStore(s)}>Edit</button><button onClick={()=>toggleStore(s)}>{s.active?"Remove":"Restore"}</button></span>)}</div></section>
+      <section className="panel store-admin"><div><h2>Stores</h2><p>Add, rename, deactivate, and assign stores. Store numbers connect untouched Wizardline reports to the correct location.</p></div><div className="store-add"><input value={newStoreNumber} onChange={e=>setNewStoreNumber(e.target.value)} placeholder="Store #" inputMode="numeric" maxLength={4}/><input value={newStore} onChange={e=>setNewStore(e.target.value)} placeholder="New store name"/><button className="button secondary" onClick={addStore}><Plus/> Add store</button></div><div className="store-chips">{stores.map(s=><span className={!s.active?"inactive":""} key={s.id}>{s.store_number ? `${s.store_number} · ` : ""}{s.name}<button onClick={()=>renameStore(s)}>Edit</button><button onClick={()=>toggleStore(s)}>{s.active?"Remove":"Restore"}</button></span>)}</div></section>
       {message && <p className="inline-message">{message}</p>}
       {showInvite && (
         <form className="invite-card" onSubmit={invite}>
@@ -137,9 +160,11 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
           <div className="button-row"><button type="button" className="button secondary" onClick={() => setShowInvite(false)}>Cancel</button><button className="button primary" disabled={saving}>{saving ? "Authorizing…" : "Authorize email"}</button></div>
         </form>
       )}
-      {pendingInvites.length>0&&<section className="panel pending-invitations"><div><p className="eyebrow">Awaiting first sign-in</p><h2>Pending invitations</h2><p>These emails are authorized in Supabase. They will move into the employee directory after their first successful sign-in.</p></div><div className="pending-invite-list">{pendingInvites.map(invite=><div key={invite.id}><div><strong>{invite.fullName}</strong><small>{invite.email}</small></div><span className="role-pill">{invite.role}</span><span>{invite.location}</span></div>)}</div></section>}
+      {directoryError&&<div className="panel" role="alert"><h2>Team directory could not be loaded</h2><p>{directoryError}</p><button type="button" className="button secondary" onClick={loadDirectory}>Retry</button></div>}
+      {directoryWarning&&<div className="panel" role="status"><p>{directoryWarning}</p><button type="button" className="button secondary" onClick={loadDirectory}>Retry</button></div>}
+      {!directoryError&&pendingInvites.length>0&&<section className="panel pending-invitations"><div><p className="eyebrow">Authorized email</p><h2>Pending invitations</h2><p>These emails have an active invitation but no matching portal profile. An Auth user alone does not grant access; if someone has already signed in, ask an administrator to check their profile.</p></div><div className="pending-invite-list">{pendingInvites.map(invite=><div key={invite.id}><div><strong>{invite.fullName}</strong><small>{invite.email}</small></div><span className="role-pill">{invite.role}</span><span>{invite.location}</span></div>)}</div></section>}
       <section className="panel table-panel">
-        <div className="table-toolbar"><div><h2>Employee directory</h2><p>{members.filter((member) => member.active).length} active accounts</p></div><label className="search-field"><Search size={17} /><input placeholder="Search team" /></label></div>
+        <div className="table-toolbar"><div><h2>Employee directory</h2><p>{directoryLoading ? "Loading team accounts…" : directoryError ? "Directory unavailable" : `${members.filter((member) => member.active).length} active accounts`}</p></div><label className="search-field"><Search size={17} /><input placeholder="Search team" /></label></div>
         <div className="responsive-table">
           <table>
             <thead><tr><th>Team member</th><th>Role</th><th>Location</th><th>Access</th><th></th></tr></thead>
@@ -163,7 +188,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
                   </div>}
                 </td>
               </tr>
-            ))}</tbody>
+            ))}{!directoryLoading&&!directoryError&&members.length===0&&<tr><td colSpan={5}>No portal profiles found. Active invitations, if any, are shown above.</td></tr>}</tbody>
           </table>
         </div>
       </section>
