@@ -25,3 +25,10 @@ The Worker build must retain both build variables:
 
 Sign out, request a fresh magic link for `daustin@powerspizza.com`, and confirm that **Catalog management** and **Team access** appear. Add one uniform and one smallware product, including a picture, then submit test orders. Finally, open **Reconciliation**, choose a date range, and review a receipt attachment.
 
+## 5. Enable KPI + Labor
+
+After the earlier migrations, run:
+
+`supabase/migrations/202610010016_kpi_and_labor_operating_system.sql`
+
+Then confirm that supervisors and administrators can open **Weekly data imports**, managers can open **Labor & scheduling**, and an uploaded report appears in the import audit trail. Deploy the `report-import` Edge Function before expecting uploaded PDF/Excel reports to populate normalized results automatically.
