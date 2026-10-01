@@ -192,6 +192,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .login-content > p:not(.eyebrow) { font-size: 1.02rem; }
 .login-content form { display: grid; gap: .85rem; margin-top: 1.6rem; }
 .input-with-icon { position: relative; }.input-with-icon svg { position: absolute; left: .8rem; top: .9rem; color: var(--muted); }.input-with-icon input { padding-left: 2.45rem; }
+.google-button { margin-top: 1.5rem; background: #fff; color: #2f3133; border: 1px solid #cdd3d8; }
+.google-button:hover { background: #f7f9fa; border-color: #aeb8c0; }
+.google-mark { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; color: #4285f4; font: 800 1rem/1 Arial, sans-serif; }
+.login-divider { display: flex; align-items: center; gap: .8rem; margin: 1.35rem 0 -.3rem; color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .07em; }
+.login-divider::before, .login-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
 .login-security { display: flex; gap: .55rem; align-items: center; margin-top: 1.2rem; color: var(--muted); font-size: .78rem; }
 .login-aside { background: linear-gradient(155deg,var(--dash-black),#111b28 60%,#06152a); color: white; display: flex; flex-direction: column; justify-content: flex-end; padding: clamp(2rem, 5vw, 5rem); position: relative; overflow: hidden; }
 .login-aside::before { content:""; position: absolute; width: 500px; height: 500px; border: 1px solid rgba(255,255,255,.08); border-radius: 50%; top: -190px; right: -290px; box-shadow: 0 0 0 60px rgba(255,255,255,.025), 0 0 0 120px rgba(255,255,255,.018); }
