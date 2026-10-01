@@ -6,18 +6,32 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [message, setMessage] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<"google" | "email" | null>(null);
+
+  const signInWithGoogle = async () => {
+    if (!supabase) return;
+    setSubmitting("google");
+    setMessage("");
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) {
+      setMessage("Google sign-in could not start. Please try again or use an email link.");
+      setSubmitting(null);
+    }
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!supabase) return;
-    setSubmitting(true);
+    setSubmitting("email");
     setMessage("");
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim().toLowerCase(),
       options: { emailRedirectTo: window.location.origin },
     });
-    setSubmitting(false);
+    setSubmitting(null);
     if (error) {
       setMessage("We couldn’t send the sign-in email. Please try again.");
       return;
@@ -60,8 +74,18 @@ export default function Login() {
             <p className="eyebrow">Welcome back</p>
             <h1>Your operation, moving smarter.</h1>
             <p>
-              Sign in with your Team Powers work email. No password required.
+              Use your approved Google account for the fastest, most dependable sign-in.
             </p>
+            <button
+              className="button google-button full"
+              type="button"
+              onClick={() => void signInWithGoogle()}
+              disabled={submitting !== null}
+            >
+              <span className="google-mark" aria-hidden="true">G</span>
+              {submitting === "google" ? "Opening Google…" : "Continue with Google"}
+            </button>
+            <div className="login-divider"><span>or use an email link</span></div>
             <form onSubmit={submit}>
               <label htmlFor="email">Work email</label>
               <div className="input-with-icon">
@@ -77,9 +101,9 @@ export default function Login() {
                 />
               </div>
               {message && <p className="form-error">{message}</p>}
-              <button className="button primary full" disabled={submitting}>
-                {submitting ? "Sending…" : "Email me a sign-in link"}
-                {!submitting && <ArrowRight size={18} />}
+              <button className="button primary full" disabled={submitting !== null}>
+                {submitting === "email" ? "Sending…" : "Email me a sign-in link"}
+                {submitting !== "email" && <ArrowRight size={18} />}
               </button>
             </form>
             <div className="login-security">
