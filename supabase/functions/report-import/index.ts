@@ -279,7 +279,10 @@ async function importKpi(client: ReturnType<typeof createClient>, batch: Batch, 
   if (end !== addDays(begin, 6)) throw new Error(`The KPI report period must cover Monday through Sunday. It shows ${begin} through ${end}.`);
   const stores = await storeMap(client);
   const primary = tableRows(grid, 4);
-  const secondHeader = grid.findIndex((row, index) => index > 4 && text(row?.[0]) === "Store Number");
+  // Wizardline may wrap this heading inside the cell as "Store\nNumber".
+  // Treat any whitespace between the words as equivalent so both exported
+  // layouts identify the second KPI table correctly.
+  const secondHeader = grid.findIndex((row, index) => index > 4 && /^Store\s+Number$/i.test(text(row?.[0])));
   if (!primary.length || secondHeader < 0) throw new Error("The KPI workbook is missing one of its two store tables.");
   const service = new Map(tableRows(grid, secondHeader + 1).map((row) => [text(row[0]), row]));
   const upserts: Array<{ store_id: string; week_end: string; metrics: Record<string, unknown>; source_batch_id: string; updated_at: string }> = [];

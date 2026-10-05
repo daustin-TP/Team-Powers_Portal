@@ -61,22 +61,36 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
     if (!supabase || !file || !storeId) { setError("Select a store, report type, week, and file."); return; }
     setUploading(true); setError(""); setMessage("");
     const fingerprint = await sha256(file);
-    const { data: duplicate } = await supabase.from("report_import_batches").select("id,status").eq("store_id", storeId).eq("report_family", family).eq("period_end", periodEnd).eq("file_hash", fingerprint).maybeSingle();
-    if (duplicate) { setError(`This exact report was already uploaded and is currently ${duplicate.status.replace("_", " ")}.`); setUploading(false); return; }
-    const safeName = file.name.replace(/[^a-z0-9._-]+/gi, "-");
-    const storagePath = `${storeId}/${periodEnd}/${crypto.randomUUID()}-${safeName}`;
-    const { error: storageError } = await supabase.storage.from("operating-reports").upload(storagePath, file, { contentType: file.type || undefined, upsert: false });
-    if (storageError) { setError(storageError.message); setUploading(false); return; }
-    const { data: batch, error: insertError } = await supabase.from("report_import_batches").insert({
-      store_id: storeId, report_family: family, period_end: periodEnd, original_filename: file.name,
-      storage_path: storagePath, file_hash: fingerprint, status: "uploaded", uploaded_by: profile.id,
-    }).select("id").single();
-    if (insertError) { setError(insertError.message); setUploading(false); return; }
-    const { data: importResult, error: invokeError } = await supabase.functions.invoke("report-import", { body: { batch_id: batch.id } });
+    const { data: duplicate, error: duplicateError } = await supabase.from("report_import_batches").select("id,status").eq("store_id", storeId).eq("report_family", family).eq("period_end", periodEnd).eq("file_hash", fingerprint).order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (duplicateError) { setError(duplicateError.message); setUploading(false); return; }
+
+    let batchId: string;
+    const retrying = duplicate?.status === "failed";
+    if (duplicate) {
+      if (!retrying) { setError(`This exact report was already uploaded and is currently ${duplicate.status.replace("_", " ")}.`); setUploading(false); return; }
+      const { error: retryError } = await supabase.from("report_import_batches").update({
+        status: "uploaded", error_message: null, warnings: [], completed_at: null,
+      }).eq("id", duplicate.id);
+      if (retryError) { setError(retryError.message); setUploading(false); return; }
+      batchId = duplicate.id;
+    } else {
+      const safeName = file.name.replace(/[^a-z0-9._-]+/gi, "-");
+      const storagePath = `${storeId}/${periodEnd}/${crypto.randomUUID()}-${safeName}`;
+      const { error: storageError } = await supabase.storage.from("operating-reports").upload(storagePath, file, { contentType: file.type || undefined, upsert: false });
+      if (storageError) { setError(storageError.message); setUploading(false); return; }
+      const { data: batch, error: insertError } = await supabase.from("report_import_batches").insert({
+        store_id: storeId, report_family: family, period_end: periodEnd, original_filename: file.name,
+        storage_path: storagePath, file_hash: fingerprint, status: "uploaded", uploaded_by: profile.id,
+      }).select("id").single();
+      if (insertError) { setError(insertError.message); setUploading(false); return; }
+      batchId = batch.id;
+    }
+
+    const { data: importResult, error: invokeError } = await supabase.functions.invoke("report-import", { body: { batch_id: batchId } });
     const importMode = importResult?.metadata?.mode === "baseline_bundle" ? `${importResult.metadata.filesImported}-file historical bundle` : importResult?.metadata?.mode === "baseline" ? `${importResult.metadata.weeks}-week ${String(importResult.metadata.season).replace("_", "-")} baseline` : "weekly actual";
     setMessage(invokeError
       ? "Report is safely uploaded, but automated processing is not deployed or returned an error. Review the audit row below."
-      : `Report processed as ${importMode}: ${importResult?.rowCount ?? 0} interval records, status ${String(importResult?.status ?? "ready").replace("_", " ")}.`);
+      : `${retrying ? "Report reprocessed" : "Report processed"} as ${importMode}: ${importResult?.rowCount ?? 0} records, status ${String(importResult?.status ?? "ready").replace("_", " ")}.`);
     setFile(null); setUploading(false); await load();
   };
 
