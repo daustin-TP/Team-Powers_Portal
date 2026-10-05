@@ -62,7 +62,7 @@ create table if not exists public.labor_scheduling_events (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint labor_scheduling_events_dates_check check (end_date >= start_date),
-  constraint labor_scheduling_events_scope_check check (
+  constraint labor_scheduling_events_scope_store_check check (
     (scope = 'company' and store_id is null) or
     (scope = 'store' and store_id is not null)
   )
