@@ -40,6 +40,7 @@ type Shift = {
   source: "suggested" | "manual";
 };
 type DayProjection = { day_of_week: number; projected_sales: number };
+type StoreHour = { day_of_week: number; open_time: string; close_time: string };
 type Settings = {
   insider_items_per_15: number;
   manager_items_per_15: number;
@@ -87,6 +88,11 @@ type EventForm = Omit<SchedulingEvent, "id" | "store_id" | "sales_lift_percent" 
 };
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const defaultStoreHours = (): StoreHour[] => days.map((_, day_of_week) => ({
+  day_of_week,
+  open_time: "10:00",
+  close_time: day_of_week === 4 || day_of_week === 5 ? "00:00" : "23:00",
+}));
 const roleOrder: Record<LaborRole, number> = { manager: 0, insider: 1, driver: 2 };
 const demoStore: Store = { id: "demo-5491", name: "5491 · Smithville" };
 const demoMembers: TeamMember[] = [
@@ -182,6 +188,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [projections, setProjections] = useState<DayProjection[]>([]);
   const [availability, setAvailability] = useState<Availability[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [storeHours, setStoreHours] = useState<StoreHour[]>(defaultStoreHours);
   const [events, setEvents] = useState<SchedulingEvent[]>([]);
   const canCreateCompanyEvent = profile.role === "supervisor" || profile.role === "admin";
   const [eventForm, setEventForm] = useState<EventForm>(() => emptyEvent(mondayOfCurrentWeek(), "", canCreateCompanyEvent));
@@ -221,20 +228,23 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       if (!isSupabaseConfigured || !supabase) {
         setPlanId("demo-plan"); setPlanStatus("draft"); setMembers(demoMembers); setShifts(demoShifts()); setAvailability(demoAvailability);
         setProjections(days.map((_, day_of_week) => ({ day_of_week, projected_sales: day_of_week >= 4 ? 5200 : 3600 })));
-        setSettings(defaultSettings); setLoading(false); return;
+        setSettings(defaultSettings); setStoreHours(defaultStoreHours()); setLoading(false); return;
       }
-      const [memberResult, settingResult, planResult, standardResult, rtoResult, eventResult] = await Promise.all([
+      const [memberResult, settingResult, hoursResult, planResult, standardResult, rtoResult, eventResult] = await Promise.all([
         supabase.from("labor_team_members").select("id,store_id,display_name,qualified_roles,is_minor,active").eq("store_id", storeId).eq("active", true).order("display_name"),
         supabase.from("labor_store_settings").select("*").eq("store_id", storeId).maybeSingle(),
+        supabase.from("labor_store_hours").select("day_of_week,open_time,close_time").eq("store_id", storeId).order("day_of_week"),
         supabase.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle(),
         supabase.from("labor_standard_availability").select("member_id,day_of_week,start_time,end_time,available").eq("store_id", storeId),
         supabase.from("labor_time_off").select("member_id,day_of_week,start_time,end_time").eq("store_id", storeId).eq("week_start", weekStart),
         supabase.from("labor_scheduling_events").select("*").lte("start_date", addIsoDays(weekStart, 90)).gte("end_date", addIsoDays(weekStart, -35)).order("start_date"),
       ]);
-      const firstError = memberResult.error || settingResult.error || planResult.error || standardResult.error || rtoResult.error || eventResult.error;
+      const firstError = memberResult.error || settingResult.error || hoursResult.error || planResult.error || standardResult.error || rtoResult.error || eventResult.error;
       if (firstError) { setError(`${firstError.message} Apply the Labor Management migration in Supabase, then refresh.`); setLoading(false); return; }
       setMembers((memberResult.data ?? []) as TeamMember[]);
       if (settingResult.data) setSettings({ ...defaultSettings, ...settingResult.data }); else setSettings(defaultSettings);
+      const loadedHours = (hoursResult.data ?? []).map((item) => ({ ...item, open_time: item.open_time.slice(0, 5), close_time: item.close_time.slice(0, 5) })) as StoreHour[];
+      setStoreHours(loadedHours.length === 7 ? loadedHours : defaultStoreHours());
       const standard = (standardResult.data ?? []).map((item) => ({ ...item, kind: "standard" as const }));
       const rto = (rtoResult.data ?? []).map((item) => ({ ...item, available: false, kind: "rto" as const }));
       setAvailability([...standard, ...rto] as Availability[]);
@@ -295,8 +305,12 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   };
   const saveSettings = async () => {
     if (!supabase) { setMessage("Demo settings saved locally."); return; }
-    const { error: saveError } = await supabase.from("labor_store_settings").upsert({ store_id: storeId, ...settings, updated_at: new Date().toISOString() });
-    if (saveError) setError(saveError.message); else setMessage("Store labor settings saved.");
+    const [settingsResult, hoursResult] = await Promise.all([
+      supabase.from("labor_store_settings").upsert({ store_id: storeId, ...settings, updated_at: new Date().toISOString() }),
+      supabase.from("labor_store_hours").upsert(storeHours.map((item) => ({ store_id: storeId, ...item })), { onConflict: "store_id,day_of_week" }),
+    ]);
+    const saveError = settingsResult.error || hoursResult.error;
+    if (saveError) setError(saveError.message); else setMessage("Store labor settings and hours saved.");
   };
   const editEvent = (event: SchedulingEvent) => {
     setEventForm({
@@ -411,7 +425,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       ) : view === "settings" ? (
         <section className="panel labor-settings"><div className="panel-heading"><div><p className="eyebrow">Store-specific rules</p><h2>Staffing assumptions</h2></div><button className="button primary" onClick={saveSettings}><Save size={17} />Save settings</button></div><div className="labor-settings-grid">
           <label>Insider oven items / 15 min<input type="number" step="0.5" value={settings.insider_items_per_15} onChange={(event) => setSettings({ ...settings, insider_items_per_15: Number(event.target.value) })} /></label><label>Manager oven items / 15 min<input type="number" step="0.5" value={settings.manager_items_per_15} onChange={(event) => setSettings({ ...settings, manager_items_per_15: Number(event.target.value) })} /></label><label>Fri/Sat insider items / 15 min<input type="number" step="0.5" value={settings.weekend_insider_items_per_15} onChange={(event) => setSettings({ ...settings, weekend_insider_items_per_15: Number(event.target.value) })} /></label><label>Fri/Sat manager items / 15 min<input type="number" step="0.5" value={settings.weekend_manager_items_per_15} onChange={(event) => setSettings({ ...settings, weekend_manager_items_per_15: Number(event.target.value) })} /></label><label>Average delivery run time<input type="number" step="1" value={settings.average_run_time_minutes} onChange={(event) => setSettings({ ...settings, average_run_time_minutes: Number(event.target.value) })} /></label><label>Manager crossover<select value={settings.manager_crossover_minutes} onChange={(event) => setSettings({ ...settings, manager_crossover_minutes: Number(event.target.value) })}>{[15,30,45,60,75,90,105,120].map((value) => <option key={value} value={value}>{value} minutes</option>)}</select></label><label>Minimum shift hours<input type="number" step="0.25" value={settings.minimum_shift_hours} onChange={(event) => setSettings({ ...settings, minimum_shift_hours: Number(event.target.value) })} /></label><label>Maximum shift hours<input type="number" step="0.25" value={settings.max_shift_hours} onChange={(event) => setSettings({ ...settings, max_shift_hours: Number(event.target.value) })} /></label><label>Late-driver rule<select value={settings.late_driver_rule} onChange={(event) => setSettings({ ...settings, late_driver_rule: event.target.value as Settings["late_driver_rule"] })}><option value="hour_before_close">One hour before close</option><option value="until_close">Until close</option><option value="second_closer">Second closing driver</option></select></label><label className="checkbox-line"><input type="checkbox" checked={settings.opening_driver_through_rush} onChange={(event) => setSettings({ ...settings, opening_driver_through_rush: event.target.checked })} />Allow opening driver through rush when it saves labor</label>
-        </div></section>
+        </div><div className="labor-hours-section"><div><h3>Hours of operation</h3><p>Closing times after midnight belong to the business day shown. These hours drive opening and closing coverage.</p></div><div className="labor-hours-grid">{storeHours.map((item) => <div className="labor-hours-row" key={item.day_of_week}><strong>{days[item.day_of_week]}</strong><label>Open<input type="time" value={item.open_time} onChange={(event) => setStoreHours((current) => current.map((hour) => hour.day_of_week === item.day_of_week ? { ...hour, open_time: event.target.value } : hour))} /></label><label>Close<input type="time" value={item.close_time} onChange={(event) => setStoreHours((current) => current.map((hour) => hour.day_of_week === item.day_of_week ? { ...hour, close_time: event.target.value } : hour))} /></label></div>)}</div></div></section>
       ) : (
         <div className="labor-data-grid"><section className="panel"><Upload size={27} /><p className="eyebrow">Weekly data intake</p><h2>Wizardline imports</h2><p>Upload the three Weekly Summary reports for each store: Royalty Sales, All Oven Items, and Delivery Orders. Imports are stored by store, week, date, and 15-minute interval.</p><button className="button primary" disabled><Upload size={17} />Import center coming next</button></section><section className="panel"><History size={27} /><p className="eyebrow">Permanent record</p><h2>Published schedule history</h2><p>Each publication creates an immutable snapshot. Managers can reopen an old week without overwriting the current schedule.</p><strong>{planStatus === "published" ? "This week is published" : "This week is still a draft"}</strong></section></div>
       )}
