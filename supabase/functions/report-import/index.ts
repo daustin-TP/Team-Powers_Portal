@@ -144,7 +144,8 @@ async function importLabor(client: ReturnType<typeof createClient>, batch: Batch
   if (weeksCount > 1) {
     const startIsDaylight = isCentralDaylight(begin);
     const endIsDaylight = isCentralDaylight(end);
-    if (startIsDaylight !== endIsDaylight) throw new Error("A historical baseline report cannot cross a daylight-saving boundary. Export the daylight and non-daylight periods separately.");
+    const previousDayMatchesStart = isCentralDaylight(addDays(end, -1)) === startIsDaylight;
+    if (startIsDaylight !== endIsDaylight && !previousDayMatchesStart) throw new Error("A historical baseline report cannot cross a daylight-saving boundary except on its final Sunday. Export the daylight and non-daylight periods separately.");
     const season = startIsDaylight ? "daylight" : "non_daylight";
     const { data: baseline, error: baselineError } = await client.from("labor_baseline_sets").upsert({
       store_id: storeId,
