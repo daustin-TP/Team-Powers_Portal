@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import * as XLSX from "npm:xlsx@0.18.5";
+import JSZip from "npm:jszip@3.10.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,7 +10,7 @@ const corsHeaders = {
 type Batch = {
   id: string;
   store_id: string | null;
-  report_family: "kpi_weekly" | "labor_sales" | "labor_oven_items" | "labor_deliveries";
+  report_family: "kpi_weekly" | "labor_sales" | "labor_oven_items" | "labor_deliveries" | "labor_baseline_bundle";
   period_end: string;
   storage_path: string;
 };
@@ -204,6 +205,33 @@ async function importLabor(client: ReturnType<typeof createClient>, batch: Batch
   return { rowCount: parsedRows.length, warnings, metadata: { mode: "weekly", storeNumber, begin, end, weeks: 1, reportTotal: reportWeek, field } };
 }
 
+async function importLaborBundle(client: ReturnType<typeof createClient>, batch: Batch, buffer: ArrayBuffer) {
+  const archive = await JSZip.loadAsync(buffer);
+  const files = Object.values(archive.files).filter((entry) => !entry.dir && /\.xlsx?$/i.test(entry.name) && !entry.name.startsWith("__MACOSX/"));
+  if (!files.length) throw new Error("The ZIP does not contain any Excel reports.");
+  const warnings: string[] = [];
+  const imported: Array<Record<string, unknown>> = [];
+  let rowCount = 0;
+  for (const entry of files) {
+    try {
+      const grid = firstSheet((await entry.async("uint8array")).buffer);
+      const detected = detectFamily(grid);
+      if (detected === "kpi_weekly" || detected === "labor_baseline_bundle") {
+        warnings.push(`${entry.name}: skipped because it is not a labor interval report.`);
+        continue;
+      }
+      const result = await importLabor(client, { ...batch, store_id: null, report_family: detected }, grid);
+      rowCount += result.rowCount;
+      warnings.push(...result.warnings.map((warning) => `${entry.name}: ${warning}`));
+      imported.push({ file: entry.name, ...result.metadata, rows: result.rowCount });
+    } catch (error) {
+      warnings.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (!imported.length) throw new Error(`No labor reports were imported. ${warnings.slice(0, 3).join(" ")}`);
+  return { rowCount, warnings, metadata: { mode: "baseline_bundle", filesFound: files.length, filesImported: imported.length, imported } };
+}
+
 const primaryColumns: Record<string, number> = {
   royalty_sales: 2, sales_last_year: 4, yoy_sales_percent: 6, order_count: 7,
   orders_last_year: 9, order_growth_percent: 10, labor_dollars: 11, labor_percent: 12,
@@ -282,10 +310,16 @@ Deno.serve(async (request) => {
     await admin.from("report_import_batches").update({ status: "processing", error_message: null }).eq("id", batch.id);
     const { data: file, error: fileError } = await admin.storage.from("operating-reports").download(batch.storage_path);
     if (fileError || !file) throw fileError ?? new Error("Uploaded report could not be downloaded.");
-    const grid = firstSheet(await file.arrayBuffer());
-    const detected = detectFamily(grid);
-    if (detected !== batch.report_family) throw new Error(`The selected report type was ${batch.report_family}, but the file layout is ${detected}.`);
-    const result = detected === "kpi_weekly" ? await importKpi(admin, batch as Batch, grid) : await importLabor(admin, batch as Batch, grid);
+    const fileBuffer = await file.arrayBuffer();
+    let result;
+    if (batch.report_family === "labor_baseline_bundle") {
+      result = await importLaborBundle(admin, batch as Batch, fileBuffer);
+    } else {
+      const grid = firstSheet(fileBuffer);
+      const detected = detectFamily(grid);
+      if (detected !== batch.report_family) throw new Error(`The selected report type was ${batch.report_family}, but the file layout is ${detected}.`);
+      result = detected === "kpi_weekly" ? await importKpi(admin, batch as Batch, grid) : await importLabor(admin, batch as Batch, grid);
+    }
     const status = result.warnings.length ? "needs_review" : "ready";
     await admin.from("report_import_batches").update({ status, row_count: result.rowCount, warnings: result.warnings, completed_at: new Date().toISOString() }).eq("id", batch.id);
     return new Response(JSON.stringify({ ok: true, status, ...result }), { headers });

@@ -4,7 +4,7 @@ import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 
 type Store = { id: string; name: string };
-type Family = "kpi_weekly" | "labor_sales" | "labor_oven_items" | "labor_deliveries";
+type Family = "kpi_weekly" | "labor_sales" | "labor_oven_items" | "labor_deliveries" | "labor_baseline_bundle";
 type Batch = {
   id: string; report_family: Family; period_end: string; original_filename: string;
   status: string; row_count: number; error_message: string | null; created_at: string;
@@ -16,6 +16,7 @@ const familyLabels: Record<Family, string> = {
   labor_sales: "Labor · Royalty Sales",
   labor_oven_items: "Labor · All Oven Items",
   labor_deliveries: "Labor · Delivery Orders",
+  labor_baseline_bundle: "Labor · Historical ZIP (all stores)",
 };
 
 function latestSunday() {
@@ -72,7 +73,7 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
     }).select("id").single();
     if (insertError) { setError(insertError.message); setUploading(false); return; }
     const { data: importResult, error: invokeError } = await supabase.functions.invoke("report-import", { body: { batch_id: batch.id } });
-    const importMode = importResult?.metadata?.mode === "baseline" ? `${importResult.metadata.weeks}-week ${String(importResult.metadata.season).replace("_", "-")} baseline` : "weekly actual";
+    const importMode = importResult?.metadata?.mode === "baseline_bundle" ? `${importResult.metadata.filesImported}-file historical bundle` : importResult?.metadata?.mode === "baseline" ? `${importResult.metadata.weeks}-week ${String(importResult.metadata.season).replace("_", "-")} baseline` : "weekly actual";
     setMessage(invokeError
       ? "Report is safely uploaded, but automated processing is not deployed or returned an error. Review the audit row below."
       : `Report processed as ${importMode}: ${importResult?.rowCount ?? 0} interval records, status ${String(importResult?.status ?? "ready").replace("_", " ")}.`);
@@ -88,10 +89,10 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
         <form className="panel import-form" onSubmit={upload}>
           <div className="panel-heading"><div><p className="eyebrow">Add a report</p><h2>Upload original file</h2></div><UploadCloud size={25} /></div>
           <label>Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)} required><option value="">Select store</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>
-          <label>Report type<select value={family} onChange={(event) => setFamily(event.target.value as Family)}>{Object.entries(familyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label>Report type<select value={family} onChange={(event) => { const next = event.target.value as Family; setFamily(next); if (next === "labor_baseline_bundle") { const allStores = stores.find((store) => store.name === "All Stores"); if (allStores) setStoreId(allStores.id); } }}>{Object.entries(familyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label>{family === "kpi_weekly" ? "Week ending" : "Report period ending"}<input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} required /></label>
-          <label className="file-drop"><FileSpreadsheet /><span>{file ? file.name : "Choose PDF, Excel, or CSV report"}</span><input type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={(event) => setFile(event.target.files?.[0] ?? null)} required /></label>
-          <div className="import-guidance"><strong>Wizardline report checklist</strong><span>Weekly Summary · 15-minute intervals · original Excel file</span><span>Labor requires three reports per store: Sales, All Oven Items, Delivery Orders</span><span>One-week reports save actual results. Multi-week Monday–Sunday reports automatically become seasonal averages.</span><span>Keep daylight and non-daylight dates in separate multi-week exports.</span><span>KPI uses the same weekly operations report currently provided on Monday</span></div>
+          <label className="file-drop"><FileSpreadsheet /><span>{file ? file.name : "Choose PDF, Excel, CSV, or ZIP report"}</span><input type="file" accept=".pdf,.xlsx,.xls,.csv,.zip" onChange={(event) => setFile(event.target.files?.[0] ?? null)} required /></label>
+          <div className="import-guidance"><strong>Wizardline report checklist</strong><span>Weekly Summary · 15-minute intervals · original Excel file</span><span>Labor requires Sales, All Oven Items, and Delivery Orders for each store.</span><span>For a historical backfill, choose Historical ZIP and upload every store report together.</span><span>One-week reports save actual results. Multi-week Monday–Sunday reports automatically become seasonal averages.</span><span>Keep daylight and non-daylight dates in separate ZIPs.</span><span>KPI uses the same weekly operations report currently provided on Monday.</span></div>
           <button className="button primary full" disabled={uploading || !isSupabaseConfigured}><UploadCloud size={17} />{uploading ? "Uploading…" : "Upload and process"}</button>
           {!isSupabaseConfigured && <p className="security-note">Connect Supabase to enable live imports.</p>}
         </form>
