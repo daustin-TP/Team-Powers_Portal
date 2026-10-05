@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  CalendarDays,
   CalendarClock,
   CheckCircle2,
   Clock3,
@@ -9,6 +10,7 @@ import {
   RotateCcw,
   Save,
   Settings2,
+  Trash2,
   Upload,
   Users,
 } from "lucide-react";
@@ -16,7 +18,7 @@ import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 
 type LaborRole = "manager" | "insider" | "driver";
-type View = "builder" | "employees" | "availability" | "settings" | "imports";
+type View = "builder" | "employees" | "availability" | "events" | "settings" | "imports";
 type Store = { id: string; name: string };
 type TeamMember = {
   id: string;
@@ -55,6 +57,34 @@ type Settings = {
   late_driver_rule: "hour_before_close" | "until_close" | "second_closer";
 };
 type Availability = { member_id: string; day_of_week: number; start_time: string; end_time: string; available: boolean; kind: "standard" | "rto" };
+type SchedulingEvent = {
+  id: string;
+  scope: "company" | "store";
+  store_id: string | null;
+  name: string;
+  category: "promotion" | "holiday" | "local_event" | "school" | "sports" | "weather" | "operations" | "custom";
+  start_date: string;
+  end_date: string;
+  all_day: boolean;
+  start_time: string | null;
+  end_time: string | null;
+  recurrence: "none" | "annual";
+  status: "draft" | "active" | "cancelled";
+  impact_mode: "learning" | "manual";
+  sales_lift_percent: number | null;
+  order_count_lift_percent: number | null;
+  oven_items_lift_percent: number | null;
+  delivery_lift_percent: number | null;
+  notes: string | null;
+};
+type EventForm = Omit<SchedulingEvent, "id" | "store_id" | "sales_lift_percent" | "order_count_lift_percent" | "oven_items_lift_percent" | "delivery_lift_percent"> & {
+  id: string;
+  store_id: string;
+  sales_lift_percent: string;
+  order_count_lift_percent: string;
+  oven_items_lift_percent: string;
+  delivery_lift_percent: string;
+};
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const roleOrder: Record<LaborRole, number> = { manager: 0, insider: 1, driver: 2 };
@@ -126,6 +156,19 @@ function formatWeek(value: string) {
   const date = new Date(`${value}T12:00:00`);
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(date);
 }
+function addIsoDays(value: string, daysToAdd: number) {
+  const date = new Date(`${value}T12:00:00`);
+  date.setDate(date.getDate() + daysToAdd);
+  return date.toISOString().slice(0, 10);
+}
+function emptyEvent(weekStart: string, storeId: string, canCreateCompany: boolean): EventForm {
+  return {
+    id: "", scope: canCreateCompany ? "company" : "store", store_id: canCreateCompany ? "" : storeId,
+    name: "", category: "custom", start_date: weekStart, end_date: weekStart, all_day: true,
+    start_time: null, end_time: null, recurrence: "none", status: "active", impact_mode: "learning",
+    sales_lift_percent: "", order_count_lift_percent: "", oven_items_lift_percent: "", delivery_lift_percent: "", notes: "",
+  };
+}
 
 export default function LaborManagement({ profile }: { profile: Profile }) {
   const [view, setView] = useState<View>("builder");
@@ -139,6 +182,9 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [projections, setProjections] = useState<DayProjection[]>([]);
   const [availability, setAvailability] = useState<Availability[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [events, setEvents] = useState<SchedulingEvent[]>([]);
+  const canCreateCompanyEvent = profile.role === "supervisor" || profile.role === "admin";
+  const [eventForm, setEventForm] = useState<EventForm>(() => emptyEvent(mondayOfCurrentWeek(), "", canCreateCompanyEvent));
   const [selectedDay, setSelectedDay] = useState(0);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -151,6 +197,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const totalHours = shifts.reduce((sum, shift) => sum + shiftHours(shift), 0);
   const weeklySales = projections.reduce((sum, day) => sum + Number(day.projected_sales || 0), 0);
   const weeklySplh = totalHours ? weeklySales / totalHours : 0;
+  const weekEnd = addIsoDays(weekStart, 6);
+  const weekEvents = events.filter((event) => event.status !== "cancelled" && event.start_date <= weekEnd && event.end_date >= weekStart && (event.scope === "company" || event.store_id === storeId));
 
   useEffect(() => {
     const loadStores = async () => {
@@ -175,20 +223,23 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         setProjections(days.map((_, day_of_week) => ({ day_of_week, projected_sales: day_of_week >= 4 ? 5200 : 3600 })));
         setSettings(defaultSettings); setLoading(false); return;
       }
-      const [memberResult, settingResult, planResult, standardResult, rtoResult] = await Promise.all([
+      const [memberResult, settingResult, planResult, standardResult, rtoResult, eventResult] = await Promise.all([
         supabase.from("labor_team_members").select("id,store_id,display_name,qualified_roles,is_minor,active").eq("store_id", storeId).eq("active", true).order("display_name"),
         supabase.from("labor_store_settings").select("*").eq("store_id", storeId).maybeSingle(),
         supabase.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle(),
         supabase.from("labor_standard_availability").select("member_id,day_of_week,start_time,end_time,available").eq("store_id", storeId),
         supabase.from("labor_time_off").select("member_id,day_of_week,start_time,end_time").eq("store_id", storeId).eq("week_start", weekStart),
+        supabase.from("labor_scheduling_events").select("*").lte("start_date", addIsoDays(weekStart, 90)).gte("end_date", addIsoDays(weekStart, -35)).order("start_date"),
       ]);
-      const firstError = memberResult.error || settingResult.error || planResult.error || standardResult.error || rtoResult.error;
+      const firstError = memberResult.error || settingResult.error || planResult.error || standardResult.error || rtoResult.error || eventResult.error;
       if (firstError) { setError(`${firstError.message} Apply the Labor Management migration in Supabase, then refresh.`); setLoading(false); return; }
       setMembers((memberResult.data ?? []) as TeamMember[]);
       if (settingResult.data) setSettings({ ...defaultSettings, ...settingResult.data }); else setSettings(defaultSettings);
       const standard = (standardResult.data ?? []).map((item) => ({ ...item, kind: "standard" as const }));
       const rto = (rtoResult.data ?? []).map((item) => ({ ...item, available: false, kind: "rto" as const }));
       setAvailability([...standard, ...rto] as Availability[]);
+      setEvents((eventResult.data ?? []) as SchedulingEvent[]);
+      setEventForm((current) => current.id ? current : emptyEvent(weekStart, storeId, canCreateCompanyEvent));
       if (!planResult.data) { setPlanId(""); setPlanStatus("draft"); setShifts([]); setProjections([]); setLoading(false); return; }
       setPlanId(planResult.data.id); setPlanStatus(planResult.data.status);
       const [shiftResult, projectionResult] = await Promise.all([
@@ -199,7 +250,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       setShifts((shiftResult.data ?? []) as Shift[]); setProjections((projectionResult.data ?? []) as DayProjection[]); setLoading(false);
     };
     void loadWeek();
-  }, [storeId, weekStart]);
+  }, [storeId, weekStart, canCreateCompanyEvent]);
 
   useEffect(() => {
     if (!supabase || !planId || planId === "demo-plan") return;
@@ -236,7 +287,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const publish = async () => {
     if (!planId) { setError("Create or generate this week before publishing."); return; }
     if (!supabase || planId === "demo-plan") { setPlanStatus("published"); setMessage("Demo schedule published."); return; }
-    const snapshot = { store: selectedStore?.name, week_start: weekStart, projections, shifts, members, published_by_name: profile.fullName };
+    const snapshot = { store: selectedStore?.name, week_start: weekStart, projections, shifts, members, scheduling_events: weekEvents, published_by_name: profile.fullName };
     const { error: publicationError } = await supabase.from("labor_schedule_publications").insert({ week_plan_id: planId, store_id: storeId, week_start: weekStart, published_by: profile.id, snapshot });
     if (publicationError) { setError(publicationError.message); return; }
     await supabase.from("labor_week_plans").update({ status: "published", published_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", planId);
@@ -246,6 +297,60 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (!supabase) { setMessage("Demo settings saved locally."); return; }
     const { error: saveError } = await supabase.from("labor_store_settings").upsert({ store_id: storeId, ...settings, updated_at: new Date().toISOString() });
     if (saveError) setError(saveError.message); else setMessage("Store labor settings saved.");
+  };
+  const editEvent = (event: SchedulingEvent) => {
+    setEventForm({
+      ...event,
+      store_id: event.store_id ?? "",
+      sales_lift_percent: event.sales_lift_percent?.toString() ?? "",
+      order_count_lift_percent: event.order_count_lift_percent?.toString() ?? "",
+      oven_items_lift_percent: event.oven_items_lift_percent?.toString() ?? "",
+      delivery_lift_percent: event.delivery_lift_percent?.toString() ?? "",
+    });
+    setView("events");
+  };
+  const canEditEvent = (event: SchedulingEvent) => canCreateCompanyEvent || (profile.role === "manager" && event.scope === "store" && event.store_id === storeId);
+  const saveEvent = async () => {
+    setError(""); setMessage("");
+    if (!eventForm.name.trim()) { setError("Enter an event name."); return; }
+    if (eventForm.end_date < eventForm.start_date) { setError("The event end date cannot be before its start date."); return; }
+    if (eventForm.scope === "store" && !eventForm.store_id) { setError("Choose the store affected by this event."); return; }
+    if (eventForm.scope === "company" && !canCreateCompanyEvent) { setError("Only supervisors and administrators can create company-wide events."); return; }
+    const lift = (value: string) => value.trim() === "" ? null : Number(value);
+    const payload = {
+      scope: eventForm.scope,
+      store_id: eventForm.scope === "company" ? null : eventForm.store_id,
+      name: eventForm.name.trim(), category: eventForm.category,
+      start_date: eventForm.start_date, end_date: eventForm.end_date, all_day: eventForm.all_day,
+      start_time: eventForm.all_day ? null : eventForm.start_time,
+      end_time: eventForm.all_day ? null : eventForm.end_time,
+      recurrence: eventForm.recurrence, status: eventForm.status, impact_mode: eventForm.impact_mode,
+      sales_lift_percent: lift(eventForm.sales_lift_percent), order_count_lift_percent: lift(eventForm.order_count_lift_percent),
+      oven_items_lift_percent: lift(eventForm.oven_items_lift_percent), delivery_lift_percent: lift(eventForm.delivery_lift_percent),
+      notes: eventForm.notes?.trim() || null, updated_by: profile.id, updated_at: new Date().toISOString(),
+    };
+    if (!supabase) {
+      const saved = { ...payload, id: eventForm.id || `demo-event-${Date.now()}` } as SchedulingEvent;
+      setEvents((current) => eventForm.id ? current.map((item) => item.id === eventForm.id ? saved : item) : [...current, saved]);
+      setEventForm(emptyEvent(weekStart, storeId, canCreateCompanyEvent)); setMessage("Event saved in this demo session."); return;
+    }
+    const request = eventForm.id
+      ? supabase.from("labor_scheduling_events").update(payload).eq("id", eventForm.id).select("*").single()
+      : supabase.from("labor_scheduling_events").insert({ ...payload, created_by: profile.id }).select("*").single();
+    const { data, error: saveError } = await request;
+    if (saveError || !data) { setError(saveError?.message || "The event could not be saved."); return; }
+    setEvents((current) => eventForm.id ? current.map((item) => item.id === eventForm.id ? data as SchedulingEvent : item) : [...current, data as SchedulingEvent].sort((a, b) => a.start_date.localeCompare(b.start_date)));
+    setEventForm(emptyEvent(weekStart, storeId, canCreateCompanyEvent)); setMessage("Scheduling event saved.");
+  };
+  const deleteEvent = async (event: SchedulingEvent) => {
+    if (!canEditEvent(event) || !window.confirm(`Delete “${event.name}”? This cannot be undone.`)) return;
+    if (supabase) {
+      const { error: deleteError } = await supabase.from("labor_scheduling_events").delete().eq("id", event.id);
+      if (deleteError) { setError(deleteError.message); return; }
+    }
+    setEvents((current) => current.filter((item) => item.id !== event.id));
+    if (eventForm.id === event.id) setEventForm(emptyEvent(weekStart, storeId, canCreateCompanyEvent));
+    setMessage("Scheduling event deleted.");
   };
   const hoursByMember = members.map((member) => ({ member, hours: shifts.filter((shift) => shift.assigned_member_id === member.id).reduce((sum, shift) => sum + shiftHours(shift), 0) })).sort((a, b) => b.hours - a.hours);
   const daySales = projections.find((item) => item.day_of_week === selectedDay)?.projected_sales ?? 0;
@@ -263,12 +368,14 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         <button className={view === "builder" ? "active" : ""} onClick={() => setView("builder")}><CalendarClock />Schedule builder</button>
         <button className={view === "employees" ? "active" : ""} onClick={() => setView("employees")}><Users />Employees</button>
         <button className={view === "availability" ? "active" : ""} onClick={() => setView("availability")}><Clock3 />Availability</button>
+        <button className={view === "events" ? "active" : ""} onClick={() => setView("events")}><CalendarDays />Event calendar</button>
         <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><Settings2 />Settings</button>
         <button className={view === "imports" ? "active" : ""} onClick={() => setView("imports")}><Upload />Data & history</button>
       </div>
       {loading ? <div className="empty-card"><CalendarClock className="spin" /><h2>Loading labor plan…</h2></div> : view === "builder" ? (
         <>
           <section className="labor-summary-grid"><article><span>Projected sales</span><strong>${weeklySales.toLocaleString()}</strong><small>Week of {formatWeek(weekStart)}</small></article><article><span>Scheduled hours</span><strong>{totalHours.toFixed(1)}</strong><small>{shifts.length} required shifts</small></article><article><span>Projected SPLH</span><strong>${weeklySplh.toFixed(2)}</strong><small>Sales ÷ scheduled hours</small></article><article><span>Status</span><strong className="labor-status">{planStatus}</strong><small>{shifts.filter((shift) => !shift.assigned_member_id).length} open shifts</small></article></section>
+          {weekEvents.length > 0 && <section className="labor-event-strip"><CalendarDays size={20} /><div><strong>{weekEvents.length === 1 ? "Demand event this week" : `${weekEvents.length} demand events this week`}</strong><div>{weekEvents.map((event) => <button key={event.id} onClick={() => editEvent(event)}><span>{event.scope === "company" ? "Company" : selectedStore?.name}</span>{event.name}</button>)}</div></div></section>}
           <div className="labor-toolbar"><div className="day-tabs">{days.map((day, index) => <button key={day} className={selectedDay === index ? "active" : ""} onClick={() => setSelectedDay(index)}>{day.slice(0, 3)}<small>{shifts.filter((shift) => shift.day_of_week === index).length}</small></button>)}</div><div className="button-row"><button className="button secondary" onClick={resetAssignments}><RotateCcw size={17} />Reset names</button><button className="button primary" onClick={publish}><FileDown size={17} />Publish</button></div></div>
           <section className="panel labor-day-panel"><div className="table-toolbar"><div><p className="eyebrow">{days[selectedDay]} builder</p><h2>Required shifts</h2><p>Managers first, then insiders and drivers; each group is ordered by start time.</p></div><div className="labor-day-metrics"><span>${Number(daySales).toLocaleString()} sales</span><strong>${dayHours ? (Number(daySales) / dayHours).toFixed(2) : "0.00"} SPLH</strong></div></div>
             {visibleShifts.length === 0 ? <div className="activity-empty">No suggested shifts have been generated for this day.</div> : <div className="responsive-table"><table className="labor-shift-table"><thead><tr><th>Role</th><th>Suggested time</th><th>Hours</th><th>Assigned employee</th><th>Availability</th><th>Notes</th></tr></thead><tbody>{visibleShifts.map((shift) => { const assigned = members.find((member) => member.id === shift.assigned_member_id); const status = assigned ? memberStatus(assigned, shift) : ""; return <tr key={shift.id} className={`${shift.role} ${shift.start_time <= "10:00" ? "opening" : ""} ${shift.end_time <= shift.start_time || shift.end_time >= "23:00" ? "closing" : ""}`}><td><strong>{shift.role[0].toUpperCase() + shift.role.slice(1)}</strong></td><td>{displayTime(shift.start_time)} – {displayTime(shift.end_time)}</td><td>{shiftHours(shift).toFixed(2)}</td><td><select value={shift.assigned_member_id ?? ""} onChange={(event) => void assign(shift, event.target.value)}><option value="">Open shift</option>{members.filter((member) => member.qualified_roles.includes(shift.role)).map((member) => <option key={member.id} value={member.id}>{memberStatus(member, shift)} {member.display_name}{member.is_minor ? " · Minor" : ""}</option>)}</select></td><td><span className={status.startsWith("⛔") ? "availability-bad" : status.startsWith("⚠") ? "availability-warning" : "availability-good"}>{status || "—"}</span></td><td>{shift.notes || (shift.source === "suggested" ? "Suggested from demand" : "Manager added")}</td></tr>; })}</tbody></table></div>}
@@ -279,6 +386,28 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         <section className="panel"><div className="table-toolbar"><div><p className="eyebrow">Weekly roster view</p><h2>Employee hours and assignments</h2></div></div><div className="responsive-table"><table><thead><tr><th>Employee</th><th>Roles</th><th>Minor</th><th>Weekly hours</th><th>Flag</th></tr></thead><tbody>{hoursByMember.map(({ member, hours }) => <tr key={member.id}><td><strong>{member.display_name}</strong></td><td>{member.qualified_roles.join(", ")}</td><td>{member.is_minor ? "◆" : "—"}</td><td>{hours.toFixed(2)}</td><td>{hours >= 40 ? <span className="availability-bad">OVERTIME</span> : hours >= 36 ? <span className="availability-warning">Close to OT</span> : "✓"}</td></tr>)}</tbody></table></div></section>
       ) : view === "availability" ? (
         <section className="panel"><div className="table-toolbar"><div><p className="eyebrow">Standard + week-specific</p><h2>Availability at a glance</h2><p>Standard availability remains in place. Requested time off applies only to the selected week.</p></div></div><div className="responsive-table"><table className="availability-table"><thead><tr><th>Employee</th>{days.map((day) => <th key={day}>{day.slice(0, 3)}</th>)}</tr></thead><tbody>{members.map((member) => <tr key={member.id}><td><strong>{member.display_name}</strong></td>{days.map((_, day) => { const entries = availability.filter((item) => item.member_id === member.id && item.day_of_week === day); const rto = entries.find((item) => item.kind === "rto" || !item.available); const limited = entries.find((item) => item.available); return <td key={day}>{rto ? <span className="availability-bad">⛔ RTO</span> : limited ? <span className="availability-warning">⚠ {displayTime(limited.start_time)}–{displayTime(limited.end_time)}</span> : <span className="availability-good">✓ Available</span>}</td>; })}</tr>)}</tbody></table></div></section>
+      ) : view === "events" ? (
+        <div className="labor-event-layout">
+          <section className="panel labor-event-editor">
+            <div className="panel-heading"><div><p className="eyebrow">Demand intelligence</p><h2>{eventForm.id ? "Edit scheduling event" : "Add scheduling event"}</h2><p>Record promotions, holidays, school events, sports, weather, and local traffic drivers.</p></div></div>
+            <div className="labor-event-form">
+              <label>Event name<input value={eventForm.name} onChange={(event) => setEventForm({ ...eventForm, name: event.target.value })} placeholder="Example: Homecoming game" /></label>
+              <div className="labor-event-form-row"><label>Scope<select value={eventForm.scope} onChange={(event) => { const scope = event.target.value as EventForm["scope"]; setEventForm({ ...eventForm, scope, store_id: scope === "company" ? "" : (eventForm.store_id || storeId) }); }}><option value="store">Store-specific</option>{canCreateCompanyEvent && <option value="company">Company-wide</option>}</select></label><label>Category<select value={eventForm.category} onChange={(event) => setEventForm({ ...eventForm, category: event.target.value as EventForm["category"] })}>{["promotion","holiday","local_event","school","sports","weather","operations","custom"].map((category) => <option key={category} value={category}>{category.replace("_", " ")}</option>)}</select></label></div>
+              {eventForm.scope === "store" && <label>Store<select value={eventForm.store_id || storeId} onChange={(event) => setEventForm({ ...eventForm, store_id: event.target.value })}>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}
+              <div className="labor-event-form-row"><label>Starts<input type="date" value={eventForm.start_date} onChange={(event) => setEventForm({ ...eventForm, start_date: event.target.value, end_date: eventForm.end_date < event.target.value ? event.target.value : eventForm.end_date })} /></label><label>Ends<input type="date" value={eventForm.end_date} onChange={(event) => setEventForm({ ...eventForm, end_date: event.target.value })} /></label></div>
+              <label className="checkbox-line"><input type="checkbox" checked={eventForm.all_day} onChange={(event) => setEventForm({ ...eventForm, all_day: event.target.checked })} />All-day event</label>
+              {!eventForm.all_day && <div className="labor-event-form-row"><label>Start time<input type="time" value={eventForm.start_time ?? ""} onChange={(event) => setEventForm({ ...eventForm, start_time: event.target.value })} /></label><label>End time<input type="time" value={eventForm.end_time ?? ""} onChange={(event) => setEventForm({ ...eventForm, end_time: event.target.value })} /></label></div>}
+              <div className="labor-event-form-row"><label>Recurrence<select value={eventForm.recurrence} onChange={(event) => setEventForm({ ...eventForm, recurrence: event.target.value as EventForm["recurrence"] })}><option value="none">One time</option><option value="annual">Annual</option></select></label><label>Demand handling<select value={eventForm.impact_mode} onChange={(event) => setEventForm({ ...eventForm, impact_mode: event.target.value as EventForm["impact_mode"] })}><option value="learning">Track and learn</option><option value="manual">Use expected lift</option></select></label></div>
+              <div className="labor-impact-grid"><label>Sales lift %<input type="number" step="0.1" value={eventForm.sales_lift_percent} onChange={(event) => setEventForm({ ...eventForm, sales_lift_percent: event.target.value })} placeholder="Unknown" /></label><label>Order lift %<input type="number" step="0.1" value={eventForm.order_count_lift_percent} onChange={(event) => setEventForm({ ...eventForm, order_count_lift_percent: event.target.value })} placeholder="Unknown" /></label><label>Oven-item lift %<input type="number" step="0.1" value={eventForm.oven_items_lift_percent} onChange={(event) => setEventForm({ ...eventForm, oven_items_lift_percent: event.target.value })} placeholder="Unknown" /></label><label>Delivery lift %<input type="number" step="0.1" value={eventForm.delivery_lift_percent} onChange={(event) => setEventForm({ ...eventForm, delivery_lift_percent: event.target.value })} placeholder="Unknown" /></label></div>
+              <p className="labor-impact-help"><strong>Track and learn</strong> leaves unknown lifts blank, then lets actual reports teach the model. Expected lifts remain separate so a discount promotion does not look light simply because revenue grew less than orders.</p>
+              <label>Notes<textarea value={eventForm.notes ?? ""} onChange={(event) => setEventForm({ ...eventForm, notes: event.target.value })} placeholder="What will change demand or operations?" /></label>
+              <div className="button-row"><button className="button primary" onClick={saveEvent}><Save size={17} />{eventForm.id ? "Update event" : "Save event"}</button>{eventForm.id && <button className="button secondary" onClick={() => setEventForm(emptyEvent(weekStart, storeId, canCreateCompanyEvent))}>Cancel</button>}</div>
+            </div>
+          </section>
+          <section className="panel labor-event-list"><div className="panel-heading"><div><p className="eyebrow">Shared calendar</p><h2>Upcoming and recent events</h2><p>Company events appear for every store. Local events appear only for their store.</p></div></div>
+            {events.length === 0 ? <div className="activity-empty">No scheduling events have been added yet.</div> : <div className="event-card-list">{events.map((event) => <article key={event.id} className={`event-card ${event.status}`}><div className="event-date"><strong>{new Date(`${event.start_date}T12:00:00`).toLocaleDateString(undefined, { month: "short" })}</strong><span>{new Date(`${event.start_date}T12:00:00`).getDate()}</span></div><div className="event-copy"><div className="event-tags"><span>{event.scope === "company" ? "Company-wide" : stores.find((store) => store.id === event.store_id)?.name || "Store"}</span><span>{event.category.replace("_", " ")}</span><span>{event.impact_mode === "learning" ? "Learning" : "Expected lift"}</span></div><h3>{event.name}</h3><p>{event.start_date === event.end_date ? formatWeek(event.start_date) : `${formatWeek(event.start_date)} – ${formatWeek(event.end_date)}`}{event.recurrence === "annual" ? " · repeats annually" : ""}</p>{event.notes && <small>{event.notes}</small>}<div className="event-lifts">{event.sales_lift_percent !== null && <span>Sales {event.sales_lift_percent > 0 ? "+" : ""}{event.sales_lift_percent}%</span>}{event.order_count_lift_percent !== null && <span>Orders {event.order_count_lift_percent > 0 ? "+" : ""}{event.order_count_lift_percent}%</span>}{event.oven_items_lift_percent !== null && <span>Oven {event.oven_items_lift_percent > 0 ? "+" : ""}{event.oven_items_lift_percent}%</span>}{event.delivery_lift_percent !== null && <span>Delivery {event.delivery_lift_percent > 0 ? "+" : ""}{event.delivery_lift_percent}%</span>}</div></div>{canEditEvent(event) && <div className="event-actions"><button className="icon-button" aria-label={`Edit ${event.name}`} onClick={() => editEvent(event)}><Settings2 size={17} /></button><button className="icon-button danger" aria-label={`Delete ${event.name}`} onClick={() => void deleteEvent(event)}><Trash2 size={17} /></button></div>}</article>)}</div>}
+          </section>
+        </div>
       ) : view === "settings" ? (
         <section className="panel labor-settings"><div className="panel-heading"><div><p className="eyebrow">Store-specific rules</p><h2>Staffing assumptions</h2></div><button className="button primary" onClick={saveSettings}><Save size={17} />Save settings</button></div><div className="labor-settings-grid">
           <label>Insider oven items / 15 min<input type="number" step="0.5" value={settings.insider_items_per_15} onChange={(event) => setSettings({ ...settings, insider_items_per_15: Number(event.target.value) })} /></label><label>Manager oven items / 15 min<input type="number" step="0.5" value={settings.manager_items_per_15} onChange={(event) => setSettings({ ...settings, manager_items_per_15: Number(event.target.value) })} /></label><label>Fri/Sat insider items / 15 min<input type="number" step="0.5" value={settings.weekend_insider_items_per_15} onChange={(event) => setSettings({ ...settings, weekend_insider_items_per_15: Number(event.target.value) })} /></label><label>Fri/Sat manager items / 15 min<input type="number" step="0.5" value={settings.weekend_manager_items_per_15} onChange={(event) => setSettings({ ...settings, weekend_manager_items_per_15: Number(event.target.value) })} /></label><label>Average delivery run time<input type="number" step="1" value={settings.average_run_time_minutes} onChange={(event) => setSettings({ ...settings, average_run_time_minutes: Number(event.target.value) })} /></label><label>Manager crossover<select value={settings.manager_crossover_minutes} onChange={(event) => setSettings({ ...settings, manager_crossover_minutes: Number(event.target.value) })}>{[15,30,45,60,75,90,105,120].map((value) => <option key={value} value={value}>{value} minutes</option>)}</select></label><label>Minimum shift hours<input type="number" step="0.25" value={settings.minimum_shift_hours} onChange={(event) => setSettings({ ...settings, minimum_shift_hours: Number(event.target.value) })} /></label><label>Maximum shift hours<input type="number" step="0.25" value={settings.max_shift_hours} onChange={(event) => setSettings({ ...settings, max_shift_hours: Number(event.target.value) })} /></label><label>Late-driver rule<select value={settings.late_driver_rule} onChange={(event) => setSettings({ ...settings, late_driver_rule: event.target.value as Settings["late_driver_rule"] })}><option value="hour_before_close">One hour before close</option><option value="until_close">Until close</option><option value="second_closer">Second closing driver</option></select></label><label className="checkbox-line"><input type="checkbox" checked={settings.opening_driver_through_rush} onChange={(event) => setSettings({ ...settings, opening_driver_through_rush: event.target.checked })} />Allow opening driver through rush when it saves labor</label>

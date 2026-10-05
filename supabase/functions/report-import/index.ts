@@ -45,6 +45,8 @@ const addDays = (iso: string, days: number) => {
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 };
+const inclusiveDays = (begin: string, end: string) =>
+  Math.round((new Date(`${end}T12:00:00Z`).getTime() - new Date(`${begin}T12:00:00Z`).getTime()) / 86_400_000) + 1;
 const time24 = (value: unknown) => {
   const match = text(value).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
   if (!match) return null;
@@ -91,7 +93,12 @@ async function importLabor(client: ReturnType<typeof createClient>, batch: Batch
   const begin = isoDate(extract(grid[0]?.[11], /Begin Date:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i, "begin date"));
   const end = isoDate(extract(grid[1]?.[11], /End Date:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i, "end date"));
   if (end !== batch.period_end) throw new Error(`The selected period ends ${batch.period_end}, but the report ends ${end}.`);
-  if (end !== addDays(begin, 6)) throw new Error(`The report period must cover Monday through Sunday. It shows ${begin} through ${end}.`);
+  const daysInPeriod = inclusiveDays(begin, end);
+  if (daysInPeriod < 7 || daysInPeriod % 7 !== 0) throw new Error(`The report period must contain complete Monday-through-Sunday weeks. It shows ${begin} through ${end}.`);
+  const weeksCount = daysInPeriod / 7;
+  const beginDay = new Date(`${begin}T12:00:00Z`).getUTCDay();
+  const endDay = new Date(`${end}T12:00:00Z`).getUTCDay();
+  if (beginDay !== 1 || endDay !== 0) throw new Error(`The report period must begin Monday and end Sunday. It shows ${begin} through ${end}.`);
   const expectedDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const headerDays = [2, 3, 5, 6, 7, 8, 9].map((column) => text(grid[3]?.[column]));
   if (headerDays.join("|") !== expectedDays.join("|")) throw new Error("The report's weekday columns do not match the supported Monday-through-Sunday layout.");
@@ -134,6 +141,50 @@ async function importLabor(client: ReturnType<typeof createClient>, batch: Batch
   const parsedWeek = parsedRows.reduce((sum, row) => sum + Number(row[field]), 0);
   if (!nearlyEqual(reportWeek, parsedWeek)) throw new Error(`Report total ${reportWeek} did not match parsed total ${parsedWeek}.`);
 
+  if (weeksCount > 1) {
+    const startIsDaylight = isCentralDaylight(begin);
+    const endIsDaylight = isCentralDaylight(end);
+    if (startIsDaylight !== endIsDaylight) throw new Error("A historical baseline report cannot cross a daylight-saving boundary. Export the daylight and non-daylight periods separately.");
+    const season = startIsDaylight ? "daylight" : "non_daylight";
+    const { data: baseline, error: baselineError } = await client.from("labor_baseline_sets").upsert({
+      store_id: storeId,
+      season,
+      period_start: begin,
+      period_end: end,
+      weeks_count: weeksCount,
+      status: "actual",
+      source_label: `Wizardline ${weeksCount}-week baseline`,
+      active: true,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "store_id,season,period_start,period_end" }).select("id").single();
+    if (baselineError || !baseline) throw baselineError ?? new Error("The historical baseline could not be created.");
+
+    const rawField = batch.report_family === "labor_sales" ? "raw_sales_total" : batch.report_family === "labor_oven_items" ? "raw_oven_items_total" : "raw_delivery_total";
+    const averageField = batch.report_family === "labor_sales" ? "avg_sales" : batch.report_family === "labor_oven_items" ? "avg_oven_items" : "avg_deliveries";
+    const baselineBatchField = batch.report_family === "labor_sales" ? "sales_source_batch_id" : batch.report_family === "labor_oven_items" ? "oven_source_batch_id" : "delivery_source_batch_id";
+    const { error: baselineResetError } = await client.from("labor_baseline_intervals").update({
+      [rawField]: 0,
+      [averageField]: 0,
+      [baselineBatchField]: batch.id,
+      updated_at: new Date().toISOString(),
+    }).eq("baseline_set_id", baseline.id);
+    if (baselineResetError) throw baselineResetError;
+    const baselineRows = parsedRows.map((row) => ({
+      baseline_set_id: baseline.id,
+      store_id: storeId,
+      day_of_week: Math.round((new Date(`${String(row.business_date)}T12:00:00Z`).getTime() - new Date(`${begin}T12:00:00Z`).getTime()) / 86_400_000),
+      interval_start: row.interval_start,
+      [rawField]: Number(row[field]),
+      [averageField]: Number(row[field]) / weeksCount,
+      [baselineBatchField]: batch.id,
+      updated_at: new Date().toISOString(),
+    }));
+    const { error: baselineRowsError } = await client.from("labor_baseline_intervals").upsert(baselineRows, { onConflict: "baseline_set_id,day_of_week,interval_start" });
+    if (baselineRowsError) throw baselineRowsError;
+    await client.from("report_import_batches").update({ period_start: begin }).eq("id", batch.id);
+    return { rowCount: baselineRows.length, warnings, metadata: { mode: "baseline", storeNumber, begin, end, weeks: weeksCount, season, reportTotal: reportWeek, field } };
+  }
+
   // Wizardline omits quarter-hour rows that are zero across all seven days in
   // some report families (notably Deliveries). Reset only this metric for the
   // imported week before upserting so a corrected re-upload cannot preserve a
@@ -148,7 +199,8 @@ async function importLabor(client: ReturnType<typeof createClient>, batch: Batch
 
   const { error } = await client.from("labor_metric_intervals").upsert(parsedRows, { onConflict: "store_id,business_date,interval_start" });
   if (error) throw error;
-  return { rowCount: parsedRows.length, warnings, metadata: { storeNumber, begin, end, reportTotal: reportWeek, field } };
+  await client.from("report_import_batches").update({ period_start: begin }).eq("id", batch.id);
+  return { rowCount: parsedRows.length, warnings, metadata: { mode: "weekly", storeNumber, begin, end, weeks: 1, reportTotal: reportWeek, field } };
 }
 
 const primaryColumns: Record<string, number> = {

@@ -72,9 +72,10 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
     }).select("id").single();
     if (insertError) { setError(insertError.message); setUploading(false); return; }
     const { data: importResult, error: invokeError } = await supabase.functions.invoke("report-import", { body: { batch_id: batch.id } });
+    const importMode = importResult?.metadata?.mode === "baseline" ? `${importResult.metadata.weeks}-week ${String(importResult.metadata.season).replace("_", "-")} baseline` : "weekly actual";
     setMessage(invokeError
       ? "Report is safely uploaded, but automated processing is not deployed or returned an error. Review the audit row below."
-      : `Report processed: ${importResult?.rowCount ?? 0} records, status ${String(importResult?.status ?? "ready").replace("_", " ")}.`);
+      : `Report processed as ${importMode}: ${importResult?.rowCount ?? 0} interval records, status ${String(importResult?.status ?? "ready").replace("_", " ")}.`);
     setFile(null); setUploading(false); await load();
   };
 
@@ -90,7 +91,7 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
           <label>Report type<select value={family} onChange={(event) => setFamily(event.target.value as Family)}>{Object.entries(familyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label>{family === "kpi_weekly" ? "Week ending" : "Report period ending"}<input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} required /></label>
           <label className="file-drop"><FileSpreadsheet /><span>{file ? file.name : "Choose PDF, Excel, or CSV report"}</span><input type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={(event) => setFile(event.target.files?.[0] ?? null)} required /></label>
-          <div className="import-guidance"><strong>Wizardline report checklist</strong><span>Weekly Summary · 15-minute intervals</span><span>Labor requires three reports per store: Sales, All Oven Items, Delivery Orders</span><span>KPI uses the same weekly operations report currently provided on Monday</span></div>
+          <div className="import-guidance"><strong>Wizardline report checklist</strong><span>Weekly Summary · 15-minute intervals · original Excel file</span><span>Labor requires three reports per store: Sales, All Oven Items, Delivery Orders</span><span>One-week reports save actual results. Multi-week Monday–Sunday reports automatically become seasonal averages.</span><span>Keep daylight and non-daylight dates in separate multi-week exports.</span><span>KPI uses the same weekly operations report currently provided on Monday</span></div>
           <button className="button primary full" disabled={uploading || !isSupabaseConfigured}><UploadCloud size={17} />{uploading ? "Uploading…" : "Upload and process"}</button>
           {!isSupabaseConfigured && <p className="security-note">Connect Supabase to enable live imports.</p>}
         </form>
