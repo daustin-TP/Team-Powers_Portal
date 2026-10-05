@@ -212,22 +212,38 @@ async function importLaborBundle(client: ReturnType<typeof createClient>, batch:
   const warnings: string[] = [];
   const imported: Array<Record<string, unknown>> = [];
   let rowCount = 0;
+
+  // A full company backfill contains roughly 30 workbooks. Processing every
+  // file serially exceeds the Edge Function wall-clock limit, while processing
+  // all three metrics for one store concurrently can make those upserts contend
+  // for the same interval rows. Run stores in parallel and each store's files
+  // sequentially for a fast, deterministic import.
+  const groupedFiles = new Map<string, typeof files>();
   for (const entry of files) {
-    try {
-      const grid = firstSheet((await entry.async("uint8array")).buffer);
-      const detected = detectFamily(grid);
-      if (detected === "kpi_weekly" || detected === "labor_baseline_bundle") {
-        warnings.push(`${entry.name}: skipped because it is not a labor interval report.`);
-        continue;
-      }
-      const result = await importLabor(client, { ...batch, store_id: null, report_family: detected }, grid);
-      rowCount += result.rowCount;
-      warnings.push(...result.warnings.map((warning) => `${entry.name}: ${warning}`));
-      imported.push({ file: entry.name, ...result.metadata, rows: result.rowCount });
-    } catch (error) {
-      warnings.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    const groupKey = entry.name.match(/\b\d{4}\b/)?.[0] ?? entry.name;
+    const group = groupedFiles.get(groupKey) ?? [];
+    group.push(entry);
+    groupedFiles.set(groupKey, group);
   }
+  await Promise.all(Array.from(groupedFiles.values()).map(async (group) => {
+    for (const entry of group) {
+      try {
+        const grid = firstSheet((await entry.async("uint8array")).buffer);
+        const detected = detectFamily(grid);
+        if (detected === "kpi_weekly" || detected === "labor_baseline_bundle") {
+          warnings.push(`${entry.name}: skipped because it is not a labor interval report.`);
+          continue;
+        }
+        const result = await importLabor(client, { ...batch, store_id: null, report_family: detected }, grid);
+        rowCount += result.rowCount;
+        warnings.push(...result.warnings.map((warning) => `${entry.name}: ${warning}`));
+        imported.push({ file: entry.name, ...result.metadata, rows: result.rowCount });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : typeof error === "object" ? JSON.stringify(error) : String(error);
+        warnings.push(`${entry.name}: ${detail}`);
+      }
+    }
+  }));
   if (!imported.length) throw new Error(`No labor reports were imported. ${warnings.slice(0, 3).join(" ")}`);
   return { rowCount, warnings, metadata: { mode: "baseline_bundle", filesFound: files.length, filesImported: imported.length, imported } };
 }
