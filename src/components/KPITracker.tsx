@@ -64,7 +64,7 @@ type WeeklyMetricRow = {
   store_id?: string;
   store: string;
   week_end: string;
-  metrics: Record<string, string>;
+  metrics: Record<string, unknown>;
 };
 type MetricFormat = "currency0" | "currency2" | "percent" | "number0" | "number1";
 type MetricDefinition = {
@@ -229,9 +229,12 @@ function ordered(items: Commitment[]) {
   return [...items].sort((a, b) => (score(b).percent ?? -1) - (score(a).percent ?? -1));
 }
 
-function numericValue(value: string) {
-  if (!value || /pending|—/i.test(value)) return null;
-  const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+function numericValue(value: unknown) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (!text || /pending|—/i.test(text)) return null;
+  const parsed = Number(text.replace(/[$,%\s,]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -256,11 +259,15 @@ function formatMetricValue(value: number | null, format: MetricFormat) {
 
 function aggregateMetric(rows: WeeklyMetricRow[], definition: MetricDefinition) {
   const values = rows
-    .map((row) => numericValue(row.metrics[definition.key] ?? ""))
+    .map((row) => numericValue(row.metrics[definition.key]))
     .filter((value): value is number => value !== null);
   if (!values.length) return null;
   const total = values.reduce((sum, value) => sum + value, 0);
   return definition.aggregate === "sum" ? total : total / values.length;
+}
+
+function displayMetricValue(metrics: Record<string, unknown>, definition: MetricDefinition) {
+  return formatMetricValue(numericValue(metrics[definition.key]), definition.format);
 }
 
 function metricText(metrics: Record<string, unknown>, key: string, fallback = "") {
@@ -438,7 +445,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     if (!directRows.error && (directRows.data?.length ?? 0) > 0) {
       const rows = (directRows.data ?? []).map((item) => {
         const storeRecord = Array.isArray(item.stores) ? item.stores[0] : item.stores;
-        const metrics = item.metrics as Record<string, string>;
+        const metrics = item.metrics as Record<string, unknown>;
         return { store_id: item.store_id, store: metricText(metrics, "store_number", storeRecord?.name ?? "Store").replace(/^Store\s+/i, "").split(" · ")[0], week_end: item.week_end, metrics } as WeeklyMetricRow;
       });
       setWeeklyMetrics(rows); setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setMetricsLoading(false); return;
@@ -585,7 +592,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
             ))}
             <section className="panel table-panel kpi-detail-table">
               <div className="table-toolbar"><div><p className="eyebrow">Selected week</p><h2>All imported metrics by store</h2><p>Every field uploaded to the KPI Database for the selected week.</p></div></div>
-              <div className="responsive-table"><table><thead><tr><th>Store</th>{weeklyMetricDefinitions.map((metric) => <th key={metric.key}>{metric.label}</th>)}</tr></thead><tbody>{[...scopedWeeklyMetrics].sort((a, b) => a.store.localeCompare(b.store, undefined, { numeric: true })).map((item) => <tr key={item.store}><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>Store {item.store}</button></td>{weeklyMetricDefinitions.map((metric) => <td key={metric.key}>{item.metrics[metric.key] || "Pending"}</td>)}</tr>)}</tbody></table></div>
+              <div className="responsive-table"><table><thead><tr><th>Store</th>{weeklyMetricDefinitions.map((metric) => <th key={metric.key}>{metric.label}</th>)}</tr></thead><tbody>{[...scopedWeeklyMetrics].sort((a, b) => a.store.localeCompare(b.store, undefined, { numeric: true })).map((item) => <tr key={item.store}><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>Store {item.store}</button></td>{weeklyMetricDefinitions.map((metric) => <td key={metric.key}>{displayMetricValue(item.metrics, metric)}</td>)}</tr>)}</tbody></table></div>
             </section>
           </>
         )
