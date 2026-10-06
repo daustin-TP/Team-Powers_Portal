@@ -59,6 +59,17 @@ type IntervalProjection = {
   required_insiders: number;
   required_drivers: number;
 };
+type ForecastSettings = Record<string, unknown>;
+type SuggestedShift = {
+  week_plan_id: string;
+  day_of_week: number;
+  role: "manager" | "insider" | "driver";
+  start_time: string;
+  end_time: string;
+  assigned_member_id: null;
+  source: "suggested";
+  notes: string;
+};
 
 const round = (value: number, decimals = 2) => {
   const scale = 10 ** decimals;
@@ -105,6 +116,131 @@ const coefficientOfVariation = (values: number[]) => {
   return Math.sqrt(variance) / mean;
 };
 const confidenceLevel = (score: number) => score >= 80 ? "high" : score >= 60 ? "moderate" : "low";
+const average = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+const weightedAverage = (components: Array<{ value: number; weight: number }>) => {
+  const usable = components.filter((component) => component.value > 0 && component.weight > 0);
+  const weight = usable.reduce((sum, component) => sum + component.weight, 0);
+  return weight ? usable.reduce((sum, component) => sum + component.value * component.weight, 0) / weight : 0;
+};
+const clockTime = (minutes: number) => {
+  const normalized = ((Math.round(minutes / 15) * 15) % 1440 + 1440) % 1440;
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}:00`;
+};
+const businessMinute = (time: string, openMinute: number) => {
+  const minute = timeMinutes(time);
+  return minute < openMinute ? minute + 1440 : minute;
+};
+
+function buildCoverageShifts(
+  planId: string,
+  day: number,
+  role: "manager" | "insider" | "driver",
+  points: Array<{ minute: number; need: number }>,
+  windowStart: number,
+  windowEnd: number,
+  minimum: number,
+  maximum: number,
+  note: string,
+): SuggestedShift[] {
+  type Draft = { start: number; end?: number };
+  const active: Draft[] = [];
+  const finished: Draft[] = [];
+  for (const point of points) {
+    for (let index = active.length - 1; index >= 0; index -= 1) {
+      if (point.minute - active[index].start >= maximum) finished.push({ ...active.splice(index, 1)[0], end: point.minute });
+    }
+    while (active.length > point.need) {
+      const eligible = active
+        .map((shift, index) => ({ shift, index }))
+        .filter(({ shift }) => point.minute - shift.start >= minimum)
+        .sort((left, right) => left.shift.start - right.shift.start)[0];
+      if (!eligible) break;
+      finished.push({ ...active.splice(eligible.index, 1)[0], end: point.minute });
+    }
+    while (active.length < point.need) {
+      const latestStart = Math.max(windowStart, windowEnd - minimum);
+      active.push({ start: Math.min(point.minute, latestStart) });
+    }
+  }
+  for (const shift of active) finished.push({ ...shift, end: Math.min(windowEnd, shift.start + maximum) });
+  return finished
+    .map((shift) => ({ ...shift, end: Math.max(shift.end ?? windowEnd, shift.start + minimum) }))
+    .filter((shift) => shift.end > shift.start)
+    .sort((left, right) => left.start - right.start || left.end - right.end)
+    .map((shift) => ({
+      week_plan_id: planId,
+      day_of_week: day,
+      role,
+      start_time: clockTime(shift.start),
+      end_time: clockTime(shift.end),
+      assigned_member_id: null,
+      source: "suggested",
+      notes: note,
+    }));
+}
+
+function buildManagerShifts(planId: string, day: number, openMinute: number, closeMinute: number, settings: ForecastSettings): SuggestedShift[] {
+  const start = openMinute - (Number(settings.manager_preopen_minutes) || 60);
+  const end = closeMinute + (Number(settings.manager_postclose_minutes) || 60);
+  const crossover = clamp(Number(settings.manager_crossover_minutes) || 60, 15, 120);
+  const minimum = Math.max(180, (Number(settings.minimum_shift_hours) || 3) * 60);
+  const maximum = Math.max(minimum, (Number(settings.max_shift_hours) || 9) * 60);
+  const combinedMinutes = end - start + crossover;
+  let openingLength = clamp(Math.ceil(combinedMinutes / 30) * 15, minimum, maximum);
+  let closingLength = combinedMinutes - openingLength;
+  if (closingLength > maximum) { closingLength = maximum; openingLength = combinedMinutes - closingLength; }
+  if (closingLength < minimum) { closingLength = minimum; openingLength = combinedMinutes - closingLength; }
+
+  if (openingLength <= maximum && closingLength <= maximum) {
+    const openingEnd = start + openingLength;
+    return [
+      { week_plan_id: planId, day_of_week: day, role: "manager", start_time: clockTime(start), end_time: clockTime(openingEnd), assigned_member_id: null, source: "suggested", notes: "Opening manager" },
+      { week_plan_id: planId, day_of_week: day, role: "manager", start_time: clockTime(openingEnd - crossover), end_time: clockTime(end), assigned_member_id: null, source: "suggested", notes: `${crossover}-minute manager crossover` },
+    ];
+  }
+
+  const points = Array.from({ length: Math.ceil((end - start) / 15) }, (_, index) => ({ minute: start + index * 15, need: 1 }));
+  return buildCoverageShifts(planId, day, "manager", points, start, end, minimum, maximum, "Required management coverage");
+}
+
+function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], hours: Map<number, { open: string; close: string }>, settings: ForecastSettings) {
+  const minimum = Math.max(180, (Number(settings.minimum_shift_hours) || 3) * 60);
+  const maximum = Math.max(minimum, (Number(settings.max_shift_hours) || 9) * 60);
+  const shifts: SuggestedShift[] = [];
+  for (let day = 0; day < 7; day += 1) {
+    const storeHours = hours.get(day);
+    if (!storeHours) continue;
+    const openMinute = timeMinutes(storeHours.open);
+    let closeMinute = businessMinute(storeHours.close, openMinute);
+    if (closeMinute === openMinute) closeMinute += 1440;
+    shifts.push(...buildManagerShifts(planId, day, openMinute, closeMinute, settings));
+
+    const rows = intervals.filter((row) => row.day_of_week === day && isWithinBusinessHours(row.interval_start, storeHours.open, storeHours.close));
+    for (const role of ["insider", "driver"] as const) {
+      let points = rows.map((row) => ({ minute: businessMinute(row.interval_start, openMinute), need: role === "insider" ? row.required_insiders : row.required_drivers }));
+      const windowStart = role === "driver" ? openMinute - (Number(settings.driver_preopen_minutes) || 0) : openMinute;
+      let windowEnd = closeMinute;
+      if (role === "driver" && settings.late_driver_rule === "hour_before_close") {
+        windowEnd = closeMinute - 60;
+        points = points.filter((point) => point.minute < windowEnd);
+      }
+      if (role === "driver" && settings.late_driver_rule === "second_closer") {
+        windowEnd += Number(settings.driver_postclose_minutes) || 60;
+        for (let minute = closeMinute - 60; minute < windowEnd; minute += 15) {
+          const existing = points.find((point) => point.minute === minute);
+          if (existing) existing.need = Math.max(existing.need, 2);
+          else points.push({ minute, need: 2 });
+        }
+        points.sort((left, right) => left.minute - right.minute);
+      }
+      const roleMaximum = role === "driver" && !settings.opening_driver_through_rush ? Math.min(maximum, 360) : maximum;
+      const roleShifts = buildCoverageShifts(planId, day, role, points, windowStart, windowEnd, minimum, roleMaximum, role === "insider" ? "Oven demand coverage · rounded down" : "Delivery demand coverage");
+      if (role === "driver" && settings.late_driver_rule === "second_closer") roleShifts.forEach((shift) => { if (shift.end_time === clockTime(windowEnd)) shift.notes = "Second closing driver coverage"; });
+      shifts.push(...roleShifts);
+    }
+  }
+  return shifts;
+}
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -170,11 +306,12 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   const weekEnd = addDays(weekStart, 6);
   const season = isCentralDaylight(addDays(weekStart, 3)) ? "daylight" : "non_daylight";
   const historyStart = addDays(weekStart, -84);
+  const kpiHistoryStart = addDays(weekStart, -420);
 
   const [setsResult, recentResult, kpiResult, eventsResult, settingsResult, hoursResult, storeResult] = await Promise.all([
     admin.from("labor_baseline_sets").select("id,weeks_count,period_end").eq("store_id", storeId).eq("season", season).eq("active", true).order("period_end", { ascending: false }),
     admin.from("labor_metric_intervals").select("business_date,interval_start,royalty_sales,oven_items,delivery_orders,sales_source_batch_id,oven_source_batch_id,delivery_source_batch_id").eq("store_id", storeId).gte("business_date", historyStart).lt("business_date", weekStart),
-    admin.from("kpi_weekly_results").select("week_end,metrics").eq("store_id", storeId).gte("week_end", historyStart).lt("week_end", weekStart).order("week_end", { ascending: false }),
+    admin.from("kpi_weekly_results").select("week_end,metrics").eq("store_id", storeId).gte("week_end", kpiHistoryStart).lt("week_end", weekStart).order("week_end", { ascending: false }),
     admin.from("labor_scheduling_events").select("id,name,category,start_date,end_date,all_day,start_time,end_time,impact_mode,sales_lift_percent,order_count_lift_percent,oven_items_lift_percent,delivery_lift_percent").eq("status", "active").lte("start_date", weekEnd).gte("end_date", weekStart).or(`scope.eq.company,store_id.eq.${storeId}`),
     admin.from("labor_store_settings").select("*").eq("store_id", storeId).maybeSingle(),
     admin.from("labor_store_hours").select("day_of_week,open_time,close_time").eq("store_id", storeId),
@@ -215,7 +352,8 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   for (const row of recentRows) {
     if (isCentralDaylight(row.business_date) !== (season === "daylight")) continue;
     const ageWeeks = Math.max(0, daysBetween(row.business_date, weekStart) / 7);
-    const weight = 0.84 ** ageWeeks;
+    if (ageWeeks > 4.5) continue;
+    const weight = 1;
     const key = keyFor(mondayIndex(row.business_date), row.interval_start);
     const current = recent.get(key) ?? { sales: 0, salesWeight: 0, oven: 0, ovenWeight: 0, deliveries: 0, deliveryWeight: 0 };
     if (row.sales_source_batch_id) { current.sales += Number(row.royalty_sales || 0) * weight; current.salesWeight += weight; }
@@ -230,7 +368,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     sales: Number((row.metrics as Record<string, unknown>)?.royalty_sales) || 0,
     orders: Number((row.metrics as Record<string, unknown>)?.order_count) || 0,
   })).filter((row) => row.sales > 0);
-  const weightedKpi = (metric: "sales" | "orders") => {
+  const weightedKpi = (metric: "orders") => {
     let total = 0; let weightTotal = 0;
     for (const row of kpiRows) {
       const value = row[metric];
@@ -241,6 +379,15 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     }
     return weightTotal ? total / weightTotal : 0;
   };
+  const recentFourSales = average(kpiRows.slice(0, 4).map((row) => row.sales));
+  const thirteenWeekSales = average(kpiRows.slice(0, 13).map((row) => row.sales));
+  const priorFourSales = average(kpiRows.slice(4, 8).map((row) => row.sales));
+  const lastYearTarget = addDays(weekEnd, -364);
+  const lastYearMatch = kpiRows
+    .map((row) => ({ ...row, distance: Math.abs(daysBetween(row.week_end, lastYearTarget)) }))
+    .filter((row) => row.distance <= 10)
+    .sort((left, right) => left.distance - right.distance)[0];
+  const momentum = priorFourSales > 0 ? clamp(((recentFourSales / priorFourSales) - 1) * 0.25, -0.10, 0.10) : 0;
 
   const intervalKeys = Array.from(baseline.keys()).sort((left, right) => {
     const [leftDay, leftTime] = left.split("|"); const [rightDay, rightTime] = right.split("|");
@@ -269,7 +416,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
       const total = metric === "sales" ? fresh.sales : metric === "oven" ? fresh.oven : fresh.deliveries;
       if (!weight) return baselineValue;
       const recentValue = total / weight;
-      return baselineValue * 0.65 + recentValue * 0.35;
+      return baselineValue * 0.50 + recentValue * 0.50;
     };
     let sales = blend("sales");
     let oven = blend("oven");
@@ -289,10 +436,14 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   });
 
   const modeledSales = rawIntervals.reduce((sum, row) => sum + row.projected_sales, 0);
-  const recentSales = weightedKpi("sales");
+  const componentSales = weightedAverage([
+    { value: recentFourSales, weight: 0.50 },
+    { value: thirteenWeekSales || modeledSales, weight: 0.25 },
+    { value: lastYearMatch?.sales || 0, weight: 0.25 },
+  ]);
   const recommendedSales = manualWeeklySales && manualWeeklySales > 0
     ? Number(manualWeeklySales)
-    : recentSales > 0 ? modeledSales * 0.55 + recentSales * 0.45 : modeledSales;
+    : componentSales > 0 ? componentSales * (1 + momentum) : modeledSales;
   const salesScale = modeledSales > 0 ? recommendedSales / modeledSales : 1;
   rawIntervals.forEach((row) => { row.projected_sales *= salesScale; });
 
@@ -320,13 +471,13 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     const managerCapacity = Number(weekend ? settings.weekend_manager_items_per_15 : settings.manager_items_per_15) || 1;
     const insiderCapacity = Number(weekend ? settings.weekend_insider_items_per_15 : settings.insider_items_per_15) || 1;
     row.required_managers = 1;
-    row.required_insiders = Math.max(0, Math.ceil((row.projected_oven_items - managerCapacity) / insiderCapacity));
+    row.required_insiders = Math.max(0, Math.floor((row.projected_oven_items - managerCapacity) / insiderCapacity));
     row.required_drivers = Math.max(1, Math.ceil(row.projected_deliveries * (Number(settings.average_run_time_minutes) || 15) / 15));
   }
 
   const baselineWeeks = baselineSets.reduce((sum, set) => sum + Number(set.weeks_count || 0), 0);
   const metricCoverage = (["sales", "oven", "deliveries"] as MetricName[]).filter((metric) => baselineRows.some((row) => metricValue(row, metric) > 0)).length;
-  const salesHistory = kpiRows.map((row) => row.sales);
+  const salesHistory = kpiRows.slice(0, 13).map((row) => row.sales);
   const volatility = coefficientOfVariation(salesHistory);
   const newestWeek = kpiRows[0]?.week_end;
   const freshnessDays = newestWeek ? Math.max(0, daysBetween(newestWeek, weekEnd)) : 999;
@@ -347,6 +498,8 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     `${recentWeekKeys.size} recent interval weeks used`,
     volatility === null ? "Not enough weekly history to measure volatility" : `Weekly sales variability is ${round(volatility * 100, 1)}%`,
     newestWeek ? `Latest KPI actual ends ${newestWeek}` : "No recent KPI actuals are available",
+    `Sales blend uses 50% recent 4-week, 25% 13-week, and ${lastYearMatch ? "25% same week last year" : "normalized available history"}`,
+    `Momentum adjustment is ${momentum >= 0 ? "+" : ""}${round(momentum * 100, 1)}% after the 25% factor and ±10% cap`,
     events.length ? `${events.length} event adjustment${events.length === 1 ? "" : "s"} reviewed` : "No special events overlap this week",
   ];
   if (learningEvents) reasons.push(`${learningEvents} event${learningEvents === 1 ? " has" : "s have"} no learned lift yet`);
@@ -378,9 +531,16 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("demand_forecast_runs").update({ is_current: false, status: "superseded", updated_at: new Date().toISOString() }).eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true);
   const { data: run, error: runError } = await admin.from("demand_forecast_runs").insert({
-    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v1",
+    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v2",
     confidence_score: score, confidence_level: confidenceLevel(score), confidence_reasons: reasons,
-    input_summary: { baseline_sets: baselineSets.length, baseline_weeks: baselineWeeks, recent_kpi_weeks: kpiRows.length, recent_interval_weeks: recentWeekKeys.size, volatility, store: storeResult.data },
+    input_summary: {
+      baseline_sets: baselineSets.length, baseline_weeks: baselineWeeks, recent_kpi_weeks: kpiRows.length,
+      recent_interval_weeks: recentWeekKeys.size, volatility, store: storeResult.data,
+      sales_components: {
+        recent_four_week: round(recentFourSales), thirteen_week: round(thirteenWeekSales),
+        same_week_last_year: round(lastYearMatch?.sales || 0), momentum_percent: round(momentum * 100, 2),
+      },
+    },
     event_adjustments: eventAdjustments, weekly_projection: weekly, manual_weekly_sales: manualWeeklySales, generated_by: userId,
   }).select("*").single();
   if (runError || !run) throw runError ?? new Error("The forecast run could not be saved.");
@@ -397,11 +557,11 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   ]);
   if (dailyError || intervalError) throw dailyError ?? intervalError;
 
-  let planId: string | null = null;
   const { data: existingPlan } = await admin.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle();
+  let planId: string | null = existingPlan?.id ?? null;
   if (!existingPlan || existingPlan.status !== "published") {
     const { data: plan, error: planError } = await admin.from("labor_week_plans").upsert({
-      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v1", forecast_run_id: run.id,
+      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v2", forecast_run_id: run.id,
       created_by: userId, updated_at: new Date().toISOString(),
     }, { onConflict: "store_id,week_start" }).select("id").single();
     if (planError || !plan) throw planError ?? new Error("The labor week plan could not be prepared.");
@@ -417,14 +577,32 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
       admin.from("labor_demand_intervals").upsert(planIntervals, { onConflict: "week_plan_id,day_of_week,interval_start" }),
     ]);
     if (planDailyError || planIntervalError) throw planDailyError ?? planIntervalError;
+
+    const { data: existingShifts, error: existingShiftError } = await admin.from("labor_shifts").select("id,source,assigned_member_id").eq("week_plan_id", plan.id);
+    if (existingShiftError) throw existingShiftError;
+    const safeToRebuild = (existingShifts ?? []).every((shift) => shift.source === "suggested" && !shift.assigned_member_id);
+    if (safeToRebuild) {
+      const { error: deleteShiftError } = await admin.from("labor_shifts").delete().eq("week_plan_id", plan.id).eq("source", "suggested");
+      if (deleteShiftError) throw deleteShiftError;
+      const suggestedShifts = buildSuggestedShifts(plan.id, rawIntervals, hours, settings);
+      if (suggestedShifts.length) {
+        const { error: insertShiftError } = await admin.from("labor_shifts").insert(suggestedShifts);
+        if (insertShiftError) throw insertShiftError;
+      }
+    }
   }
+
+  const { data: savedShifts, error: savedShiftError } = planId
+    ? await admin.from("labor_shifts").select("id,week_plan_id,day_of_week,role,start_time,end_time,assigned_member_id,notes,source").eq("week_plan_id", planId).order("day_of_week").order("role").order("start_time")
+    : { data: [], error: null };
+  if (savedShiftError) throw savedShiftError;
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v1", manual_weekly_sales: manualWeeklySales },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v2", manual_weekly_sales: manualWeeklySales },
   });
 
-  return { run, daily: dailyRows, intervals: intervalRows, plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published") };
+  return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published") };
 }
 
 class HttpError extends Error {

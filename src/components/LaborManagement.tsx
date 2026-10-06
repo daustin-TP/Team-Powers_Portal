@@ -344,9 +344,9 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (target !== null && (!Number.isFinite(target) || target <= 0)) { setError("Enter a valid weekly sales target or leave it blank for the engine recommendation."); setGeneratingForecast(false); return; }
     const { data, error: invokeError } = await supabase.functions.invoke("forecast-engine", { body: { action: "generate", store_id: storeId, week_start: weekStart, weekly_sales_target: target } });
     if (invokeError || !data?.ok) { setError(data?.error || invokeError?.message || "The forecast could not be generated."); setGeneratingForecast(false); return; }
-    const result = data.result as { run: ForecastRun; daily: Array<DayProjection & { forecast_run_id: string }>; plan_id: string | null; published_plan_preserved: boolean };
-    setForecast(result.run); setProjections(result.daily); if (result.plan_id) setPlanId(result.plan_id);
-    setMessage(result.published_plan_preserved ? "Forecast generated. The already-published schedule was preserved." : "Forecast generated from seasonal history, recent trends, and scheduled events.");
+    const result = data.result as { run: ForecastRun; daily: Array<DayProjection & { forecast_run_id: string }>; shifts: Shift[]; plan_id: string | null; published_plan_preserved: boolean };
+    setForecast(result.run); setProjections(result.daily); setShifts(result.shifts ?? []); if (result.plan_id) setPlanId(result.plan_id);
+    setMessage(result.published_plan_preserved ? "Forecast generated. The already-published schedule was preserved." : "Forecast and profit-minded suggested shifts generated from seasonal history, recent trends, and scheduled events.");
     setGeneratingForecast(false);
   };
   const editEvent = (event: SchedulingEvent) => {
