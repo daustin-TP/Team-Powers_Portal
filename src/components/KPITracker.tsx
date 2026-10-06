@@ -66,7 +66,7 @@ type WeeklyMetricRow = {
   week_end: string;
   metrics: Record<string, unknown>;
 };
-type MetricFormat = "currency0" | "currency2" | "percent" | "number0" | "number1";
+type MetricFormat = "currency0" | "currency2" | "percent" | "number0" | "number1" | "number2";
 type MetricDefinition = {
   key: string;
   label: string;
@@ -89,8 +89,8 @@ type Draft = {
 const focusAreas = ["Sales", "Labor", "Food", "Service", "Staffing", "Marketing", "Operations"];
 
 const weeklyMetricDefinitions: MetricDefinition[] = [
-  { key: "royalty_sales", label: "Royalty sales", group: "Sales & customers", aggregate: "sum", format: "currency0" },
-  { key: "sales_last_year", label: "Sales last year", group: "Sales & customers", aggregate: "sum", format: "currency0" },
+  { key: "royalty_sales", label: "Royalty sales", group: "Sales & customers", aggregate: "sum", format: "currency2" },
+  { key: "sales_last_year", label: "Sales last year", group: "Sales & customers", aggregate: "sum", format: "currency2" },
   { key: "yoy_sales_percent", label: "YoY sales", group: "Sales & customers", aggregate: "average", format: "percent" },
   { key: "order_count", label: "Order count", group: "Sales & customers", aggregate: "sum", format: "number0" },
   { key: "orders_last_year", label: "Orders last year", group: "Sales & customers", aggregate: "sum", format: "number0" },
@@ -98,7 +98,7 @@ const weeklyMetricDefinitions: MetricDefinition[] = [
   { key: "new_customers", label: "New customers", group: "Sales & customers", aggregate: "sum", format: "number0" },
   { key: "average_ticket", label: "Average ticket", group: "Sales & customers", aggregate: "average", format: "currency2" },
   { key: "st_jude_net", label: "St. Jude net", group: "Sales & customers", aggregate: "sum", format: "currency2" },
-  { key: "labor_dollars", label: "Labor dollars", group: "Labor", aggregate: "sum", format: "currency0" },
+  { key: "labor_dollars", label: "Labor dollars", group: "Labor", aggregate: "sum", format: "currency2" },
   { key: "labor_percent", label: "Labor percent", group: "Labor", aggregate: "average", format: "percent" },
   { key: "splh", label: "SPLH", group: "Labor", aggregate: "average", format: "currency2" },
   { key: "ot_hours", label: "OT hours", group: "Labor", aggregate: "sum", format: "number1" },
@@ -110,13 +110,13 @@ const weeklyMetricDefinitions: MetricDefinition[] = [
   { key: "cheese_variance", label: "Cheese variance", group: "Food & controls", aggregate: "sum", format: "number1" },
   { key: "pepperoni_variance", label: "Pepperoni variance", group: "Food & controls", aggregate: "sum", format: "number1" },
   { key: "dough_variance", label: "Dough variance", group: "Food & controls", aggregate: "sum", format: "number1" },
-  { key: "avg_adt", label: "Average ADT", group: "Service", aggregate: "average", format: "number1" },
+  { key: "avg_adt", label: "Average ADT", group: "Service", aggregate: "average", format: "number2" },
   { key: "adt_under_30_percent", label: "ADT under 30", group: "Service", aggregate: "average", format: "percent" },
   { key: "extreme_order_count", label: "Extreme orders", group: "Service", aggregate: "sum", format: "number0" },
   { key: "extreme_order_percent", label: "Extreme order percent", group: "Service", aggregate: "average", format: "percent" },
-  { key: "avg_wait", label: "Average wait", group: "Service", aggregate: "average", format: "number1" },
+  { key: "avg_wait", label: "Average wait", group: "Service", aggregate: "average", format: "number2" },
   { key: "singles_percent", label: "Singles", group: "Service", aggregate: "average", format: "percent" },
-  { key: "avg_load", label: "Average load", group: "Service", aggregate: "average", format: "number1" },
+  { key: "avg_load", label: "Average load", group: "Service", aggregate: "average", format: "number2" },
 ];
 
 const weeklyMetricGroups = Array.from(new Set(weeklyMetricDefinitions.map((metric) => metric.group)));
@@ -253,9 +253,10 @@ function formatMetricValue(value: number | null, format: MetricFormat) {
   if (format === "currency2") return formatCurrency(value, 2);
   if (format === "percent") return formatPercent(value);
   if (value === null) return "Pending";
+  const decimals = format === "number2" ? 2 : format === "number1" ? 1 : 0;
   return new Intl.NumberFormat(undefined, {
-    minimumFractionDigits: format === "number1" ? 1 : 0,
-    maximumFractionDigits: format === "number1" ? 1 : 0,
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
   }).format(value);
 }
 
@@ -272,10 +273,16 @@ function displayMetricValue(metrics: Record<string, unknown>, definition: Metric
   return formatMetricValue(numericValue(metrics[definition.key]), definition.format);
 }
 
-function displayCommitmentActual(metricName: string, value: string) {
-  return metricName === "Labor" || metricName === "Food variance"
-    ? formatPercent(numericValue(value))
-    : value || "Pending";
+function commitmentMetricFormat(metricName: string): MetricFormat {
+  if (metricName === "Sales" || metricName === "SPLH") return "currency2";
+  if (metricName === "Labor" || metricName === "Food variance") return "percent";
+  return "number2";
+}
+
+function displayCommitmentValue(metricName: string, value: string, fallback: string) {
+  if (!value) return fallback;
+  const parsed = numericValue(value);
+  return parsed === null ? value : formatMetricValue(parsed, commitmentMetricFormat(metricName));
 }
 
 function metricText(metrics: Record<string, unknown>, key: string, fallback = "") {
@@ -610,10 +617,10 @@ export default function KPITracker({ profile }: { profile: Profile }) {
         <>
           <section className="kpi-summary-grid"><article><BarChart3 size={21} /><span>{viewLevel === "supervisor" ? "Group stores" : viewLevel === "store" ? "Selected store" : "Company stores"}</span><strong>{scopedCommitments.length}</strong></article><article><Target size={21} /><span>Goals achieved</span><strong>{measuredGoals ? `${goalsMet}/${measuredGoals}` : "Pending"}</strong></article><article><Trophy size={21} /><span>Current leader</span><strong className="kpi-leader">{rankings[0] && score(rankings[0]).percent !== null ? `Store ${rankings[0].store}` : "Pending"}</strong></article></section>
           {viewLevel !== "store" ? (
-            <section className="panel table-panel kpi-leaderboard"><div className="table-toolbar"><div><p className="eyebrow">Friendly competition</p><h2>{viewLevel === "company" ? "Company leaderboard" : `${selectedGroup?.name ?? "Supervisor"} leaderboard`}</h2><p>Ranked by the share of measured weekly goals achieved.</p></div></div><div className="responsive-table"><table><thead><tr><th>Rank</th><th>Store</th><th>Goal score</th><th>Sales</th><th>Labor</th><th>Load</th><th>ADT</th><th>Overall</th></tr></thead><tbody>{rankings.map((item, index) => { const itemScore = score(item); return <tr key={item.store}><td><span className={`rank-badge rank-${index + 1}`}>{index + 1}</span></td><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>Store {item.store}</button></td><td><strong>{itemScore.percent === null ? "Pending" : `${itemScore.percent}%`}</strong><small className="kpi-score-detail">{itemScore.hits} of {itemScore.total} measured</small></td><td>{item.sales.actual || "Pending"}</td><td>{formatPercent(numericValue(item.labor.actual))}</td><td>{item.load.actual || "Pending"}</td><td>{item.adt.actual || "Pending"}</td><td><span className={`kpi-overall ${item.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{item.overall_status || "Pending"}</span></td></tr>; })}</tbody></table></div></section>
+            <section className="panel table-panel kpi-leaderboard"><div className="table-toolbar"><div><p className="eyebrow">Friendly competition</p><h2>{viewLevel === "company" ? "Company leaderboard" : `${selectedGroup?.name ?? "Supervisor"} leaderboard`}</h2><p>Ranked by the share of measured weekly goals achieved.</p></div></div><div className="responsive-table"><table><thead><tr><th>Rank</th><th>Store</th><th>Goal score</th><th>Sales</th><th>Labor</th><th>Load</th><th>ADT</th><th>Overall</th></tr></thead><tbody>{rankings.map((item, index) => { const itemScore = score(item); return <tr key={item.store}><td><span className={`rank-badge rank-${index + 1}`}>{index + 1}</span></td><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>Store {item.store}</button></td><td><strong>{itemScore.percent === null ? "Pending" : `${itemScore.percent}%`}</strong><small className="kpi-score-detail">{itemScore.hits} of {itemScore.total} measured</small></td><td>{displayCommitmentValue("Sales", item.sales.actual, "Pending")}</td><td>{displayCommitmentValue("Labor", item.labor.actual, "Pending")}</td><td>{displayCommitmentValue("Load", item.load.actual, "Pending")}</td><td>{displayCommitmentValue("ADT", item.adt.actual, "Pending")}</td><td><span className={`kpi-overall ${item.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{item.overall_status || "Pending"}</span></td></tr>; })}</tbody></table></div></section>
           ) : selected && (
             <div className="kpi-layout">
-              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">Store {selected.store}</p><h2>Weekly performance plan</h2></div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Trajectory</th><th>Suggested</th><th>Final goal</th><th>Actual</th><th>Status</th></tr></thead><tbody>{metrics.map(([name, trajectory, suggested, finalGoal, actual, status]) => <tr key={name}><td><strong>{name}</strong></td><td>{trajectory || "—"}</td><td>{suggested || "—"}</td><td><strong>{finalGoal || "—"}</strong></td><td>{displayCommitmentActual(name, actual)}</td><td><span className={`kpi-status ${String(status).toLowerCase()}`}>{status || "Pending"}</span></td></tr>)}</tbody></table></div></section>
+              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">Store {selected.store}</p><h2>Weekly performance plan</h2></div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Trajectory</th><th>Suggested</th><th>Final goal</th><th>Actual</th><th>Status</th></tr></thead><tbody>{metrics.map(([name, trajectory, suggested, finalGoal, actual, status]) => <tr key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong></td><td>{displayCommitmentValue(name, actual, "Pending")}</td><td><span className={`kpi-status ${String(status).toLowerCase()}`}>{status || "Pending"}</span></td></tr>)}</tbody></table></div></section>
               <form className="panel kpi-editor" onSubmit={save}>
                 <div className="panel-heading"><div><p className="eyebrow">Supervisor commitment</p><h2>Set the weekly plan</h2></div><Target size={23} /></div>
                 <div className="kpi-goal-grid">
