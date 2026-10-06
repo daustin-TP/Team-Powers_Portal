@@ -39,7 +39,23 @@ type Shift = {
   notes: string;
   source: "suggested" | "manual";
 };
-type DayProjection = { day_of_week: number; projected_sales: number };
+type DayProjection = { day_of_week: number; projected_sales: number; projected_oven_items?: number; projected_deliveries?: number };
+type ForecastRun = {
+  id: string;
+  confidence_score: number;
+  confidence_level: "low" | "moderate" | "high";
+  confidence_reasons: string[];
+  weekly_projection: {
+    projected_sales: number;
+    projected_orders: number;
+    projected_oven_items: number;
+    projected_deliveries: number;
+    low_sales: number;
+    high_sales: number;
+  };
+  method_version: string;
+  created_at: string;
+};
 type StoreHour = { day_of_week: number; open_time: string; close_time: string };
 type Settings = {
   insider_items_per_15: number;
@@ -190,6 +206,9 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [storeHours, setStoreHours] = useState<StoreHour[]>(defaultStoreHours);
   const [events, setEvents] = useState<SchedulingEvent[]>([]);
+  const [forecast, setForecast] = useState<ForecastRun | null>(null);
+  const [weeklySalesTarget, setWeeklySalesTarget] = useState("");
+  const [generatingForecast, setGeneratingForecast] = useState(false);
   const canCreateCompanyEvent = profile.role === "supervisor" || profile.role === "admin";
   const [eventForm, setEventForm] = useState<EventForm>(() => emptyEvent(mondayOfCurrentWeek(), "", canCreateCompanyEvent));
   const [selectedDay, setSelectedDay] = useState(0);
@@ -230,7 +249,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         setProjections(days.map((_, day_of_week) => ({ day_of_week, projected_sales: day_of_week >= 4 ? 5200 : 3600 })));
         setSettings(defaultSettings); setStoreHours(defaultStoreHours()); setLoading(false); return;
       }
-      const [memberResult, settingResult, hoursResult, planResult, standardResult, rtoResult, eventResult] = await Promise.all([
+      const [memberResult, settingResult, hoursResult, planResult, standardResult, rtoResult, eventResult, forecastResult] = await Promise.all([
         supabase.from("labor_team_members").select("id,store_id,display_name,qualified_roles,is_minor,active").eq("store_id", storeId).eq("active", true).order("display_name"),
         supabase.from("labor_store_settings").select("*").eq("store_id", storeId).maybeSingle(),
         supabase.from("labor_store_hours").select("day_of_week,open_time,close_time").eq("store_id", storeId).order("day_of_week"),
@@ -238,8 +257,9 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         supabase.from("labor_standard_availability").select("member_id,day_of_week,start_time,end_time,available").eq("store_id", storeId),
         supabase.from("labor_time_off").select("member_id,day_of_week,start_time,end_time").eq("store_id", storeId).eq("week_start", weekStart),
         supabase.from("labor_scheduling_events").select("*").lte("start_date", addIsoDays(weekStart, 90)).gte("end_date", addIsoDays(weekStart, -35)).order("start_date"),
+        supabase.from("demand_forecast_runs").select("id,confidence_score,confidence_level,confidence_reasons,weekly_projection,method_version,created_at").eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true).maybeSingle(),
       ]);
-      const firstError = memberResult.error || settingResult.error || hoursResult.error || planResult.error || standardResult.error || rtoResult.error || eventResult.error;
+      const firstError = memberResult.error || settingResult.error || hoursResult.error || planResult.error || standardResult.error || rtoResult.error || eventResult.error || forecastResult.error;
       if (firstError) { setError(`${firstError.message} Apply the Labor Management migration in Supabase, then refresh.`); setLoading(false); return; }
       setMembers((memberResult.data ?? []) as TeamMember[]);
       if (settingResult.data) setSettings({ ...defaultSettings, ...settingResult.data }); else setSettings(defaultSettings);
@@ -249,6 +269,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       const rto = (rtoResult.data ?? []).map((item) => ({ ...item, available: false, kind: "rto" as const }));
       setAvailability([...standard, ...rto] as Availability[]);
       setEvents((eventResult.data ?? []) as SchedulingEvent[]);
+      setForecast((forecastResult.data as ForecastRun | null) ?? null);
+      setWeeklySalesTarget("");
       setEventForm((current) => current.id ? current : emptyEvent(weekStart, storeId, canCreateCompanyEvent));
       if (!planResult.data) { setPlanId(""); setPlanStatus("draft"); setShifts([]); setProjections([]); setLoading(false); return; }
       setPlanId(planResult.data.id); setPlanStatus(planResult.data.status);
@@ -311,6 +333,21 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     ]);
     const saveError = settingsResult.error || hoursResult.error;
     if (saveError) setError(saveError.message); else setMessage("Store labor settings and hours saved.");
+  };
+  const generateForecast = async () => {
+    setError(""); setMessage(""); setGeneratingForecast(true);
+    if (!supabase) {
+      setForecast({ id: "demo", confidence_score: 84, confidence_level: "high", confidence_reasons: ["34 comparable daylight baseline weeks", "Three demand metrics available", "Recent weekly results are current"], weekly_projection: { projected_sales: 28400, projected_orders: 1250, projected_oven_items: 1680, projected_deliveries: 510, low_sales: 26980, high_sales: 29820 }, method_version: "demand-v1", created_at: new Date().toISOString() });
+      setMessage("Demo demand forecast generated."); setGeneratingForecast(false); return;
+    }
+    const target = weeklySalesTarget.trim() === "" ? null : Number(weeklySalesTarget);
+    if (target !== null && (!Number.isFinite(target) || target <= 0)) { setError("Enter a valid weekly sales target or leave it blank for the engine recommendation."); setGeneratingForecast(false); return; }
+    const { data, error: invokeError } = await supabase.functions.invoke("forecast-engine", { body: { action: "generate", store_id: storeId, week_start: weekStart, weekly_sales_target: target } });
+    if (invokeError || !data?.ok) { setError(data?.error || invokeError?.message || "The forecast could not be generated."); setGeneratingForecast(false); return; }
+    const result = data.result as { run: ForecastRun; daily: Array<DayProjection & { forecast_run_id: string }>; plan_id: string | null; published_plan_preserved: boolean };
+    setForecast(result.run); setProjections(result.daily); if (result.plan_id) setPlanId(result.plan_id);
+    setMessage(result.published_plan_preserved ? "Forecast generated. The already-published schedule was preserved." : "Forecast generated from seasonal history, recent trends, and scheduled events.");
+    setGeneratingForecast(false);
   };
   const editEvent = (event: SchedulingEvent) => {
     setEventForm({
@@ -388,6 +425,11 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       </div>
       {loading ? <div className="empty-card"><CalendarClock className="spin" /><h2>Loading labor plan…</h2></div> : view === "builder" ? (
         <>
+          <section className="panel forecast-command-panel">
+            <div><p className="eyebrow">Shared demand forecast</p><h2>Generate the week’s operating projection</h2><p>Leave the sales target blank for the engine recommendation, or enter the approved weekly target to anchor the interval forecast.</p></div>
+            <div className="forecast-command-actions"><label>Approved weekly sales target <span>Optional</span><div className="kpi-input-affix prefix"><span>$</span><input type="number" min="1" step="1" value={weeklySalesTarget} onChange={(event) => setWeeklySalesTarget(event.target.value)} placeholder="Use engine recommendation" /></div></label><button className="button primary" onClick={generateForecast} disabled={generatingForecast || !storeId}><CalendarClock size={17} />{generatingForecast ? "Calculating…" : forecast ? "Recalculate forecast" : "Generate forecast"}</button></div>
+          </section>
+          {forecast && <section className="forecast-confidence-panel"><div><span className={`forecast-confidence ${forecast.confidence_level}`}>{forecast.confidence_level} confidence · {Number(forecast.confidence_score).toFixed(0)}%</span><strong>${Number(forecast.weekly_projection.projected_sales).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><small>Expected range ${Number(forecast.weekly_projection.low_sales).toLocaleString(undefined, { maximumFractionDigits: 0 })}–${Number(forecast.weekly_projection.high_sales).toLocaleString(undefined, { maximumFractionDigits: 0 })}</small></div><div className="forecast-volume-grid"><span><strong>{Math.round(forecast.weekly_projection.projected_orders).toLocaleString()}</strong> orders</span><span><strong>{Math.round(forecast.weekly_projection.projected_oven_items).toLocaleString()}</strong> oven items</span><span><strong>{Math.round(forecast.weekly_projection.projected_deliveries).toLocaleString()}</strong> deliveries</span></div><details><summary>Why this confidence level?</summary><ul>{forecast.confidence_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></details></section>}
           <section className="labor-summary-grid"><article><span>Projected sales</span><strong>${weeklySales.toLocaleString()}</strong><small>Week of {formatWeek(weekStart)}</small></article><article><span>Scheduled hours</span><strong>{totalHours.toFixed(1)}</strong><small>{shifts.length} required shifts</small></article><article><span>Projected SPLH</span><strong>${weeklySplh.toFixed(2)}</strong><small>Sales ÷ scheduled hours</small></article><article><span>Status</span><strong className="labor-status">{planStatus}</strong><small>{shifts.filter((shift) => !shift.assigned_member_id).length} open shifts</small></article></section>
           {weekEvents.length > 0 && <section className="labor-event-strip"><CalendarDays size={20} /><div><strong>{weekEvents.length === 1 ? "Demand event this week" : `${weekEvents.length} demand events this week`}</strong><div>{weekEvents.map((event) => <button key={event.id} onClick={() => editEvent(event)}><span>{event.scope === "company" ? "Company" : selectedStore?.name}</span>{event.name}</button>)}</div></div></section>}
           <div className="labor-toolbar"><div className="day-tabs">{days.map((day, index) => <button key={day} className={selectedDay === index ? "active" : ""} onClick={() => setSelectedDay(index)}>{day.slice(0, 3)}<small>{shifts.filter((shift) => shift.day_of_week === index).length}</small></button>)}</div><div className="button-row"><button className="button secondary" onClick={resetAssignments}><RotateCcw size={17} />Reset names</button><button className="button primary" onClick={publish}><FileDown size={17} />Publish</button></div></div>

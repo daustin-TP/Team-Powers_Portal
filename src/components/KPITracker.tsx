@@ -66,6 +66,13 @@ type WeeklyMetricRow = {
   week_end: string;
   metrics: Record<string, unknown>;
 };
+type SharedForecast = {
+  store_id: string;
+  store: string;
+  confidence_score: number;
+  confidence_level: "low" | "moderate" | "high";
+  weekly_projection: { projected_sales?: number; low_sales?: number; high_sales?: number; projected_orders?: number };
+};
 type MetricFormat = "currency0" | "currency2" | "percent" | "number0" | "number1" | "number2";
 type MetricDefinition = {
   key: string;
@@ -146,6 +153,12 @@ function mostRecentCompletedSunday() {
   date.setHours(12, 0, 0, 0);
   date.setDate(date.getDate() - (date.getDay() === 0 ? 7 : date.getDay()));
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function addIsoDays(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function demoMetric(trajectory: string, suggested: string, supervisor: number): KpiMetric {
@@ -376,6 +389,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   const [weekEnd, setWeekEnd] = useState(mostRecentCompletedSunday());
   const [commitments, setCommitments] = useState<Commitment[]>([]);
   const [weeklyMetrics, setWeeklyMetrics] = useState<WeeklyMetricRow[]>([]);
+  const [sharedForecasts, setSharedForecasts] = useState<SharedForecast[]>([]);
   const [weeklyMetricsError, setWeeklyMetricsError] = useState("");
   const [selectedStore, setSelectedStore] = useState("");
   const [selectedSupervisor, setSelectedSupervisor] = useState("");
@@ -500,10 +514,22 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     setMetricsLoading(false);
   };
 
+  const loadSharedForecasts = async () => {
+    if (!isSupabaseConfigured || !supabase) { setSharedForecasts([]); return; }
+    const { data, error: forecastError } = await supabase.from("demand_forecast_runs").select("store_id,confidence_score,confidence_level,weekly_projection,stores(name,store_number)").eq("week_start", addIsoDays(weekEnd, -6)).eq("is_current", true);
+    if (forecastError) { setSharedForecasts([]); return; }
+    setSharedForecasts((data ?? []).map((row) => {
+      const storeRecord = Array.isArray(row.stores) ? row.stores[0] : row.stores;
+      const storeNumber = String(storeRecord?.store_number ?? String(storeRecord?.name ?? "").match(/\b\d{4}\b/)?.[0] ?? "");
+      return { store_id: row.store_id, store: storeNumber, confidence_score: Number(row.confidence_score), confidence_level: row.confidence_level, weekly_projection: row.weekly_projection ?? {} } as SharedForecast;
+    }).filter((row) => row.store));
+  };
+
   useEffect(() => {
     if (dashboardMode === "details") void loadWeeklyMetrics();
     else void loadCommitments();
   }, [weekEnd, dashboardMode]);
+  useEffect(() => { void loadSharedForecasts(); }, [weekEnd]);
   useEffect(() => { setDraft(selected ? draftFromCommitment(selected) : emptyDraft()); }, [selected]);
 
   const save = async (event: FormEvent) => {
@@ -566,6 +592,12 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     ["ADT", selected.adt.trajectory, selected.adt.suggested_goal, selected.adt.final_goal, selected.adt.actual, selected.adt.status],
   ] : [];
   const rankings = ordered(scopedCommitments);
+  const scopedForecasts = sharedForecasts.filter((forecast) => viewLevel === "company" || (viewLevel === "supervisor" && selectedGroup?.stores.includes(forecast.store)) || (viewLevel === "store" && forecast.store === selectedStore));
+  const forecastsByStore = new Map(sharedForecasts.map((forecast) => [forecast.store, forecast]));
+  const projectedSalesTotal = scopedForecasts.reduce((sum, forecast) => sum + Number(forecast.weekly_projection.projected_sales || 0), 0);
+  const projectedLowTotal = scopedForecasts.reduce((sum, forecast) => sum + Number(forecast.weekly_projection.low_sales || 0), 0);
+  const projectedHighTotal = scopedForecasts.reduce((sum, forecast) => sum + Number(forecast.weekly_projection.high_sales || 0), 0);
+  const averageForecastConfidence = scopedForecasts.length ? scopedForecasts.reduce((sum, forecast) => sum + forecast.confidence_score, 0) / scopedForecasts.length : 0;
   const goalsMet = scopedCommitments.reduce((total, item) => total + score(item).hits, 0);
   const measuredGoals = scopedCommitments.reduce((total, item) => total + score(item).total, 0);
   const detailTotals = weeklyMetricDefinitions.map((definition) => ({
@@ -635,9 +667,10 @@ export default function KPITracker({ profile }: { profile: Profile }) {
         <div className="empty-card"><Target /><h2>No commitments found</h2><p>There are no visible store rows for this week, or your store assignment still needs to be configured.</p></div>
       ) : (
         <>
+          {scopedForecasts.length > 0 && <section className="kpi-forecast-summary"><article><span>Shared sales forecast</span><strong>{formatCurrency(projectedSalesTotal, 2)}</strong><small>{scopedForecasts.length} store{scopedForecasts.length === 1 ? "" : "s"} generated</small></article><article><span>Expected range</span><strong>{formatCurrency(projectedLowTotal, 0)}–{formatCurrency(projectedHighTotal, 0)}</strong><small>Confidence-adjusted range</small></article><article><span>Forecast confidence</span><strong>{averageForecastConfidence.toFixed(0)}%</strong><small>Average across this view</small></article></section>}
           <section className="kpi-summary-grid"><article><BarChart3 size={21} /><span>{viewLevel === "supervisor" ? "Group stores" : viewLevel === "store" ? "Selected store" : "Company stores"}</span><strong>{scopedCommitments.length}</strong></article><article><Target size={21} /><span>Goals achieved</span><strong>{measuredGoals ? `${goalsMet}/${measuredGoals}` : "Pending"}</strong></article><article><Trophy size={21} /><span>Current leader</span><strong className="kpi-leader">{rankings[0] && score(rankings[0]).percent !== null ? storeLabel(rankings[0].store) : "Pending"}</strong></article></section>
           {viewLevel !== "store" ? (
-            <section className="panel table-panel kpi-leaderboard"><div className="table-toolbar"><div><p className="eyebrow">Friendly competition</p><h2>{viewLevel === "company" ? "Company leaderboard" : `${selectedGroup?.name ?? "Supervisor"} leaderboard`}</h2><p>Ranked by the share of measured weekly goals achieved.</p></div></div><div className="responsive-table"><table><thead><tr><th>Rank</th><th>Store</th><th>Goal score</th><th>Sales</th><th>Labor</th><th>Load</th><th>ADT</th><th>Overall</th></tr></thead><tbody>{rankings.map((item, index) => { const itemScore = score(item); return <tr key={item.store}><td><span className={`rank-badge rank-${index + 1}`}>{index + 1}</span></td><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>{storeLabel(item.store)}</button></td><td><strong>{itemScore.percent === null ? "Pending" : `${itemScore.percent}%`}</strong><small className="kpi-score-detail">{itemScore.hits} of {itemScore.total} measured</small></td><td>{displayCommitmentValue("Sales", item.sales.actual, "Pending")}</td><td>{displayCommitmentValue("Labor", item.labor.actual, "Pending")}</td><td>{displayCommitmentValue("Load", item.load.actual, "Pending")}</td><td>{displayCommitmentValue("ADT", item.adt.actual, "Pending")}</td><td><span className={`kpi-overall ${item.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{item.overall_status || "Pending"}</span></td></tr>; })}</tbody></table></div></section>
+            <section className="panel table-panel kpi-leaderboard"><div className="table-toolbar"><div><p className="eyebrow">Friendly competition</p><h2>{viewLevel === "company" ? "Company leaderboard" : `${selectedGroup?.name ?? "Supervisor"} leaderboard`}</h2><p>Ranked by the share of measured weekly goals achieved.</p></div></div><div className="responsive-table"><table><thead><tr><th>Rank</th><th>Store</th><th>Goal score</th><th>Forecast</th><th>Confidence</th><th>Sales</th><th>Labor</th><th>Load</th><th>ADT</th><th>Overall</th></tr></thead><tbody>{rankings.map((item, index) => { const itemScore = score(item); const forecast = forecastsByStore.get(item.store); return <tr key={item.store}><td><span className={`rank-badge rank-${index + 1}`}>{index + 1}</span></td><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>{storeLabel(item.store)}</button></td><td><strong>{itemScore.percent === null ? "Pending" : `${itemScore.percent}%`}</strong><small className="kpi-score-detail">{itemScore.hits} of {itemScore.total} measured</small></td><td>{forecast ? formatCurrency(Number(forecast.weekly_projection.projected_sales || 0), 2) : "Not generated"}</td><td>{forecast ? <span className={`forecast-confidence ${forecast.confidence_level}`}>{forecast.confidence_score.toFixed(0)}%</span> : "—"}</td><td>{displayCommitmentValue("Sales", item.sales.actual, "Pending")}</td><td>{displayCommitmentValue("Labor", item.labor.actual, "Pending")}</td><td>{displayCommitmentValue("Load", item.load.actual, "Pending")}</td><td>{displayCommitmentValue("ADT", item.adt.actual, "Pending")}</td><td><span className={`kpi-overall ${item.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{item.overall_status || "Pending"}</span></td></tr>; })}</tbody></table></div></section>
           ) : selected && (
             <div className="kpi-layout">
               <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">{storeLabel(selected.store)}</p><h2>Weekly performance plan</h2></div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Trajectory</th><th>Suggested</th><th>Final goal</th><th>Actual</th><th>Status</th></tr></thead><tbody>{metrics.map(([name, trajectory, suggested, finalGoal, actual, status]) => <tr key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong></td><td>{displayCommitmentValue(name, actual, "Pending")}</td><td><span className={`kpi-status ${String(status).toLowerCase()}`}>{status || "Pending"}</span></td></tr>)}</tbody></table></div></section>
