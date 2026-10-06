@@ -40,6 +40,16 @@ type Shift = {
   source: "suggested" | "manual";
 };
 type DayProjection = { day_of_week: number; projected_sales: number; projected_oven_items?: number; projected_deliveries?: number };
+type DemandInterval = {
+  day_of_week: number;
+  interval_start: string;
+  projected_sales: number;
+  projected_oven_items: number;
+  projected_deliveries: number;
+  required_managers: number;
+  required_insiders: number;
+  required_drivers: number;
+};
 type ForecastRun = {
   id: string;
   confidence_score: number;
@@ -181,6 +191,12 @@ function halfStepCoverage(periodShifts: Shift[], periodStart: number, periodEnd:
 function formatCoverage(value: number) {
   return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
 }
+function shiftCoversInterval(shift: Pick<Shift, "start_time" | "end_time">, interval: string, storeOpen: string) {
+  const { start, end } = shiftMinuteRange(shift);
+  let point = timeToMinutes(interval);
+  if (point < timeToMinutes(storeOpen)) point += 24 * 60;
+  return point >= start && point < end;
+}
 function demoShifts(): Shift[] {
   const result: Shift[] = [];
   days.forEach((_, day) => {
@@ -224,6 +240,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [projections, setProjections] = useState<DayProjection[]>([]);
+  const [demandIntervals, setDemandIntervals] = useState<DemandInterval[]>([]);
   const [availability, setAvailability] = useState<Availability[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [storeHours, setStoreHours] = useState<StoreHour[]>(defaultStoreHours);
@@ -247,6 +264,24 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const weeklySplh = totalHours ? weeklySales / totalHours : 0;
   const weekEnd = addIsoDays(weekStart, 6);
   const weekEvents = events.filter((event) => event.status !== "cancelled" && event.start_date <= weekEnd && event.end_date >= weekStart && (event.scope === "company" || event.store_id === storeId));
+  const selectedDayOpen = storeHours.find((hours) => hours.day_of_week === selectedDay)?.open_time ?? "10:00";
+  const coverageRows = useMemo(() => demandIntervals
+    .filter((interval) => interval.day_of_week === selectedDay)
+    .sort((left, right) => {
+      const openMinute = timeToMinutes(selectedDayOpen);
+      const businessOrder = (value: string) => { const minute = timeToMinutes(value); return minute < openMinute ? minute + 24 * 60 : minute; };
+      return businessOrder(left.interval_start) - businessOrder(right.interval_start);
+    })
+    .map((interval) => {
+      const scheduled = { manager: 0, insider: 0, driver: 0 };
+      visibleShifts.forEach((shift) => { if (shiftCoversInterval(shift, interval.interval_start, selectedDayOpen)) scheduled[shift.role] += 1; });
+      const required = { manager: Number(interval.required_managers), insider: Number(interval.required_insiders), driver: Number(interval.required_drivers) };
+      const gaps = (Object.keys(required) as LaborRole[]).reduce((sum, role) => sum + Math.max(0, required[role] - scheduled[role]), 0);
+      const excess = (Object.keys(required) as LaborRole[]).reduce((sum, role) => sum + Math.max(0, scheduled[role] - required[role]), 0);
+      return { ...interval, required, scheduled, gaps, excess };
+    }), [demandIntervals, selectedDay, selectedDayOpen, visibleShifts]);
+  const coverageGapIntervals = coverageRows.filter((row) => row.gaps > 0).length;
+  const coverageExactIntervals = coverageRows.filter((row) => row.gaps === 0 && row.excess === 0).length;
 
   useEffect(() => {
     const loadStores = async () => {
@@ -267,7 +302,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     const loadWeek = async () => {
       setLoading(true); setError(""); setMessage("");
       if (!isSupabaseConfigured || !supabase) {
-        setPlanId("demo-plan"); setPlanStatus("draft"); setMembers(demoMembers); setShifts(demoShifts()); setAvailability(demoAvailability);
+        setPlanId("demo-plan"); setPlanStatus("draft"); setMembers(demoMembers); setShifts(demoShifts()); setAvailability(demoAvailability); setDemandIntervals([]);
         setProjections(days.map((_, day_of_week) => ({ day_of_week, projected_sales: day_of_week >= 4 ? 5200 : 3600 })));
         setSettings(defaultSettings); setStoreHours(defaultStoreHours()); setLoading(false); return;
       }
@@ -294,14 +329,15 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       setForecast((forecastResult.data as ForecastRun | null) ?? null);
       setWeeklySalesTarget("");
       setEventForm((current) => current.id ? current : emptyEvent(weekStart, storeId, canCreateCompanyEvent));
-      if (!planResult.data) { setPlanId(""); setPlanStatus("draft"); setShifts([]); setProjections([]); setLoading(false); return; }
+      if (!planResult.data) { setPlanId(""); setPlanStatus("draft"); setShifts([]); setProjections([]); setDemandIntervals([]); setLoading(false); return; }
       setPlanId(planResult.data.id); setPlanStatus(planResult.data.status);
-      const [shiftResult, projectionResult] = await Promise.all([
+      const [shiftResult, projectionResult, demandResult] = await Promise.all([
         supabase.from("labor_shifts").select("id,week_plan_id,day_of_week,role,start_time,end_time,assigned_member_id,notes,source").eq("week_plan_id", planResult.data.id),
         supabase.from("labor_daily_projections").select("day_of_week,projected_sales").eq("week_plan_id", planResult.data.id),
+        supabase.from("labor_demand_intervals").select("day_of_week,interval_start,projected_sales,projected_oven_items,projected_deliveries,required_managers,required_insiders,required_drivers").eq("week_plan_id", planResult.data.id),
       ]);
-      if (shiftResult.error || projectionResult.error) setError(shiftResult.error?.message || projectionResult.error?.message || "Schedule could not be loaded.");
-      setShifts((shiftResult.data ?? []) as Shift[]); setProjections((projectionResult.data ?? []) as DayProjection[]); setLoading(false);
+      if (shiftResult.error || projectionResult.error || demandResult.error) setError(shiftResult.error?.message || projectionResult.error?.message || demandResult.error?.message || "Schedule could not be loaded.");
+      setShifts((shiftResult.data ?? []) as Shift[]); setProjections((projectionResult.data ?? []) as DayProjection[]); setDemandIntervals((demandResult.data ?? []) as DemandInterval[]); setLoading(false);
     };
     void loadWeek();
   }, [storeId, weekStart, canCreateCompanyEvent]);
@@ -366,8 +402,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (target !== null && (!Number.isFinite(target) || target <= 0)) { setError("Enter a valid weekly sales target or leave it blank for the engine recommendation."); setGeneratingForecast(false); return; }
     const { data, error: invokeError } = await supabase.functions.invoke("forecast-engine", { body: { action: "generate", store_id: storeId, week_start: weekStart, weekly_sales_target: target } });
     if (invokeError || !data?.ok) { setError(data?.error || invokeError?.message || "The forecast could not be generated."); setGeneratingForecast(false); return; }
-    const result = data.result as { run: ForecastRun; daily: Array<DayProjection & { forecast_run_id: string }>; shifts: Shift[]; plan_id: string | null; published_plan_preserved: boolean };
-    setForecast(result.run); setProjections(result.daily); setShifts(result.shifts ?? []); if (result.plan_id) setPlanId(result.plan_id);
+    const result = data.result as { run: ForecastRun; daily: Array<DayProjection & { forecast_run_id: string }>; intervals: DemandInterval[]; shifts: Shift[]; plan_id: string | null; published_plan_preserved: boolean };
+    setForecast(result.run); setProjections(result.daily); setDemandIntervals(result.intervals ?? []); setShifts(result.shifts ?? []); if (result.plan_id) setPlanId(result.plan_id);
     setMessage(result.published_plan_preserved ? "Forecast generated. The already-published schedule was preserved." : "Forecast and profit-minded suggested shifts generated from seasonal history, recent trends, and scheduled events.");
     setGeneratingForecast(false);
   };
@@ -458,6 +494,13 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
           <section className="panel labor-day-panel"><div className="table-toolbar"><div><p className="eyebrow">{days[selectedDay]} builder</p><h2>Required shifts</h2><p>Managers first, then insiders and drivers; each group is ordered by start time.</p></div><div className="labor-day-metrics"><span>${Number(daySales).toLocaleString()} sales</span><strong>${dayHours ? (Number(daySales) / dayHours).toFixed(2) : "0.00"} SPLH</strong></div></div>
             {visibleShifts.length === 0 ? <div className="activity-empty">No suggested shifts have been generated for this day.</div> : <div className="responsive-table"><table className="labor-shift-table"><thead><tr><th>Role</th><th>Suggested time</th><th>Hours</th><th>Assigned employee</th><th>Availability</th><th>Notes</th></tr></thead><tbody>{visibleShifts.map((shift) => { const assigned = members.find((member) => member.id === shift.assigned_member_id); const status = assigned ? memberStatus(assigned, shift) : ""; return <tr key={shift.id} className={`${shift.role} ${shift.start_time <= "10:00" ? "opening" : ""} ${shift.end_time <= shift.start_time || shift.end_time >= "23:00" ? "closing" : ""}`}><td><strong>{shift.role[0].toUpperCase() + shift.role.slice(1)}</strong></td><td>{displayTime(shift.start_time)} – {displayTime(shift.end_time)}</td><td>{shiftHours(shift).toFixed(2)}</td><td><select value={shift.assigned_member_id ?? ""} onChange={(event) => void assign(shift, event.target.value)}><option value="">Open shift</option>{members.filter((member) => member.qualified_roles.includes(shift.role)).map((member) => <option key={member.id} value={member.id}>{memberStatus(member, shift)} {member.display_name}{member.is_minor ? " · Minor" : ""}</option>)}</select></td><td><span className={status.startsWith("⛔") ? "availability-bad" : status.startsWith("⚠") ? "availability-warning" : "availability-good"}>{status || "—"}</span></td><td>{shift.notes || (shift.source === "suggested" ? "Suggested from demand" : "Manager added")}</td></tr>; })}</tbody></table></div>}
           </section>
+          <details className="panel labor-coverage-panel" open={coverageGapIntervals > 0}>
+            <summary><div><p className="eyebrow">15-minute coverage check</p><h2>{days[selectedDay]} demand versus scheduled coverage</h2></div><div className="coverage-summary"><span className={coverageGapIntervals ? "gap" : "covered"}>{coverageGapIntervals ? `${coverageGapIntervals} intervals with gaps` : "✓ Every interval covered"}</span><small>{coverageExactIntervals} exact-fit intervals</small></div></summary>
+            {coverageRows.length === 0 ? <div className="activity-empty">Generate the forecast to create the interval staffing requirements.</div> : <div className="responsive-table"><table className="coverage-table"><thead><tr><th>Time</th><th>Sales</th><th>Oven</th><th>Deliveries</th><th>Managers<br /><small>Need / Scheduled</small></th><th>Insiders<br /><small>Need / Scheduled</small></th><th>Drivers<br /><small>Need / Scheduled</small></th><th>Result</th></tr></thead><tbody>{coverageRows.map((row) => {
+              const coverageCell = (role: LaborRole) => { const difference = row.scheduled[role] - row.required[role]; return <span className={difference < 0 ? "coverage-gap" : difference > 0 ? "coverage-extra" : "coverage-fit"}>{row.required[role]} / {row.scheduled[role]}</span>; };
+              return <tr key={`${row.day_of_week}-${row.interval_start}`} className={row.gaps ? "has-gap" : row.excess ? "has-extra" : "is-covered"}><td><strong>{displayTime(row.interval_start)}</strong></td><td>${Number(row.projected_sales).toFixed(0)}</td><td>{Number(row.projected_oven_items).toFixed(1)}</td><td>{Number(row.projected_deliveries).toFixed(1)}</td><td>{coverageCell("manager")}</td><td>{coverageCell("insider")}</td><td>{coverageCell("driver")}</td><td>{row.gaps ? <span className="coverage-result gap">Short {row.gaps}</span> : row.excess ? <span className="coverage-result extra">+{row.excess} above minimum</span> : <span className="coverage-result covered">Exact</span>}</td></tr>;
+            })}</tbody></table></div>}
+          </details>
           <section className="panel labor-week-glance">
             <div className="panel-heading"><div><p className="eyebrow">Week at a glance</p><h2>Coverage by operating period</h2><p>Staffing equivalents are averaged across each period and rounded to the nearest 0.5. Open shifts count toward planned coverage.</p></div></div>
             <div className="week-grid">{days.map((day, dayIndex) => {
