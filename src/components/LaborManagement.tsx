@@ -159,6 +159,28 @@ function displayTime(value: string) {
   const hour = hourValue % 12 || 12;
   return `${hour}:${String(minute).padStart(2, "0")} ${suffix}`;
 }
+function timeToMinutes(value: string) {
+  const [hour, minute] = value.slice(0, 5).split(":").map(Number);
+  return hour * 60 + minute;
+}
+function shiftMinuteRange(shift: Pick<Shift, "start_time" | "end_time">) {
+  const start = timeToMinutes(shift.start_time);
+  let end = timeToMinutes(shift.end_time);
+  if (end <= start) end += 24 * 60;
+  return { start, end };
+}
+function overlapMinutes(shift: Pick<Shift, "start_time" | "end_time">, periodStart: number, periodEnd: number) {
+  const { start, end } = shiftMinuteRange(shift);
+  return Math.max(0, Math.min(end, periodEnd) - Math.max(start, periodStart));
+}
+function halfStepCoverage(periodShifts: Shift[], periodStart: number, periodEnd: number) {
+  const periodMinutes = Math.max(1, periodEnd - periodStart);
+  const averageCoverage = periodShifts.reduce((total, shift) => total + overlapMinutes(shift, periodStart, periodEnd), 0) / periodMinutes;
+  return Math.round(averageCoverage * 2) / 2;
+}
+function formatCoverage(value: number) {
+  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
+}
 function demoShifts(): Shift[] {
   const result: Shift[] = [];
   days.forEach((_, day) => {
@@ -436,7 +458,24 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
           <section className="panel labor-day-panel"><div className="table-toolbar"><div><p className="eyebrow">{days[selectedDay]} builder</p><h2>Required shifts</h2><p>Managers first, then insiders and drivers; each group is ordered by start time.</p></div><div className="labor-day-metrics"><span>${Number(daySales).toLocaleString()} sales</span><strong>${dayHours ? (Number(daySales) / dayHours).toFixed(2) : "0.00"} SPLH</strong></div></div>
             {visibleShifts.length === 0 ? <div className="activity-empty">No suggested shifts have been generated for this day.</div> : <div className="responsive-table"><table className="labor-shift-table"><thead><tr><th>Role</th><th>Suggested time</th><th>Hours</th><th>Assigned employee</th><th>Availability</th><th>Notes</th></tr></thead><tbody>{visibleShifts.map((shift) => { const assigned = members.find((member) => member.id === shift.assigned_member_id); const status = assigned ? memberStatus(assigned, shift) : ""; return <tr key={shift.id} className={`${shift.role} ${shift.start_time <= "10:00" ? "opening" : ""} ${shift.end_time <= shift.start_time || shift.end_time >= "23:00" ? "closing" : ""}`}><td><strong>{shift.role[0].toUpperCase() + shift.role.slice(1)}</strong></td><td>{displayTime(shift.start_time)} – {displayTime(shift.end_time)}</td><td>{shiftHours(shift).toFixed(2)}</td><td><select value={shift.assigned_member_id ?? ""} onChange={(event) => void assign(shift, event.target.value)}><option value="">Open shift</option>{members.filter((member) => member.qualified_roles.includes(shift.role)).map((member) => <option key={member.id} value={member.id}>{memberStatus(member, shift)} {member.display_name}{member.is_minor ? " · Minor" : ""}</option>)}</select></td><td><span className={status.startsWith("⛔") ? "availability-bad" : status.startsWith("⚠") ? "availability-warning" : "availability-good"}>{status || "—"}</span></td><td>{shift.notes || (shift.source === "suggested" ? "Suggested from demand" : "Manager added")}</td></tr>; })}</tbody></table></div>}
           </section>
-          <section className="panel labor-week-glance"><div className="panel-heading"><div><p className="eyebrow">Week at a glance</p><h2>Scheduled by role</h2></div></div><div className="week-grid">{days.map((day, index) => <article key={day}><h3>{day}</h3>{(["manager", "insider", "driver"] as LaborRole[]).map((role) => <div key={role}><strong>{role}s</strong>{shifts.filter((shift) => shift.day_of_week === index && shift.role === role).map((shift) => <span key={shift.id}>{members.find((member) => member.id === shift.assigned_member_id)?.display_name || "OPEN"}<small>{displayTime(shift.start_time)}–{displayTime(shift.end_time)}</small></span>)}</div>)}</article>)}</div></section>
+          <section className="panel labor-week-glance">
+            <div className="panel-heading"><div><p className="eyebrow">Week at a glance</p><h2>Coverage by operating period</h2><p>Staffing equivalents are averaged across each period and rounded to the nearest 0.5. Open shifts count toward planned coverage.</p></div></div>
+            <div className="week-grid">{days.map((day, dayIndex) => {
+              const closeValue = storeHours.find((hours) => hours.day_of_week === dayIndex)?.close_time ?? "23:00";
+              let closeMinutes = timeToMinutes(closeValue);
+              if (closeMinutes <= 21 * 60) closeMinutes += 24 * 60;
+              const periods = [
+                { key: "day", label: "Day Shift", timeLabel: "10:00 AM–2:00 PM", start: 10 * 60, end: 14 * 60 },
+                { key: "rush", label: "Rush", timeLabel: "4:00 PM–8:00 PM", start: 16 * 60, end: 20 * 60 },
+                { key: "late", label: "Late Night", timeLabel: `9:00 PM–${displayTime(closeValue)}`, start: 21 * 60, end: closeMinutes },
+              ];
+              return <article key={day} className="week-day-card"><h3>{day}</h3>{periods.map((period) => <section key={period.key} className={`week-period ${period.key}`}><header><strong>{period.label}</strong><small>{period.timeLabel}</small></header>{(["manager", "insider", "driver"] as LaborRole[]).map((role) => {
+                const periodShifts = shifts.filter((shift) => shift.day_of_week === dayIndex && shift.role === role && overlapMinutes(shift, period.start, period.end) > 0);
+                const coverage = halfStepCoverage(periodShifts, period.start, period.end);
+                return <div key={role} className="week-role-row"><div className="week-role-summary"><strong>{role}s</strong><b title="Average staffing coverage">{formatCoverage(coverage)}</b></div><div className="week-role-assignments">{periodShifts.length === 0 ? <span className="week-no-coverage">No coverage</span> : periodShifts.map((shift) => <span key={shift.id}>{members.find((member) => member.id === shift.assigned_member_id)?.display_name || "OPEN"}<small>{displayTime(shift.start_time)}–{displayTime(shift.end_time)}</small></span>)}</div></div>;
+              })}</section>)}</article>;
+            })}</div>
+          </section>
         </>
       ) : view === "employees" ? (
         <section className="panel"><div className="table-toolbar"><div><p className="eyebrow">Weekly roster view</p><h2>Employee hours and assignments</h2></div></div><div className="responsive-table"><table><thead><tr><th>Employee</th><th>Roles</th><th>Minor</th><th>Weekly hours</th><th>Flag</th></tr></thead><tbody>{hoursByMember.map(({ member, hours }) => <tr key={member.id}><td><strong>{member.display_name}</strong></td><td>{member.qualified_roles.join(", ")}</td><td>{member.is_minor ? "◆" : "—"}</td><td>{hours.toFixed(2)}</td><td>{hours >= 40 ? <span className="availability-bad">OVERTIME</span> : hours >= 36 ? <span className="availability-warning">Close to OT</span> : "✓"}</td></tr>)}</tbody></table></div></section>
