@@ -121,10 +121,30 @@ const weeklyMetricDefinitions: MetricDefinition[] = [
 
 const weeklyMetricGroups = Array.from(new Set(weeklyMetricDefinitions.map((metric) => metric.group)));
 
-function nextSunday() {
+const storeNames: Record<string, string> = {
+  "1412": "Jamestown",
+  "1443": "Baxter",
+  "1493": "Fairfield Glade",
+  "5408": "Manchester",
+  "5430": "North Cookeville",
+  "5449": "Algood",
+  "5452": "South Cookeville",
+  "5491": "Smithville",
+  "6176": "Livingston",
+  "6303": "Sparta",
+  "6326": "Dunlap",
+  "8702": "Monterey",
+};
+
+function storeLabel(store: string) {
+  const storeNumber = store.replace(/^Store\s+/i, "").split(" · ")[0];
+  return storeNames[storeNumber] ? `${storeNames[storeNumber]} ${storeNumber}` : `Store ${storeNumber}`;
+}
+
+function mostRecentCompletedSunday() {
   const date = new Date();
   date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() + ((7 - date.getDay()) % 7));
+  date.setDate(date.getDate() - (date.getDay() === 0 ? 7 : date.getDay()));
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
@@ -135,7 +155,7 @@ function demoMetric(trajectory: string, suggested: string, supervisor: number): 
 const demoCommitments: Commitment[] = [
   {
     row_number: 4,
-    week_end: nextSunday(),
+    week_end: mostRecentCompletedSunday(),
     store: "1412",
     sales: { model_projection: "$37,381", recommended_goal: "$38,100", supervisor_goal: 39000, actual: "$39,420", final_goal: "$39,000", variance: "$420", variance_percent: "1.1%", status: "Yes" },
     accountability: { focus_area: "Sales", action_plan: "Build Friday dinner staffing and confirm school-event outreach.", owner: "Store leadership" },
@@ -149,7 +169,7 @@ const demoCommitments: Commitment[] = [
   },
   {
     row_number: 5,
-    week_end: nextSunday(),
+    week_end: mostRecentCompletedSunday(),
     store: "1633",
     sales: { model_projection: "$31,200", recommended_goal: "$31,700", supervisor_goal: 32000, actual: "$31,810", final_goal: "$32,000", variance: "-$190", variance_percent: "-0.6%", status: "No" },
     accountability: { focus_area: "Service", action_plan: "Coach peak-hour load and oven flow.", owner: "GM" },
@@ -165,7 +185,7 @@ const demoCommitments: Commitment[] = [
 
 const demoWeeklyMetrics: WeeklyMetricRow[] = demoCommitments.map((item, index) => ({
   store: item.store,
-  week_end: nextSunday(),
+  week_end: mostRecentCompletedSunday(),
   metrics: {
     avg_adt: index ? "21.7" : "20.8",
     adt_under_30_percent: index ? "86.4%" : "89.2%",
@@ -353,7 +373,7 @@ function databaseCommitment(
 }
 
 export default function KPITracker({ profile }: { profile: Profile }) {
-  const [weekEnd, setWeekEnd] = useState(nextSunday());
+  const [weekEnd, setWeekEnd] = useState(mostRecentCompletedSunday());
   const [commitments, setCommitments] = useState<Commitment[]>([]);
   const [weeklyMetrics, setWeeklyMetrics] = useState<WeeklyMetricRow[]>([]);
   const [weeklyMetricsError, setWeeklyMetricsError] = useState("");
@@ -587,7 +607,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
         <section className="kpi-scope-bar"><label>Supervisor group<select value={selectedGroup?.id ?? ""} onChange={(event) => setSelectedSupervisor(event.target.value)}>{access.supervisorGroups.map((group) => <option value={group.id} key={group.id}>{group.name} · {group.stores.length} stores</option>)}</select></label><p>Showing {selectedGroup?.stores.join(", ") || "no assigned stores"}</p></section>
       )}
       {viewLevel === "store" && storeTabs.length > 0 && (
-        <div className="kpi-store-tabs" role="tablist" aria-label="Store selection">{storeTabs.map((item) => <button role="tab" aria-selected={selectedStore === item.store} className={selectedStore === item.store ? "active" : ""} key={item.store} onClick={() => setSelectedStore(item.store)}>Store {item.store}<span>{item.status}</span></button>)}</div>
+        <div className="kpi-store-tabs" role="tablist" aria-label="Store selection">{storeTabs.map((item) => <button role="tab" aria-selected={selectedStore === item.store} className={selectedStore === item.store ? "active" : ""} key={item.store} onClick={() => setSelectedStore(item.store)}>{storeLabel(item.store)}<span>{item.status}</span></button>)}</div>
       )}
 
       {currentLoading ? (
@@ -607,7 +627,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
             ))}
             <section className="panel table-panel kpi-detail-table">
               <div className="table-toolbar"><div><p className="eyebrow">Selected week</p><h2>All imported metrics by store</h2><p>Every field uploaded to the KPI Database for the selected week.</p></div></div>
-              <div className="responsive-table"><table><thead><tr><th>Store</th>{weeklyMetricDefinitions.map((metric) => <th key={metric.key}>{metric.label}</th>)}</tr></thead><tbody>{[...scopedWeeklyMetrics].sort((a, b) => a.store.localeCompare(b.store, undefined, { numeric: true })).map((item) => <tr key={item.store}><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>Store {item.store}</button></td>{weeklyMetricDefinitions.map((metric) => <td key={metric.key}>{displayMetricValue(item.metrics, metric)}</td>)}</tr>)}</tbody></table></div>
+              <div className="responsive-table"><table><thead><tr><th>Store</th>{weeklyMetricDefinitions.map((metric) => <th key={metric.key}>{metric.label}</th>)}</tr></thead><tbody>{[...scopedWeeklyMetrics].sort((a, b) => a.store.localeCompare(b.store, undefined, { numeric: true })).map((item) => <tr key={item.store}><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>{storeLabel(item.store)}</button></td>{weeklyMetricDefinitions.map((metric) => <td key={metric.key}>{displayMetricValue(item.metrics, metric)}</td>)}</tr>)}</tbody></table></div>
             </section>
           </>
         )
@@ -615,12 +635,12 @@ export default function KPITracker({ profile }: { profile: Profile }) {
         <div className="empty-card"><Target /><h2>No commitments found</h2><p>There are no visible store rows for this week, or your store assignment still needs to be configured.</p></div>
       ) : (
         <>
-          <section className="kpi-summary-grid"><article><BarChart3 size={21} /><span>{viewLevel === "supervisor" ? "Group stores" : viewLevel === "store" ? "Selected store" : "Company stores"}</span><strong>{scopedCommitments.length}</strong></article><article><Target size={21} /><span>Goals achieved</span><strong>{measuredGoals ? `${goalsMet}/${measuredGoals}` : "Pending"}</strong></article><article><Trophy size={21} /><span>Current leader</span><strong className="kpi-leader">{rankings[0] && score(rankings[0]).percent !== null ? `Store ${rankings[0].store}` : "Pending"}</strong></article></section>
+          <section className="kpi-summary-grid"><article><BarChart3 size={21} /><span>{viewLevel === "supervisor" ? "Group stores" : viewLevel === "store" ? "Selected store" : "Company stores"}</span><strong>{scopedCommitments.length}</strong></article><article><Target size={21} /><span>Goals achieved</span><strong>{measuredGoals ? `${goalsMet}/${measuredGoals}` : "Pending"}</strong></article><article><Trophy size={21} /><span>Current leader</span><strong className="kpi-leader">{rankings[0] && score(rankings[0]).percent !== null ? storeLabel(rankings[0].store) : "Pending"}</strong></article></section>
           {viewLevel !== "store" ? (
-            <section className="panel table-panel kpi-leaderboard"><div className="table-toolbar"><div><p className="eyebrow">Friendly competition</p><h2>{viewLevel === "company" ? "Company leaderboard" : `${selectedGroup?.name ?? "Supervisor"} leaderboard`}</h2><p>Ranked by the share of measured weekly goals achieved.</p></div></div><div className="responsive-table"><table><thead><tr><th>Rank</th><th>Store</th><th>Goal score</th><th>Sales</th><th>Labor</th><th>Load</th><th>ADT</th><th>Overall</th></tr></thead><tbody>{rankings.map((item, index) => { const itemScore = score(item); return <tr key={item.store}><td><span className={`rank-badge rank-${index + 1}`}>{index + 1}</span></td><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>Store {item.store}</button></td><td><strong>{itemScore.percent === null ? "Pending" : `${itemScore.percent}%`}</strong><small className="kpi-score-detail">{itemScore.hits} of {itemScore.total} measured</small></td><td>{displayCommitmentValue("Sales", item.sales.actual, "Pending")}</td><td>{displayCommitmentValue("Labor", item.labor.actual, "Pending")}</td><td>{displayCommitmentValue("Load", item.load.actual, "Pending")}</td><td>{displayCommitmentValue("ADT", item.adt.actual, "Pending")}</td><td><span className={`kpi-overall ${item.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{item.overall_status || "Pending"}</span></td></tr>; })}</tbody></table></div></section>
+            <section className="panel table-panel kpi-leaderboard"><div className="table-toolbar"><div><p className="eyebrow">Friendly competition</p><h2>{viewLevel === "company" ? "Company leaderboard" : `${selectedGroup?.name ?? "Supervisor"} leaderboard`}</h2><p>Ranked by the share of measured weekly goals achieved.</p></div></div><div className="responsive-table"><table><thead><tr><th>Rank</th><th>Store</th><th>Goal score</th><th>Sales</th><th>Labor</th><th>Load</th><th>ADT</th><th>Overall</th></tr></thead><tbody>{rankings.map((item, index) => { const itemScore = score(item); return <tr key={item.store}><td><span className={`rank-badge rank-${index + 1}`}>{index + 1}</span></td><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>{storeLabel(item.store)}</button></td><td><strong>{itemScore.percent === null ? "Pending" : `${itemScore.percent}%`}</strong><small className="kpi-score-detail">{itemScore.hits} of {itemScore.total} measured</small></td><td>{displayCommitmentValue("Sales", item.sales.actual, "Pending")}</td><td>{displayCommitmentValue("Labor", item.labor.actual, "Pending")}</td><td>{displayCommitmentValue("Load", item.load.actual, "Pending")}</td><td>{displayCommitmentValue("ADT", item.adt.actual, "Pending")}</td><td><span className={`kpi-overall ${item.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{item.overall_status || "Pending"}</span></td></tr>; })}</tbody></table></div></section>
           ) : selected && (
             <div className="kpi-layout">
-              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">Store {selected.store}</p><h2>Weekly performance plan</h2></div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Trajectory</th><th>Suggested</th><th>Final goal</th><th>Actual</th><th>Status</th></tr></thead><tbody>{metrics.map(([name, trajectory, suggested, finalGoal, actual, status]) => <tr key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong></td><td>{displayCommitmentValue(name, actual, "Pending")}</td><td><span className={`kpi-status ${String(status).toLowerCase()}`}>{status || "Pending"}</span></td></tr>)}</tbody></table></div></section>
+              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">{storeLabel(selected.store)}</p><h2>Weekly performance plan</h2></div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Trajectory</th><th>Suggested</th><th>Final goal</th><th>Actual</th><th>Status</th></tr></thead><tbody>{metrics.map(([name, trajectory, suggested, finalGoal, actual, status]) => <tr key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong></td><td>{displayCommitmentValue(name, actual, "Pending")}</td><td><span className={`kpi-status ${String(status).toLowerCase()}`}>{status || "Pending"}</span></td></tr>)}</tbody></table></div></section>
               <form className="panel kpi-editor" onSubmit={save}>
                 <div className="panel-heading"><div><p className="eyebrow">Supervisor commitment</p><h2>Set the weekly plan</h2></div><Target size={23} /></div>
                 <div className="kpi-goal-grid">
