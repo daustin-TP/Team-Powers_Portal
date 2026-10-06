@@ -224,10 +224,6 @@ export default function App() {
             src="/dash-sos-logo.png"
             alt="Dash-OS"
           />
-          <div>
-            <strong>Dash-OS</strong>
-            <span>Smart Operations System</span>
-          </div>
           <button
             className="icon-button mobile-close"
             aria-label="Close navigation"
