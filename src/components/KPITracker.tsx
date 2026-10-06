@@ -456,10 +456,10 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       supabase.from("kpi_weekly_results").select("store_id,week_end,metrics,stores(name)").eq("week_end", weekEnd),
       supabase.from("kpi_goal_commitments").select("store_id,goals,focus_area,action_plan,owner").eq("week_end", weekEnd),
     ]);
-    if (!resultRows.error && (resultRows.data?.length ?? 0) > 0) {
+    if (!resultRows.error) {
       const goalsByStore = new Map((goalRows.data ?? []).map((item) => [item.store_id, item]));
       const rows = (resultRows.data ?? []).map((item) => databaseCommitment(item as Parameters<typeof databaseCommitment>[0], goalsByStore.get(item.store_id)));
-      setCommitments(rows); setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setCommitmentsLoading(false); return;
+      setCommitments(rows); setSelectedStore((current) => rows.length === 0 ? current : rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setCommitmentsLoading(false); return;
     }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_commitments", week_end: weekEnd } });
     if (invokeError || !data?.ok) {
@@ -491,13 +491,13 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     }
 
     const directRows = await supabase.from("kpi_weekly_results").select("store_id,week_end,metrics,stores(name)").eq("week_end", weekEnd);
-    if (!directRows.error && (directRows.data?.length ?? 0) > 0) {
+    if (!directRows.error) {
       const rows = (directRows.data ?? []).map((item) => {
         const storeRecord = Array.isArray(item.stores) ? item.stores[0] : item.stores;
         const metrics = item.metrics as Record<string, unknown>;
         return { store_id: item.store_id, store: metricText(metrics, "store_number", storeRecord?.name ?? "Store").replace(/^Store\s+/i, "").split(" · ")[0], week_end: item.week_end, metrics } as WeeklyMetricRow;
       });
-      setWeeklyMetrics(rows); setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setMetricsLoading(false); return;
+      setWeeklyMetrics(rows); setSelectedStore((current) => rows.length === 0 ? current : rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setMetricsLoading(false); return;
     }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_weekly_metrics", week_end: weekEnd } });
     if (invokeError || !data?.ok) {
@@ -664,7 +664,10 @@ export default function KPITracker({ profile }: { profile: Profile }) {
           </>
         )
       ) : commitments.length === 0 ? (
-        <div className="empty-card"><Target /><h2>No commitments found</h2><p>There are no visible store rows for this week, or your store assignment still needs to be configured.</p></div>
+        <>
+          {scopedForecasts.length > 0 && <section className="kpi-forecast-summary"><article><span>Shared sales forecast</span><strong>{formatCurrency(projectedSalesTotal, 2)}</strong><small>{scopedForecasts.length} store{scopedForecasts.length === 1 ? "" : "s"} generated</small></article><article><span>Expected range</span><strong>{formatCurrency(projectedLowTotal, 0)}–{formatCurrency(projectedHighTotal, 0)}</strong><small>Confidence-adjusted range</small></article><article><span>Forecast confidence</span><strong>{averageForecastConfidence.toFixed(0)}%</strong><small>Average across this view</small></article></section>}
+          <div className="empty-card"><Target /><h2>{scopedForecasts.length > 0 ? "Forecast ready; actuals not posted yet" : "No commitments found"}</h2><p>{scopedForecasts.length > 0 ? "This future week is using the shared Labor and KPI forecast. KPI actuals and commitments will appear after weekly data is imported." : "There are no visible store rows for this week, or your store assignment still needs to be configured."}</p></div>
+        </>
       ) : (
         <>
           {scopedForecasts.length > 0 && <section className="kpi-forecast-summary"><article><span>Shared sales forecast</span><strong>{formatCurrency(projectedSalesTotal, 2)}</strong><small>{scopedForecasts.length} store{scopedForecasts.length === 1 ? "" : "s"} generated</small></article><article><span>Expected range</span><strong>{formatCurrency(projectedLowTotal, 0)}–{formatCurrency(projectedHighTotal, 0)}</strong><small>Confidence-adjusted range</small></article><article><span>Forecast confidence</span><strong>{averageForecastConfidence.toFixed(0)}%</strong><small>Average across this view</small></article></section>}
