@@ -243,7 +243,9 @@ function formatCurrency(value: number | null, decimals = 0) {
 }
 
 function formatPercent(value: number | null) {
-  return value === null ? "Pending" : `${value.toFixed(1)}%`;
+  if (value === null) return "Pending";
+  const percentValue = Math.abs(value) <= 1 ? value * 100 : value;
+  return `${percentValue.toFixed(1)}%`;
 }
 
 function formatMetricValue(value: number | null, format: MetricFormat) {
