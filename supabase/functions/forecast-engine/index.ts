@@ -559,6 +559,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   const { data: existingPlan } = await admin.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle();
   let planId: string | null = existingPlan?.id ?? null;
+  let editedPlanPreserved = false;
   if (!existingPlan || existingPlan.status !== "published") {
     const { data: plan, error: planError } = await admin.from("labor_week_plans").upsert({
       store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v2", forecast_run_id: run.id,
@@ -578,9 +579,14 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     ]);
     if (planDailyError || planIntervalError) throw planDailyError ?? planIntervalError;
 
-    const { data: existingShifts, error: existingShiftError } = await admin.from("labor_shifts").select("id,source,assigned_member_id").eq("week_plan_id", plan.id);
-    if (existingShiftError) throw existingShiftError;
-    const safeToRebuild = (existingShifts ?? []).every((shift) => shift.source === "suggested" && !shift.assigned_member_id);
+    const [{ data: existingShifts, error: existingShiftError }, { data: structuralChanges, error: structuralChangeError }] = await Promise.all([
+      admin.from("labor_shifts").select("id,source,assigned_member_id").eq("week_plan_id", plan.id),
+      admin.from("labor_shift_changes").select("id").eq("week_plan_id", plan.id).limit(1),
+    ]);
+    if (existingShiftError || structuralChangeError) throw existingShiftError ?? structuralChangeError;
+    const hasStructuralChanges = Boolean(structuralChanges?.length);
+    const safeToRebuild = !hasStructuralChanges && (existingShifts ?? []).every((shift) => shift.source === "suggested" && !shift.assigned_member_id);
+    editedPlanPreserved = hasStructuralChanges;
     if (safeToRebuild) {
       const { error: deleteShiftError } = await admin.from("labor_shifts").delete().eq("week_plan_id", plan.id).eq("source", "suggested");
       if (deleteShiftError) throw deleteShiftError;
@@ -602,7 +608,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v2", manual_weekly_sales: manualWeeklySales },
   });
 
-  return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published") };
+  return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved };
 }
 
 class HttpError extends Error {
