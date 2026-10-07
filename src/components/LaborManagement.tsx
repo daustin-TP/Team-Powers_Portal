@@ -7,6 +7,7 @@ import {
   Clock3,
   FileDown,
   History,
+  Plus,
   RotateCcw,
   Save,
   Settings2,
@@ -251,6 +252,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const canCreateCompanyEvent = profile.role === "supervisor" || profile.role === "admin";
   const [eventForm, setEventForm] = useState<EventForm>(() => emptyEvent(mondayOfCurrentWeek(), "", canCreateCompanyEvent));
   const [selectedDay, setSelectedDay] = useState(0);
+  const [newShift, setNewShift] = useState<{ role: LaborRole; start_time: string; end_time: string }>({ role: "insider", start_time: "16:00", end_time: "20:00" });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -358,20 +360,65 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     return limited ? `⚠ ${displayTime(limited.start_time)}–${displayTime(limited.end_time)}` : "✓";
   };
   const overlaps = (candidateId: string, shift: Shift) => shifts.some((other) => other.id !== shift.id && other.day_of_week === shift.day_of_week && other.assigned_member_id === candidateId && shift.start_time < other.end_time && other.start_time < shift.end_time);
+  const returnPlanToDraft = async () => {
+    if (planStatus !== "published") return;
+    setPlanStatus("draft");
+    if (supabase && planId && planId !== "demo-plan") await supabase.from("labor_week_plans").update({ status: "draft", published_at: null, updated_at: new Date().toISOString() }).eq("id", planId);
+  };
   const assign = async (shift: Shift, memberId: string) => {
     if (memberId && overlaps(memberId, shift)) { setError("That employee already has an overlapping shift on this day."); return; }
     setError(""); setShifts((current) => current.map((item) => item.id === shift.id ? { ...item, assigned_member_id: memberId || null } : item));
     if (supabase && shift.week_plan_id !== "demo-plan") {
       const { error: updateError } = await supabase.from("labor_shifts").update({ assigned_member_id: memberId || null, updated_at: new Date().toISOString() }).eq("id", shift.id);
-      if (updateError) setError(updateError.message); else setMessage("Assignment saved.");
+      if (updateError) setError(updateError.message); else { await returnPlanToDraft(); setMessage("Assignment saved."); }
     }
+  };
+  const updateShiftTime = async (shift: Shift, field: "start_time" | "end_time", value: string) => {
+    if (!/^\d{2}:\d{2}$/.test(value)) { setError("Choose a valid shift time."); return; }
+    const candidate = { ...shift, [field]: value };
+    const hours = shiftHours(candidate);
+    if (hours < settings.minimum_shift_hours || hours > settings.max_shift_hours) {
+      setError(`Shifts must be between ${settings.minimum_shift_hours} and ${settings.max_shift_hours} hours.`); return;
+    }
+    setError(""); setShifts((current) => current.map((item) => item.id === shift.id ? candidate : item));
+    if (supabase && shift.week_plan_id !== "demo-plan") {
+      const { error: updateError } = await supabase.from("labor_shifts").update({ [field]: value, updated_at: new Date().toISOString() }).eq("id", shift.id);
+      if (updateError) { setError(updateError.message); return; }
+    }
+    await returnPlanToDraft(); setMessage("Shift time saved; coverage recalculated.");
+  };
+  const addManualShift = async () => {
+    if (!planId) { setError("Generate this week’s forecast before adding a shift."); return; }
+    if (!/^\d{2}:\d{2}$/.test(newShift.start_time) || !/^\d{2}:\d{2}$/.test(newShift.end_time)) { setError("Choose valid start and end times."); return; }
+    const draft: Shift = { id: `manual-${Date.now()}`, week_plan_id: planId, day_of_week: selectedDay, role: newShift.role, start_time: newShift.start_time, end_time: newShift.end_time, assigned_member_id: null, notes: "Manager-added coverage", source: "manual" };
+    const hours = shiftHours(draft);
+    if (hours < settings.minimum_shift_hours || hours > settings.max_shift_hours) { setError(`Manual shifts must be between ${settings.minimum_shift_hours} and ${settings.max_shift_hours} hours.`); return; }
+    setError("");
+    if (!supabase || planId === "demo-plan") setShifts((current) => [...current, draft]);
+    else {
+      const { data, error: insertError } = await supabase.from("labor_shifts").insert({ week_plan_id: planId, day_of_week: selectedDay, role: newShift.role, start_time: newShift.start_time, end_time: newShift.end_time, assigned_member_id: null, notes: draft.notes, source: "manual" }).select("id,week_plan_id,day_of_week,role,start_time,end_time,assigned_member_id,notes,source").single();
+      if (insertError) { setError(insertError.message); return; }
+      setShifts((current) => [...current.filter((item) => item.id !== data.id), data as Shift]);
+    }
+    await returnPlanToDraft(); setMessage(`${newShift.role[0].toUpperCase() + newShift.role.slice(1)} shift added; coverage recalculated.`);
+  };
+  const deleteShift = async (shift: Shift) => {
+    const employee = members.find((member) => member.id === shift.assigned_member_id)?.display_name;
+    if (!window.confirm(`Remove this ${shift.role} shift${employee ? ` assigned to ${employee}` : ""}?`)) return;
+    setError("");
+    if (supabase && shift.week_plan_id !== "demo-plan") {
+      const { error: deleteError } = await supabase.from("labor_shifts").delete().eq("id", shift.id);
+      if (deleteError) { setError(deleteError.message); return; }
+    }
+    setShifts((current) => current.filter((item) => item.id !== shift.id));
+    await returnPlanToDraft(); setMessage("Shift removed; coverage recalculated.");
   };
   const resetAssignments = async () => {
     if (!window.confirm("Clear every employee assignment for this week? Shift times will remain.")) return;
     setShifts((current) => current.map((shift) => ({ ...shift, assigned_member_id: null })));
     if (supabase && planId && planId !== "demo-plan") {
       const { error: updateError } = await supabase.from("labor_shifts").update({ assigned_member_id: null, updated_at: new Date().toISOString() }).eq("week_plan_id", planId);
-      if (updateError) setError(updateError.message); else setMessage("Schedule assignments cleared.");
+      if (updateError) setError(updateError.message); else { await returnPlanToDraft(); setMessage("Schedule assignments cleared."); }
     }
   };
   const publish = async () => {
@@ -492,7 +539,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
           {weekEvents.length > 0 && <section className="labor-event-strip"><CalendarDays size={20} /><div><strong>{weekEvents.length === 1 ? "Demand event this week" : `${weekEvents.length} demand events this week`}</strong><div>{weekEvents.map((event) => <button key={event.id} onClick={() => editEvent(event)}><span>{event.scope === "company" ? "Company" : selectedStore?.name}</span>{event.name}</button>)}</div></div></section>}
           <div className="labor-toolbar"><div className="day-tabs">{days.map((day, index) => <button key={day} className={selectedDay === index ? "active" : ""} onClick={() => setSelectedDay(index)}>{day.slice(0, 3)}<small>{shifts.filter((shift) => shift.day_of_week === index).length}</small></button>)}</div><div className="button-row"><button className="button secondary" onClick={resetAssignments}><RotateCcw size={17} />Reset names</button><button className="button primary" onClick={publish}><FileDown size={17} />Publish</button></div></div>
           <section className="panel labor-day-panel"><div className="table-toolbar"><div><p className="eyebrow">{days[selectedDay]} builder</p><h2>Required shifts</h2><p>Managers first, then insiders and drivers; each group is ordered by start time.</p></div><div className="labor-day-metrics"><span>${Number(daySales).toLocaleString()} sales</span><strong>${dayHours ? (Number(daySales) / dayHours).toFixed(2) : "0.00"} SPLH</strong></div></div>
-            {visibleShifts.length === 0 ? <div className="activity-empty">No suggested shifts have been generated for this day.</div> : <div className="responsive-table"><table className="labor-shift-table"><thead><tr><th>Role</th><th>Suggested time</th><th>Hours</th><th>Assigned employee</th><th>Availability</th><th>Notes</th></tr></thead><tbody>{visibleShifts.map((shift) => { const assigned = members.find((member) => member.id === shift.assigned_member_id); const status = assigned ? memberStatus(assigned, shift) : ""; return <tr key={shift.id} className={`${shift.role} ${shift.start_time <= "10:00" ? "opening" : ""} ${shift.end_time <= shift.start_time || shift.end_time >= "23:00" ? "closing" : ""}`}><td><strong>{shift.role[0].toUpperCase() + shift.role.slice(1)}</strong></td><td>{displayTime(shift.start_time)} – {displayTime(shift.end_time)}</td><td>{shiftHours(shift).toFixed(2)}</td><td><select value={shift.assigned_member_id ?? ""} onChange={(event) => void assign(shift, event.target.value)}><option value="">Open shift</option>{members.filter((member) => member.qualified_roles.includes(shift.role)).map((member) => <option key={member.id} value={member.id}>{memberStatus(member, shift)} {member.display_name}{member.is_minor ? " · Minor" : ""}</option>)}</select></td><td><span className={status.startsWith("⛔") ? "availability-bad" : status.startsWith("⚠") ? "availability-warning" : "availability-good"}>{status || "—"}</span></td><td>{shift.notes || (shift.source === "suggested" ? "Suggested from demand" : "Manager added")}</td></tr>; })}</tbody></table></div>}
+            <div className="manual-shift-builder"><div><strong>Add coverage</strong><small>Use 15-minute times. New shifts must follow the store’s minimum and maximum shift rules.</small></div><label>Role<select value={newShift.role} onChange={(event) => setNewShift({ ...newShift, role: event.target.value as LaborRole })}><option value="manager">Manager</option><option value="insider">Insider</option><option value="driver">Driver</option></select></label><label>Starts<input type="time" step="900" value={newShift.start_time} onChange={(event) => setNewShift({ ...newShift, start_time: event.target.value })} /></label><label>Ends<input type="time" step="900" value={newShift.end_time} onChange={(event) => setNewShift({ ...newShift, end_time: event.target.value })} /></label><button className="button secondary" onClick={() => void addManualShift()}><Plus size={17} />Add shift</button></div>
+            {visibleShifts.length === 0 ? <div className="activity-empty">No suggested shifts have been generated for this day.</div> : <div className="responsive-table"><table className="labor-shift-table"><thead><tr><th>Role</th><th>Start</th><th>End</th><th>Hours</th><th>Assigned employee</th><th>Availability</th><th>Notes</th><th aria-label="Shift actions" /></tr></thead><tbody>{visibleShifts.map((shift) => { const assigned = members.find((member) => member.id === shift.assigned_member_id); const status = assigned ? memberStatus(assigned, shift) : ""; return <tr key={shift.id} className={`${shift.role} ${shift.start_time <= "10:00" ? "opening" : ""} ${shift.end_time <= shift.start_time || shift.end_time >= "23:00" ? "closing" : ""}`}><td><strong>{shift.role[0].toUpperCase() + shift.role.slice(1)}</strong></td><td><input className="shift-time-input" aria-label={`${shift.role} shift start`} type="time" step="900" value={shift.start_time.slice(0, 5)} onChange={(event) => void updateShiftTime(shift, "start_time", event.target.value)} /></td><td><input className="shift-time-input" aria-label={`${shift.role} shift end`} type="time" step="900" value={shift.end_time.slice(0, 5)} onChange={(event) => void updateShiftTime(shift, "end_time", event.target.value)} /></td><td>{shiftHours(shift).toFixed(2)}</td><td><select value={shift.assigned_member_id ?? ""} onChange={(event) => void assign(shift, event.target.value)}><option value="">Open shift</option>{members.filter((member) => member.qualified_roles.includes(shift.role)).map((member) => <option key={member.id} value={member.id}>{memberStatus(member, shift)} {member.display_name}{member.is_minor ? " · Minor" : ""}</option>)}</select></td><td><span className={status.startsWith("⛔") ? "availability-bad" : status.startsWith("⚠") ? "availability-warning" : "availability-good"}>{status || "—"}</span></td><td>{shift.notes || (shift.source === "suggested" ? "Suggested from demand" : "Manager added")}</td><td><button className="icon-button danger" aria-label={`Remove ${shift.role} shift`} title="Remove shift" onClick={() => void deleteShift(shift)}><Trash2 size={17} /></button></td></tr>; })}</tbody></table></div>}
           </section>
           <details className="panel labor-coverage-panel" open={coverageGapIntervals > 0}>
             <summary><div><p className="eyebrow">15-minute coverage check</p><h2>{days[selectedDay]} demand versus scheduled coverage</h2></div><div className="coverage-summary"><span className={coverageGapIntervals ? "gap" : "covered"}>{coverageGapIntervals ? `${coverageGapIntervals} intervals with gaps` : "✓ Every interval covered"}</span><small>{coverageExactIntervals} exact-fit intervals</small></div></summary>
