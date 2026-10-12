@@ -66,6 +66,11 @@ type WeeklyMetricRow = {
   week_end: string;
   metrics: Record<string, unknown>;
 };
+type HistoricalKpiResult = {
+  store_id: string;
+  week_end: string;
+  metrics: Record<string, unknown>;
+};
 type SharedForecast = {
   store_id: string;
   store: string;
@@ -342,9 +347,63 @@ function goalStatus(actualText: string, goal: number | null, lowerIsBetter = fal
   return lowerIsBetter ? (actual <= goal ? "Yes" : "No") : (actual >= goal ? "Yes" : "No");
 }
 
+function weightedAverage(values: number[]) {
+  if (!values.length) return null;
+  const denominator = values.reduce((sum, _value, index) => sum + index + 1, 0);
+  return values.reduce((sum, value, index) => sum + value * (index + 1), 0) / denominator;
+}
+
+function projectedTrajectory(history: HistoricalKpiResult[], key: string) {
+  const values = history
+    .map((row) => numericValue(row.metrics[key]))
+    .filter((value): value is number => value !== null)
+    .slice(-8);
+  if (!values.length) return null;
+  if (values.length === 1) return values[0];
+  const xAverage = (values.length - 1) / 2;
+  const yAverage = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const numerator = values.reduce((sum, value, index) => sum + (index - xAverage) * (value - yAverage), 0);
+  const denominator = values.reduce((sum, _value, index) => sum + ((index - xAverage) ** 2), 0);
+  const slope = denominator ? numerator / denominator : 0;
+  const recentAverage = weightedAverage(values) ?? values.at(-1)!;
+  const predicted = recentAverage + slope * 0.65;
+  const range = Math.max(Math.abs(recentAverage) * 0.12, Math.max(...values) - Math.min(...values));
+  return Math.max(recentAverage - range, Math.min(recentAverage + range, predicted));
+}
+
+function suggestedGoal(history: HistoricalKpiResult[], key: string, trajectory: number | null, lowerIsBetter: boolean, minimumStep: number) {
+  if (trajectory === null) return null;
+  const values = history
+    .map((row) => numericValue(row.metrics[key]))
+    .filter((value): value is number => value !== null)
+    .slice(-6);
+  if (!values.length) return trajectory;
+  const recentAverage = weightedAverage(values) ?? trajectory;
+  const best = lowerIsBetter ? Math.min(...values) : Math.max(...values);
+  const step = Math.max(Math.abs(recentAverage) * 0.01, minimumStep);
+  if (lowerIsBetter) {
+    const improved = Math.min(trajectory, recentAverage) - step;
+    return Math.max(improved, best * 0.98);
+  }
+  const improved = Math.max(trajectory, recentAverage) + step;
+  return Math.min(improved, best * 1.02);
+}
+
+function roundedGoal(value: number | null, increment: number) {
+  if (value === null) return "";
+  return String(Math.round(value / increment) * increment);
+}
+
+function preciseGoal(value: number | null, decimals: number) {
+  if (value === null) return "";
+  return String(Number(value.toFixed(decimals)));
+}
+
 function databaseCommitment(
   result: { store_id: string; week_end: string; metrics: Record<string, unknown>; stores?: { name?: string } | Array<{ name?: string }> | null },
   goalRow?: { goals?: Record<string, unknown>; focus_area?: string; action_plan?: string; owner?: string },
+  history: HistoricalKpiResult[] = [],
+  forecast?: { weekly_projection?: { projected_sales?: number } } | null,
 ): Commitment {
   const metrics = result.metrics ?? {};
   const goals = goalRow?.goals ?? {};
@@ -362,6 +421,18 @@ function databaseCommitment(
   const foodActual = metricText(metrics, "food_difference_percent", "Pending");
   const loadActual = metricText(metrics, "avg_load", "Pending");
   const adtActual = metricText(metrics, "avg_adt", "Pending");
+  const salesTrajectoryValue = Number(forecast?.weekly_projection?.projected_sales) || projectedTrajectory(history, "royalty_sales");
+  const laborTrajectoryValue = projectedTrajectory(history, "labor_percent");
+  const splhTrajectoryValue = projectedTrajectory(history, "splh");
+  const foodTrajectoryValue = projectedTrajectory(history, "food_difference_percent");
+  const loadTrajectoryValue = projectedTrajectory(history, "avg_load");
+  const adtTrajectoryValue = projectedTrajectory(history, "avg_adt");
+  const salesSuggested = roundedGoal(salesTrajectoryValue, 100);
+  const laborSuggested = preciseGoal(suggestedGoal(history, "labor_percent", laborTrajectoryValue, true, 0.002), 4);
+  const splhSuggested = preciseGoal(suggestedGoal(history, "splh", splhTrajectoryValue, false, 0.25), 2);
+  const foodSuggested = preciseGoal(suggestedGoal(history, "food_difference_percent", foodTrajectoryValue, true, 0.001), 4);
+  const loadSuggested = preciseGoal(suggestedGoal(history, "avg_load", loadTrajectoryValue, true, 0.1), 2);
+  const adtSuggested = preciseGoal(suggestedGoal(history, "avg_adt", adtTrajectoryValue, true, 0.25), 2);
   const metric = (trajectory: string, suggested: string, supervisor: number | null, actual: string, lowerIsBetter = false): KpiMetric => ({
     trajectory, suggested_goal: suggested, supervisor_goal: supervisor,
     actual, final_goal: supervisor === null ? suggested : String(supervisor),
@@ -370,19 +441,19 @@ function databaseCommitment(
   const commitment: Commitment = {
     store_id: result.store_id, source: "database", row_number: 0, week_end: result.week_end, store,
     sales: {
-      model_projection: metricText(metrics, "sales_projection"),
-      recommended_goal: metricText(metrics, "sales_recommended_goal"),
+      model_projection: preciseGoal(salesTrajectoryValue, 2),
+      recommended_goal: salesSuggested,
       supervisor_goal: salesGoal,
       actual: salesActual,
-      final_goal: salesGoal === null ? metricText(metrics, "sales_recommended_goal") : String(salesGoal),
-      variance: "", variance_percent: "", status: goalStatus(salesActual, salesGoal ?? numericValue(metricText(metrics, "sales_recommended_goal"))),
+      final_goal: salesGoal === null ? salesSuggested : String(salesGoal),
+      variance: "", variance_percent: "", status: goalStatus(salesActual, salesGoal ?? numericValue(salesSuggested)),
     },
     accountability: { focus_area: goalRow?.focus_area ?? "", action_plan: goalRow?.action_plan ?? "", owner: goalRow?.owner ?? "" },
-    labor: metric(metricText(metrics, "labor_trajectory"), metricText(metrics, "labor_recommended_goal"), laborGoal, laborActual, true),
-    splh: metric(metricText(metrics, "splh_trajectory"), metricText(metrics, "splh_recommended_goal"), splhGoal, splhActual),
-    food_variance: metric(metricText(metrics, "food_variance_trajectory"), metricText(metrics, "food_variance_recommended_goal"), foodGoal, foodActual, true),
-    load: metric(metricText(metrics, "load_trajectory"), metricText(metrics, "load_recommended_goal"), loadGoal, loadActual, true),
-    adt: metric(metricText(metrics, "adt_trajectory"), metricText(metrics, "adt_recommended_goal"), adtGoal, adtActual, true),
+    labor: metric(preciseGoal(laborTrajectoryValue, 4), laborSuggested, laborGoal, laborActual, true),
+    splh: metric(preciseGoal(splhTrajectoryValue, 2), splhSuggested, splhGoal, splhActual),
+    food_variance: metric(preciseGoal(foodTrajectoryValue, 4), foodSuggested, foodGoal, foodActual, true),
+    load: metric(preciseGoal(loadTrajectoryValue, 2), loadSuggested, loadGoal, loadActual, true),
+    adt: metric(preciseGoal(adtTrajectoryValue, 2), adtSuggested, adtGoal, adtActual, true),
     extreme_orders: { actual: metricText(metrics, "extreme_order_percent", "Pending"), goal: metricText(metrics, "extreme_order_goal", "1.0%"), status: "Pending" },
     overall_status: "Pending",
   };
@@ -460,13 +531,29 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       return;
     }
 
-    const [resultRows, goalRows] = await Promise.all([
+    const commitmentWeekEnd = addIsoDays(weekEnd, 7);
+    const planningWeekStart = addIsoDays(weekEnd, 1);
+    const [resultRows, goalRows, historyRows, forecastRows] = await Promise.all([
       supabase.from("kpi_weekly_results").select("store_id,week_end,metrics,stores(name)").eq("week_end", weekEnd),
-      supabase.from("kpi_goal_commitments").select("store_id,goals,focus_area,action_plan,owner").eq("week_end", weekEnd),
+      supabase.from("kpi_goal_commitments").select("store_id,goals,focus_area,action_plan,owner").eq("week_end", commitmentWeekEnd),
+      supabase.from("kpi_weekly_results").select("store_id,week_end,metrics").gte("week_end", addIsoDays(weekEnd, -77)).lte("week_end", weekEnd).order("week_end", { ascending: true }),
+      supabase.from("demand_forecast_runs").select("store_id,weekly_projection").eq("week_start", planningWeekStart).eq("is_current", true),
     ]);
     if (!resultRows.error) {
       const goalsByStore = new Map((goalRows.data ?? []).map((item) => [item.store_id, item]));
-      const rows = (resultRows.data ?? []).map((item) => databaseCommitment(item as Parameters<typeof databaseCommitment>[0], goalsByStore.get(item.store_id)));
+      const historyByStore = new Map<string, HistoricalKpiResult[]>();
+      for (const item of historyRows.data ?? []) {
+        const existing = historyByStore.get(item.store_id) ?? [];
+        existing.push(item as HistoricalKpiResult);
+        historyByStore.set(item.store_id, existing);
+      }
+      const forecastsByStoreId = new Map((forecastRows.data ?? []).map((item) => [item.store_id, item]));
+      const rows = (resultRows.data ?? []).map((item) => databaseCommitment(
+        item as Parameters<typeof databaseCommitment>[0],
+        goalsByStore.get(item.store_id),
+        historyByStore.get(item.store_id) ?? [],
+        forecastsByStoreId.get(item.store_id),
+      ));
       setCommitments(rows); setSelectedStore((current) => rows.length === 0 ? current : rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setCommitmentsLoading(false); return;
     }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_commitments", week_end: weekEnd } });
@@ -563,12 +650,12 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     const percentage = (value: string) => value.trim() === "" ? null : Number(value) / 100;
     if (selected.source === "database" && selected.store_id) {
       const { error: databaseError } = await supabase.from("kpi_goal_commitments").upsert({
-        store_id: selected.store_id, week_end: weekEnd,
+        store_id: selected.store_id, week_end: addIsoDays(weekEnd, 7),
         goals: { sales: numeric(draft.supervisor_sales_goal), labor: percentage(draft.supervisor_labor_goal), splh: numeric(draft.supervisor_splh_goal), food_variance: percentage(draft.supervisor_food_variance_goal), load: numeric(draft.supervisor_load_goal), adt: numeric(draft.supervisor_adt_goal) },
         focus_area: draft.focus_area, action_plan: draft.action_plan, owner: draft.owner, updated_by: profile.id, updated_at: new Date().toISOString(),
       }, { onConflict: "store_id,week_end" });
       if (databaseError) { setError(databaseError.message); setSaving(false); return; }
-      setMessage(`Store ${selected.store} commitment saved in Dash-OS.`); setSaving(false); await loadCommitments(); return;
+      setMessage(`Store ${selected.store} commitment saved in Dash-OS.`); setSaving(false); await Promise.all([loadCommitments(), loadSharedForecasts()]); return;
     }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", {
       body: {
@@ -600,12 +687,12 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   };
 
   const metrics = selected ? [
-    ["Sales", selected.sales.model_projection, selected.sales.recommended_goal, selected.sales.final_goal, selected.sales.actual, selected.sales.status],
-    ["Labor", selected.labor.trajectory, selected.labor.suggested_goal, selected.labor.final_goal, selected.labor.actual, selected.labor.status],
-    ["SPLH", selected.splh.trajectory, selected.splh.suggested_goal, selected.splh.final_goal, selected.splh.actual, selected.splh.status],
-    ["Food variance", selected.food_variance.trajectory, selected.food_variance.suggested_goal, selected.food_variance.final_goal, selected.food_variance.actual, selected.food_variance.status],
-    ["Load", selected.load.trajectory, selected.load.suggested_goal, selected.load.final_goal, selected.load.actual, selected.load.status],
-    ["ADT", selected.adt.trajectory, selected.adt.suggested_goal, selected.adt.final_goal, selected.adt.actual, selected.adt.status],
+    { name: "Sales", trajectory: selected.sales.model_projection, suggested: selected.sales.recommended_goal, finalGoal: selected.sales.final_goal, actual: selected.sales.actual, status: selected.sales.status, overridden: selected.sales.supervisor_goal !== null },
+    { name: "Labor", trajectory: selected.labor.trajectory, suggested: selected.labor.suggested_goal, finalGoal: selected.labor.final_goal, actual: selected.labor.actual, status: selected.labor.status, overridden: selected.labor.supervisor_goal !== null },
+    { name: "SPLH", trajectory: selected.splh.trajectory, suggested: selected.splh.suggested_goal, finalGoal: selected.splh.final_goal, actual: selected.splh.actual, status: selected.splh.status, overridden: selected.splh.supervisor_goal !== null },
+    { name: "Food variance", trajectory: selected.food_variance.trajectory, suggested: selected.food_variance.suggested_goal, finalGoal: selected.food_variance.final_goal, actual: selected.food_variance.actual, status: selected.food_variance.status, overridden: selected.food_variance.supervisor_goal !== null },
+    { name: "Load", trajectory: selected.load.trajectory, suggested: selected.load.suggested_goal, finalGoal: selected.load.final_goal, actual: selected.load.actual, status: selected.load.status, overridden: selected.load.supervisor_goal !== null },
+    { name: "ADT", trajectory: selected.adt.trajectory, suggested: selected.adt.suggested_goal, finalGoal: selected.adt.final_goal, actual: selected.adt.actual, status: selected.adt.status, overridden: selected.adt.supervisor_goal !== null },
   ] : [];
   const rankings = ordered(scopedCommitments);
   const scopedForecasts = sharedForecasts.filter((forecast) => viewLevel === "company" || (viewLevel === "supervisor" && selectedGroup?.stores.includes(forecast.store)) || (viewLevel === "store" && forecast.store === selectedStore));
@@ -702,21 +789,21 @@ export default function KPITracker({ profile }: { profile: Profile }) {
             <section className="panel table-panel kpi-leaderboard"><div className="table-toolbar"><div><p className="eyebrow">Friendly competition</p><h2>{viewLevel === "company" ? "Company leaderboard" : `${selectedGroup?.name ?? "Supervisor"} leaderboard`}</h2><p>Ranked by the share of measured weekly goals achieved.</p></div></div><div className="responsive-table"><table><thead><tr><th>Rank</th><th>Store</th><th>Goal score</th><th>Forecast</th><th>Confidence</th><th>Sales</th><th>Labor</th><th>Load</th><th>ADT</th><th>Overall</th></tr></thead><tbody>{rankings.map((item, index) => { const itemScore = score(item); const forecast = forecastsByStore.get(item.store); return <tr key={item.store}><td><span className={`rank-badge rank-${index + 1}`}>{index + 1}</span></td><td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>{storeLabel(item.store)}</button></td><td><strong>{itemScore.percent === null ? "Pending" : `${itemScore.percent}%`}</strong><small className="kpi-score-detail">{itemScore.hits} of {itemScore.total} measured</small></td><td>{forecast ? formatCurrency(Number(forecast.weekly_projection.projected_sales || 0), 2) : "Not generated"}</td><td>{forecast ? <span className={`forecast-confidence ${forecast.confidence_level}`}>{forecast.confidence_score.toFixed(0)}%</span> : "—"}</td><td>{displayCommitmentValue("Sales", item.sales.actual, "Pending")}</td><td>{displayCommitmentValue("Labor", item.labor.actual, "Pending")}</td><td>{displayCommitmentValue("Load", item.load.actual, "Pending")}</td><td>{displayCommitmentValue("ADT", item.adt.actual, "Pending")}</td><td><span className={`kpi-overall ${item.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{item.overall_status || "Pending"}</span></td></tr>; })}</tbody></table></div></section>
           ) : selected && (
             <div className="kpi-layout">
-              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">{storeLabel(selected.store)}</p><h2>Weekly performance plan</h2></div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Trajectory</th><th>Suggested</th><th>Final goal</th><th>Actual</th><th>Status</th></tr></thead><tbody>{metrics.map(([name, trajectory, suggested, finalGoal, actual, status]) => <tr key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong></td><td>{displayCommitmentValue(name, actual, "Pending")}</td><td><span className={`kpi-status ${String(status).toLowerCase()}`}>{status || "Pending"}</span></td></tr>)}</tbody></table></div></section>
+              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">{storeLabel(selected.store)}</p><h2>Weekly performance plan</h2><p>Planning {formatWeekRange(addIsoDays(weekEnd, 1), addIsoDays(weekEnd, 7))} from recent results and the shared sales forecast.</p></div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Trajectory</th><th>Suggested</th><th>Commitment</th><th>Previous actual</th><th>Baseline status</th></tr></thead><tbody>{metrics.map(({ name, trajectory, suggested, finalGoal, actual, status, overridden }) => <tr key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong><small className={`kpi-goal-source ${overridden ? "supervisor" : "suggested"}`}>{overridden ? "Supervisor override" : "Suggested default"}</small></td><td>{displayCommitmentValue(name, actual, "Pending")}</td><td><span className={`kpi-status ${String(status).toLowerCase()}`}>{status || "Pending"}</span></td></tr>)}</tbody></table></div></section>
               <form className="panel kpi-editor" onSubmit={save}>
                 <div className="panel-heading"><div><p className="eyebrow">Supervisor commitment</p><h2>Set the weekly plan</h2></div><Target size={23} /></div>
                 <div className="kpi-goal-grid">
-                  <label>Sales goal<div className="kpi-input-affix prefix"><span>$</span><input type="number" step="1" value={draft.supervisor_sales_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_sales_goal: event.target.value })} /></div></label>
-                  <label>Labor goal<div className="kpi-input-affix suffix"><input type="number" step="0.1" value={draft.supervisor_labor_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_labor_goal: event.target.value })} /><span>%</span></div></label>
-                  <label>SPLH goal<div className="kpi-input-affix prefix"><span>$</span><input type="number" step="0.01" value={draft.supervisor_splh_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_splh_goal: event.target.value })} /></div></label>
-                  <label>Food variance goal<div className="kpi-input-affix suffix"><input type="number" step="0.1" value={draft.supervisor_food_variance_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_food_variance_goal: event.target.value })} /><span>%</span></div></label>
-                  <label>Load goal<input type="number" step="0.1" value={draft.supervisor_load_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_load_goal: event.target.value })} /></label>
-                  <label>ADT goal<input type="number" step="0.1" value={draft.supervisor_adt_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_adt_goal: event.target.value })} /></label>
+                  <label>Sales goal<div className="kpi-input-affix prefix"><span>$</span><input type="number" step="1" value={draft.supervisor_sales_goal} placeholder={selected.sales.recommended_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_sales_goal: event.target.value })} /></div><small>Blank uses the suggested goal.</small></label>
+                  <label>Labor goal<div className="kpi-input-affix suffix"><input type="number" step="0.1" value={draft.supervisor_labor_goal} placeholder={formatPercent(numericValue(selected.labor.suggested_goal)).replace("%", "")} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_labor_goal: event.target.value })} /><span>%</span></div><small>Blank uses the suggested goal.</small></label>
+                  <label>SPLH goal<div className="kpi-input-affix prefix"><span>$</span><input type="number" step="0.01" value={draft.supervisor_splh_goal} placeholder={selected.splh.suggested_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_splh_goal: event.target.value })} /></div><small>Blank uses the suggested goal.</small></label>
+                  <label>Food variance goal<div className="kpi-input-affix suffix"><input type="number" step="0.1" value={draft.supervisor_food_variance_goal} placeholder={formatPercent(numericValue(selected.food_variance.suggested_goal)).replace("%", "")} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_food_variance_goal: event.target.value })} /><span>%</span></div><small>Blank uses the suggested goal.</small></label>
+                  <label>Load goal<input type="number" step="0.1" value={draft.supervisor_load_goal} placeholder={selected.load.suggested_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_load_goal: event.target.value })} /><small>Blank uses the suggested goal.</small></label>
+                  <label>ADT goal<input type="number" step="0.1" value={draft.supervisor_adt_goal} placeholder={selected.adt.suggested_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_adt_goal: event.target.value })} /><small>Blank uses the suggested goal.</small></label>
                 </div>
                 <label>Focus area<select value={draft.focus_area} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, focus_area: event.target.value })}><option value="">Select a focus</option>{focusAreas.map((area) => <option key={area}>{area}</option>)}</select></label>
                 <label>Owner<input value={draft.owner} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, owner: event.target.value })} placeholder="Person accountable for the plan" /></label>
                 <label>Action plan<textarea rows={5} value={draft.action_plan} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, action_plan: event.target.value })} placeholder="What will the store do differently this week?" /></label>
-                {canEditSelected ? <button className="button primary full" disabled={saving}><Save size={17} />{saving ? "Saving to Google Sheets…" : "Save commitment"}</button> : <p className="security-note">You can compare this store, but only administrators or the assigned supervisor can edit its goals.</p>}
+                {canEditSelected ? <button className="button primary full" disabled={saving}><Save size={17} />{saving ? "Saving commitment…" : "Save commitment"}</button> : <p className="security-note">You can compare this store, but only administrators or the assigned supervisor can edit its goals.</p>}
               </form>
             </div>
           )}

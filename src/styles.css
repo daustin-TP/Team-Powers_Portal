@@ -280,9 +280,13 @@ tbody tr:last-child td { border-bottom: 0; }
 .kpi-status { display:inline-flex; min-width:58px; justify-content:center; border-radius:999px; padding:.25rem .5rem; background:#edf0f3; font-size:.7rem; font-weight:800; }
 .kpi-status.yes { background:#dff3e7; color:#276646; }
 .kpi-status.no { background:#ffe7e4; color:#9d332c; }
+.kpi-goal-source { display:block; width:max-content; margin-top:.28rem; border-radius:999px; padding:.18rem .42rem; font-size:.62rem; font-weight:850; letter-spacing:.025em; }
+.kpi-goal-source.suggested { background:#e8f3fc; color:#075a9f; }
+.kpi-goal-source.supervisor { background:#eee5fb; color:#64409a; }
 .kpi-editor { display:grid; gap:1rem; position:sticky; top:1.2rem; border-top:4px solid var(--dash-blue); }
 .kpi-editor .panel-heading { margin:0; }
 .kpi-goal-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+.kpi-goal-grid label>small { display:block; margin-top:.3rem; color:var(--muted); font-size:.66rem; font-weight:600; }
 .kpi-editor textarea { min-height:120px; }
 .spin { animation:dash-spin 1s linear infinite; }
 @keyframes dash-spin { to { transform:rotate(360deg); } }
