@@ -554,7 +554,6 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     row.required_managers = 1;
     const rawInsiders = Math.max(0, (row.projected_oven_items - managerCapacity) / insiderCapacity);
     const baseInsiders = Math.floor(rawInsiders);
-    const storeHours = hours.get(row.day_of_week);
     const intervalMinute = storeHours ? businessMinute(row.interval_start, timeMinutes(storeHours.open)) : timeMinutes(row.interval_start);
     const morningEnd = 14 * 60;
     const nearNextInsider = intervalMinute < morningEnd && rawInsiders > 0 && rawInsiders - baseInsiders >= 0.75;
