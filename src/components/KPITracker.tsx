@@ -69,6 +69,7 @@ type WeeklyMetricRow = {
 type SharedForecast = {
   store_id: string;
   store: string;
+  week_start: string;
   confidence_score: number;
   confidence_level: "low" | "moderate" | "high";
   weekly_projection: { projected_sales?: number; low_sales?: number; high_sales?: number; projected_orders?: number };
@@ -159,6 +160,11 @@ function addIsoDays(value: string, days: number) {
   const date = new Date(`${value}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+function formatWeekRange(start: string, end: string) {
+  const format = (value: string) => new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`));
+  return `${format(start)}–${format(end)}`;
 }
 
 function demoMetric(trajectory: string, suggested: string, supervisor: number): KpiMetric {
@@ -390,6 +396,8 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   const [commitments, setCommitments] = useState<Commitment[]>([]);
   const [weeklyMetrics, setWeeklyMetrics] = useState<WeeklyMetricRow[]>([]);
   const [sharedForecasts, setSharedForecasts] = useState<SharedForecast[]>([]);
+  const [nextWeekForecasts, setNextWeekForecasts] = useState<SharedForecast[]>([]);
+  const [currentGoalCount, setCurrentGoalCount] = useState(0);
   const [weeklyMetricsError, setWeeklyMetricsError] = useState("");
   const [selectedStore, setSelectedStore] = useState("");
   const [selectedSupervisor, setSelectedSupervisor] = useState("");
@@ -515,14 +523,22 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   };
 
   const loadSharedForecasts = async () => {
-    if (!isSupabaseConfigured || !supabase) { setSharedForecasts([]); return; }
-    const { data, error: forecastError } = await supabase.from("demand_forecast_runs").select("store_id,confidence_score,confidence_level,weekly_projection,stores(name,store_number)").eq("week_start", addIsoDays(weekEnd, -6)).eq("is_current", true);
-    if (forecastError) { setSharedForecasts([]); return; }
-    setSharedForecasts((data ?? []).map((row) => {
+    if (!isSupabaseConfigured || !supabase) { setSharedForecasts([]); setNextWeekForecasts([]); setCurrentGoalCount(0); return; }
+    const currentWeekStart = addIsoDays(weekEnd, 1);
+    const nextWeekStart = addIsoDays(weekEnd, 8);
+    const [forecastResult, goalsResult] = await Promise.all([
+      supabase.from("demand_forecast_runs").select("store_id,week_start,confidence_score,confidence_level,weekly_projection,stores(name,store_number)").in("week_start", [currentWeekStart, nextWeekStart]).eq("is_current", true),
+      supabase.from("kpi_goal_commitments").select("id", { count: "exact", head: true }).eq("week_end", addIsoDays(weekEnd, 7)),
+    ]);
+    if (forecastResult.error) { setSharedForecasts([]); setNextWeekForecasts([]); return; }
+    const rows = (forecastResult.data ?? []).map((row) => {
       const storeRecord = Array.isArray(row.stores) ? row.stores[0] : row.stores;
       const storeNumber = String(storeRecord?.store_number ?? String(storeRecord?.name ?? "").match(/\b\d{4}\b/)?.[0] ?? "");
-      return { store_id: row.store_id, store: storeNumber, confidence_score: Number(row.confidence_score), confidence_level: row.confidence_level, weekly_projection: row.weekly_projection ?? {} } as SharedForecast;
-    }).filter((row) => row.store));
+      return { store_id: row.store_id, store: storeNumber, week_start: row.week_start, confidence_score: Number(row.confidence_score), confidence_level: row.confidence_level, weekly_projection: row.weekly_projection ?? {} } as SharedForecast;
+    }).filter((row) => row.store);
+    setSharedForecasts(rows.filter((row) => row.week_start === currentWeekStart));
+    setNextWeekForecasts(rows.filter((row) => row.week_start === nextWeekStart));
+    setCurrentGoalCount(goalsResult.count ?? 0);
   };
 
   useEffect(() => {
@@ -598,6 +614,9 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   const projectedLowTotal = scopedForecasts.reduce((sum, forecast) => sum + Number(forecast.weekly_projection.low_sales || 0), 0);
   const projectedHighTotal = scopedForecasts.reduce((sum, forecast) => sum + Number(forecast.weekly_projection.high_sales || 0), 0);
   const averageForecastConfidence = scopedForecasts.length ? scopedForecasts.reduce((sum, forecast) => sum + forecast.confidence_score, 0) / scopedForecasts.length : 0;
+  const scopedNextForecasts = nextWeekForecasts.filter((forecast) => viewLevel === "company" || (viewLevel === "supervisor" && selectedGroup?.stores.includes(forecast.store)) || (viewLevel === "store" && forecast.store === selectedStore));
+  const nextProjectedSalesTotal = scopedNextForecasts.reduce((sum, forecast) => sum + Number(forecast.weekly_projection.projected_sales || 0), 0);
+  const nextAverageConfidence = scopedNextForecasts.length ? scopedNextForecasts.reduce((sum, forecast) => sum + forecast.confidence_score, 0) / scopedNextForecasts.length : 0;
   const goalsMet = scopedCommitments.reduce((total, item) => total + score(item).hits, 0);
   const measuredGoals = scopedCommitments.reduce((total, item) => total + score(item).total, 0);
   const detailTotals = weeklyMetricDefinitions.map((definition) => ({
@@ -623,7 +642,13 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     <div className="page kpi-page">
       <section className="page-heading heading-with-action">
         <div><p className="eyebrow">Performance command center</p><h1>KPI Dashboard</h1><p>Compare the company, focus on a supervisor group, or open one store’s weekly plan.</p></div>
-        <div className="kpi-week-controls"><label>Week ending<input type="date" value={weekEnd} onChange={(event) => setWeekEnd(event.target.value)} /></label><button className="button secondary" onClick={() => void refreshCurrentView()} disabled={currentLoading}><RefreshCw size={17} /> Refresh</button></div>
+        <div className="kpi-week-controls"><label>Results week ending<input type="date" value={weekEnd} onChange={(event) => setWeekEnd(event.target.value)} /></label><button className="button secondary" onClick={() => void refreshCurrentView()} disabled={currentLoading}><RefreshCw size={17} /> Refresh</button></div>
+      </section>
+
+      <section className="kpi-planning-horizon">
+        <article className="actual"><span>Reviewing actuals</span><strong>{formatWeekRange(addIsoDays(weekEnd, -6), weekEnd)}</strong><small>Completed Monday–Sunday results</small></article>
+        <article className="current"><span>Current week</span><strong>{formatWeekRange(addIsoDays(weekEnd, 1), addIsoDays(weekEnd, 7))}</strong><small>{sharedForecasts.length} forecasts · {currentGoalCount} goal plans</small></article>
+        <article className="next"><span>Following week</span><strong>{formatWeekRange(addIsoDays(weekEnd, 8), addIsoDays(weekEnd, 14))}</strong><small>{nextWeekForecasts.length} advance forecasts</small></article>
       </section>
 
       {error && <p className="inline-message kpi-error">{error}</p>}
@@ -641,6 +666,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       {viewLevel === "store" && storeTabs.length > 0 && (
         <div className="kpi-store-tabs" role="tablist" aria-label="Store selection">{storeTabs.map((item) => <button role="tab" aria-selected={selectedStore === item.store} className={selectedStore === item.store ? "active" : ""} key={item.store} onClick={() => setSelectedStore(item.store)}>{storeLabel(item.store)}<span>{item.status}</span></button>)}</div>
       )}
+      {scopedNextForecasts.length > 0 && <section className="kpi-forward-forecast"><div><span>Following-week outlook</span><strong>{formatCurrency(nextProjectedSalesTotal, 2)}</strong><small>{scopedNextForecasts.length} store{scopedNextForecasts.length === 1 ? "" : "s"} · {nextAverageConfidence.toFixed(0)}% average confidence</small></div><p>Use this early view to start staffing and sales planning before the week becomes current.</p></section>}
 
       {currentLoading ? (
         <div className="empty-card"><RefreshCw className="spin" /><h2>{dashboardMode === "details" ? "Loading weekly KPI results…" : "Loading KPI commitments…"}</h2></div>

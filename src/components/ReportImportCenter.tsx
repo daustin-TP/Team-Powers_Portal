@@ -4,7 +4,7 @@ import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 
 type Store = { id: string; name: string };
-type Family = "kpi_weekly" | "labor_sales" | "labor_oven_items" | "labor_deliveries" | "labor_baseline_bundle";
+type Family = "kpi_weekly" | "labor_sales" | "labor_oven_items" | "labor_deliveries" | "labor_baseline_bundle" | "auto_detect";
 type Batch = {
   id: string; report_family: Family; period_end: string; original_filename: string;
   status: string; row_count: number; error_message: string | null; created_at: string;
@@ -17,7 +17,10 @@ const familyLabels: Record<Family, string> = {
   labor_oven_items: "Labor · All Oven Items",
   labor_deliveries: "Labor · Delivery Orders",
   labor_baseline_bundle: "Labor · Historical ZIP (all stores)",
+  auto_detect: "Automatic weekly import",
 };
+
+type BulkResult = { name: string; status: "ready" | "needs_review" | "failed" | "duplicate"; detail: string };
 
 function latestSunday() {
   const date = new Date();
@@ -40,6 +43,10 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [bulkFiles, setBulkFiles] = useState<File[]>([]);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ complete: 0, total: 0 });
+  const [bulkResults, setBulkResults] = useState<BulkResult[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -55,6 +62,66 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
     setStores(nextStores); setStoreId((current) => current || nextStores[0]?.id || ""); setBatches((batchResult.data ?? []) as Batch[]); setLoading(false);
   };
   useEffect(() => { void load(); }, []);
+
+  const processAutomaticFile = async (selectedFile: File): Promise<BulkResult> => {
+    if (!supabase) return { name: selectedFile.name, status: "failed", detail: "Supabase is not connected." };
+    try {
+      const fingerprint = await sha256(selectedFile);
+      const { data: duplicate, error: duplicateError } = await supabase.from("report_import_batches")
+        .select("id,status,report_family").eq("period_end", periodEnd).eq("file_hash", fingerprint)
+        .order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (duplicateError) throw duplicateError;
+      if (duplicate && duplicate.status !== "failed") {
+        return { name: selectedFile.name, status: "duplicate", detail: `Already ${String(duplicate.status).replace("_", " ")}.` };
+      }
+
+      let batchId = duplicate?.id as string | undefined;
+      if (batchId) {
+        const { error: retryError } = await supabase.from("report_import_batches").update({
+          report_family: "auto_detect", store_id: null, status: "uploaded", error_message: null, warnings: [], completed_at: null,
+        }).eq("id", batchId);
+        if (retryError) throw retryError;
+      } else {
+        const safeName = selectedFile.name.replace(/[^a-z0-9._-]+/gi, "-");
+        const storagePath = `bulk/${periodEnd}/${crypto.randomUUID()}-${safeName}`;
+        const { error: storageError } = await supabase.storage.from("operating-reports").upload(storagePath, selectedFile, { contentType: selectedFile.type || undefined, upsert: false });
+        if (storageError) throw storageError;
+        const { data: batch, error: insertError } = await supabase.from("report_import_batches").insert({
+          store_id: null, report_family: "auto_detect", period_end: periodEnd, original_filename: selectedFile.name,
+          storage_path: storagePath, file_hash: fingerprint, status: "uploaded", uploaded_by: profile.id,
+        }).select("id").single();
+        if (insertError) throw insertError;
+        batchId = batch.id;
+      }
+
+      const { data, error: invokeError } = await supabase.functions.invoke("report-import", { body: { batch_id: batchId } });
+      if (invokeError || !data?.ok) throw new Error(data?.error || invokeError?.message || "Automated processing failed.");
+      const status = data.status === "needs_review" ? "needs_review" : "ready";
+      const report = familyLabels[data.detectedFamily as Family] ?? "Wizardline report";
+      const store = data.metadata?.storeNumber ? ` · Store ${data.metadata.storeNumber}` : "";
+      return { name: selectedFile.name, status, detail: `${report}${store} · ${data.rowCount ?? 0} records` };
+    } catch (cause) {
+      return { name: selectedFile.name, status: "failed", detail: cause instanceof Error ? cause.message : String(cause) };
+    }
+  };
+
+  const bulkUpload = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!bulkFiles.length) { setError("Choose the weekly Wizardline Excel files first."); return; }
+    setBulkUploading(true); setError(""); setMessage(""); setBulkResults([]); setBulkProgress({ complete: 0, total: bulkFiles.length });
+    const results: BulkResult[] = [];
+    for (let index = 0; index < bulkFiles.length; index += 3) {
+      const groupResults = await Promise.all(bulkFiles.slice(index, index + 3).map(processAutomaticFile));
+      results.push(...groupResults); setBulkResults([...results]); setBulkProgress({ complete: results.length, total: bulkFiles.length });
+    }
+    const ready = results.filter((result) => result.status === "ready").length;
+    const review = results.filter((result) => result.status === "needs_review").length;
+    const duplicates = results.filter((result) => result.status === "duplicate").length;
+    const failed = results.filter((result) => result.status === "failed").length;
+    setMessage(`${ready + review} files processed${review ? ` (${review} need review)` : ""}${duplicates ? `, ${duplicates} already loaded` : ""}${failed ? `, ${failed} failed` : ""}.`);
+    if (failed) setError("Some files could not be processed. Their exact errors are shown below.");
+    setBulkUploading(false); await load();
+  };
 
   const upload = async (event: FormEvent) => {
     event.preventDefault();
@@ -99,11 +166,20 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
       <section className="page-heading"><p className="eyebrow">Monday workflow</p><h1>Weekly Data Imports</h1><p>Upload the original Wizardline reports directly to Dash-OS. The system keeps the source file, validates it, and writes clean historical records to Supabase—no spreadsheet copying required.</p></section>
       {error && <p className="inline-message labor-error"><AlertTriangle size={18} />{error}</p>}
       {message && <p className="inline-message labor-success"><CheckCircle2 size={18} />{message}</p>}
+      <form className="panel bulk-import-panel" onSubmit={bulkUpload}>
+        <div className="panel-heading"><div><p className="eyebrow">Recommended weekly workflow</p><h2>Upload every store at once</h2><p>Select all 36 labor reports plus the company KPI workbook. Dash-OS reads the store, report type, and dates from each original file.</p></div><UploadCloud size={27} /></div>
+        <div className="bulk-import-controls">
+          <label>Week ending<input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} required /></label>
+          <label className="file-drop bulk-file-drop"><FileSpreadsheet /><span>{bulkFiles.length ? `${bulkFiles.length} files selected` : "Choose all weekly Excel files"}</span><input type="file" accept=".xlsx,.xls" multiple onChange={(event) => setBulkFiles(Array.from(event.target.files ?? []))} required /></label>
+          <button className="button primary" disabled={bulkUploading || !isSupabaseConfigured}><UploadCloud size={17} />{bulkUploading ? `Processing ${bulkProgress.complete} of ${bulkProgress.total}…` : "Upload weekly packet"}</button>
+        </div>
+        {bulkResults.length > 0 && <div className="bulk-import-results">{bulkResults.map((result) => <div className={`bulk-import-result ${result.status}`} key={`${result.name}-${result.detail}`}><strong>{result.name}</strong><span>{result.detail}</span></div>)}</div>}
+      </form>
       <div className="import-layout">
         <form className="panel import-form" onSubmit={upload}>
           <div className="panel-heading"><div><p className="eyebrow">Add a report</p><h2>Upload original file</h2></div><UploadCloud size={25} /></div>
           <label>Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)} required><option value="">Select store</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>
-          <label>Report type<select value={family} onChange={(event) => { const next = event.target.value as Family; setFamily(next); if (next === "labor_baseline_bundle") { const allStores = stores.find((store) => store.name === "All Stores"); if (allStores) setStoreId(allStores.id); } }}>{Object.entries(familyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label>Report type<select value={family} onChange={(event) => { const next = event.target.value as Family; setFamily(next); if (next === "labor_baseline_bundle") { const allStores = stores.find((store) => store.name === "All Stores"); if (allStores) setStoreId(allStores.id); } }}>{Object.entries(familyLabels).filter(([value]) => value !== "auto_detect").map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label>{family === "kpi_weekly" ? "Week ending" : "Report period ending"}<input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} required /></label>
           <label className="file-drop"><FileSpreadsheet /><span>{file ? file.name : "Choose PDF, Excel, CSV, or ZIP report"}</span><input type="file" accept=".pdf,.xlsx,.xls,.csv,.zip" onChange={(event) => setFile(event.target.files?.[0] ?? null)} required /></label>
           <div className="import-guidance"><strong>Wizardline report checklist</strong><span>Weekly Summary · 15-minute intervals · original Excel file</span><span>Labor requires Sales, All Oven Items, and Delivery Orders for each store.</span><span>For a historical backfill, choose Historical ZIP and upload every store report together.</span><span>One-week reports save actual results. Multi-week Monday–Sunday reports automatically become seasonal averages.</span><span>Keep daylight and non-daylight dates in separate ZIPs.</span><span>KPI uses the same weekly operations report currently provided on Monday.</span></div>
@@ -111,7 +187,7 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
           {!isSupabaseConfigured && <p className="security-note">Connect Supabase to enable live imports.</p>}
         </form>
         <section className="panel table-panel import-history"><div className="table-toolbar"><div><p className="eyebrow">Audit trail</p><h2>Recent uploads</h2><p>Duplicate files are detected by store, report type, period, and file fingerprint.</p></div><button className="button secondary" onClick={() => void load()} disabled={loading}><RefreshCw size={17} />Refresh</button></div>
-          {loading ? <div className="activity-empty">Loading import history…</div> : batches.length === 0 ? <div className="activity-empty">No reports uploaded yet.</div> : <div className="responsive-table"><table><thead><tr><th>Store</th><th>Report</th><th>Period</th><th>File</th><th>Status</th><th>Rows</th></tr></thead><tbody>{batches.map((batch) => { const store = Array.isArray(batch.stores) ? batch.stores[0]?.name : batch.stores?.name; return <tr key={batch.id}><td>{store || "—"}</td><td>{familyLabels[batch.report_family]}</td><td>{batch.period_end}</td><td>{batch.original_filename}</td><td><span className={`import-status ${batch.status}`}>{batch.status.replace("_", " ")}</span>{batch.error_message && <small>{batch.error_message}</small>}</td><td>{batch.row_count || "—"}</td></tr>; })}</tbody></table></div>}
+          {loading ? <div className="activity-empty">Loading import history…</div> : batches.length === 0 ? <div className="activity-empty">No reports uploaded yet.</div> : <div className="responsive-table"><table><thead><tr><th>Store</th><th>Report</th><th>Period</th><th>File</th><th>Status</th><th>Rows</th></tr></thead><tbody>{batches.map((batch) => { const store = Array.isArray(batch.stores) ? batch.stores[0]?.name : batch.stores?.name; return <tr key={batch.id}><td>{store || (batch.report_family === "kpi_weekly" ? "All Stores" : "—")}</td><td>{familyLabels[batch.report_family] ?? batch.report_family}</td><td>{batch.period_end}</td><td>{batch.original_filename}</td><td><span className={`import-status ${batch.status}`}>{batch.status.replace("_", " ")}</span>{batch.error_message && <small>{batch.error_message}</small>}</td><td>{batch.row_count || "—"}</td></tr>; })}</tbody></table></div>}
         </section>
       </div>
     </div>

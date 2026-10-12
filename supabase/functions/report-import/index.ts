@@ -10,7 +10,7 @@ const corsHeaders = {
 type Batch = {
   id: string;
   store_id: string | null;
-  report_family: "kpi_weekly" | "labor_sales" | "labor_oven_items" | "labor_deliveries" | "labor_baseline_bundle";
+  report_family: "kpi_weekly" | "labor_sales" | "labor_oven_items" | "labor_deliveries" | "labor_baseline_bundle" | "auto_detect";
   period_end: string;
   storage_path: string;
 };
@@ -331,17 +331,24 @@ Deno.serve(async (request) => {
     if (fileError || !file) throw fileError ?? new Error("Uploaded report could not be downloaded.");
     const fileBuffer = await file.arrayBuffer();
     let result;
+    let detectedFamily: Batch["report_family"] = batch.report_family;
     if (batch.report_family === "labor_baseline_bundle") {
       result = await importLaborBundle(admin, batch as Batch, fileBuffer);
     } else {
       const grid = firstSheet(fileBuffer);
       const detected = detectFamily(grid);
-      if (detected !== batch.report_family) throw new Error(`The selected report type was ${batch.report_family}, but the file layout is ${detected}.`);
-      result = detected === "kpi_weekly" ? await importKpi(admin, batch as Batch, grid) : await importLabor(admin, batch as Batch, grid);
+      detectedFamily = detected;
+      if (batch.report_family !== "auto_detect" && detected !== batch.report_family) throw new Error(`The selected report type was ${batch.report_family}, but the file layout is ${detected}.`);
+      const detectedBatch = { ...batch, store_id: batch.report_family === "auto_detect" ? null : batch.store_id, report_family: detected } as Batch;
+      result = detected === "kpi_weekly" ? await importKpi(admin, detectedBatch, grid) : await importLabor(admin, detectedBatch, grid);
+      const detectedStoreNumber = result.metadata?.storeNumber;
+      let detectedStoreId: string | null = null;
+      if (detectedStoreNumber) detectedStoreId = (await storeMap(admin)).get(String(detectedStoreNumber)) ?? null;
+      await admin.from("report_import_batches").update({ report_family: detected, store_id: detectedStoreId }).eq("id", batch.id);
     }
     const status = result.warnings.length ? "needs_review" : "ready";
     await admin.from("report_import_batches").update({ status, row_count: result.rowCount, warnings: result.warnings, completed_at: new Date().toISOString() }).eq("id", batch.id);
-    return new Response(JSON.stringify({ ok: true, status, ...result }), { headers });
+    return new Response(JSON.stringify({ ok: true, status, detectedFamily, ...result }), { headers });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     try {
