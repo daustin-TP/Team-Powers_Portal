@@ -383,10 +383,10 @@ function suggestedGoal(history: HistoricalKpiResult[], key: string, trajectory: 
   const step = Math.max(Math.abs(recentAverage) * 0.01, minimumStep);
   if (lowerIsBetter) {
     const improved = Math.min(trajectory, recentAverage) - step;
-    return Math.max(improved, best * 0.98);
+    return Math.min(trajectory, Math.max(improved, best * 0.98));
   }
   const improved = Math.max(trajectory, recentAverage) + step;
-  return Math.min(improved, best * 1.02);
+  return Math.max(trajectory, Math.min(improved, best * 1.02));
 }
 
 function roundedGoal(value: number | null, increment: number) {
