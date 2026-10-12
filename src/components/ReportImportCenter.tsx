@@ -29,6 +29,12 @@ function latestSunday() {
   return date.toISOString().slice(0, 10);
 }
 
+function addIsoDays(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 async function sha256(file: File) {
   const hash = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
   return Array.from(new Uint8Array(hash)).map((value) => value.toString(16).padStart(2, "0")).join("");
@@ -118,7 +124,21 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
     const review = results.filter((result) => result.status === "needs_review").length;
     const duplicates = results.filter((result) => result.status === "duplicate").length;
     const failed = results.filter((result) => result.status === "failed").length;
-    setMessage(`${ready + review} files processed${review ? ` (${review} need review)` : ""}${duplicates ? `, ${duplicates} already loaded` : ""}${failed ? `, ${failed} failed` : ""}.`);
+    let forecastsReady = 0;
+    let forecastsFailed = 0;
+    if (ready + review + duplicates > 0 && supabase) {
+      const storeWeeks = stores.filter((store) => store.name !== "All Stores").flatMap((store) => [
+        { storeId: store.id, weekStart: addIsoDays(periodEnd, 1) },
+        { storeId: store.id, weekStart: addIsoDays(periodEnd, 8) },
+      ]);
+      for (let index = 0; index < storeWeeks.length; index += 3) {
+        const group = await Promise.all(storeWeeks.slice(index, index + 3).map(({ storeId, weekStart }) =>
+          supabase!.functions.invoke("forecast-engine", { body: { action: "generate", store_id: storeId, week_start: weekStart } })));
+        forecastsReady += group.filter((result) => !result.error && result.data?.ok).length;
+        forecastsFailed += group.filter((result) => result.error || !result.data?.ok).length;
+      }
+    }
+    setMessage(`${ready + review} files processed${review ? ` (${review} need review)` : ""}${duplicates ? `, ${duplicates} already loaded` : ""}${failed ? `, ${failed} failed` : ""}. ${forecastsReady} current and advance store forecasts refreshed${forecastsFailed ? `; ${forecastsFailed} could not be generated` : ""}.`);
     if (failed) setError("Some files could not be processed. Their exact errors are shown below.");
     setBulkUploading(false); await load();
   };
