@@ -323,6 +323,76 @@ function optimizeDriverShifts(
     }));
 }
 
+function optimizeInsiderClosingShifts(
+  shifts: SuggestedShift[],
+  points: Array<{ minute: number; need: number }>,
+  openMinute: number,
+  windowStart: number,
+  windowEnd: number,
+  maximum: number,
+) {
+  type InsiderDraft = { start: number; end: number; note: string };
+  const toBusinessMinute = (time: string) => {
+    const minute = timeMinutes(time);
+    return minute < openMinute ? minute + 1440 : minute;
+  };
+  let drafts: InsiderDraft[] = shifts.map((shift) => {
+    const start = toBusinessMinute(shift.start_time);
+    let end = toBusinessMinute(shift.end_time);
+    if (end <= start) end += 1440;
+    return { start, end, note: shift.notes };
+  });
+  const preferredLatestStart = businessMinute("18:00", openMinute);
+
+  const safelyCoversDemand = (remove: number[], start: number, end: number) => points.every((point) => {
+    const existing = drafts.reduce((count, shift) => count + (point.minute >= shift.start && point.minute < shift.end ? 1 : 0), 0);
+    const removed = remove.reduce((count, index) => count + (point.minute >= drafts[index].start && point.minute < drafts[index].end ? 1 : 0), 0);
+    const replacement = point.minute >= start && point.minute < end ? 1 : 0;
+    return existing - removed + replacement >= point.need;
+  });
+
+  while (true) {
+    const lateCloserIndexes = [...drafts.keys()].filter((index) => drafts[index].end >= windowEnd - 15 && drafts[index].start > preferredLatestStart);
+    const candidates: Array<{ earlier: number; closer: number; start: number; end: number; added: number }> = [];
+    for (const closer of lateCloserIndexes) {
+      for (let earlier = 0; earlier < drafts.length; earlier += 1) {
+        if (earlier === closer || drafts[earlier].start > preferredLatestStart || drafts[earlier].start >= drafts[closer].start) continue;
+        const start = drafts[earlier].start;
+        const end = Math.max(drafts[earlier].end, drafts[closer].end);
+        if (end - start > maximum || !safelyCoversDemand([earlier, closer], start, end)) continue;
+        const previous = drafts[earlier].end - drafts[earlier].start + drafts[closer].end - drafts[closer].start;
+        candidates.push({ earlier, closer, start, end, added: end - start - previous });
+      }
+    }
+    const best = candidates.sort((left, right) => left.added - right.added || right.start - left.start)[0];
+    if (!best) break;
+    drafts = drafts.filter((_, index) => index !== best.earlier && index !== best.closer);
+    drafts.push({ start: best.start, end: best.end, note: "Closing insider coverage · existing shift extended" });
+  }
+
+  drafts = drafts.map((shift) => {
+    const isClosing = shift.end >= windowEnd - 15;
+    if (!isClosing || shift.start <= preferredLatestStart) return shift;
+    const earliestAllowedByMaximum = shift.end - maximum;
+    if (earliestAllowedByMaximum > preferredLatestStart) return shift;
+    const start = Math.max(windowStart, earliestAllowedByMaximum, Math.min(shift.start, preferredLatestStart));
+    return { ...shift, start, note: "Closing insider coverage · start moved to 6:00 PM" };
+  });
+
+  return drafts
+    .sort((left, right) => left.start - right.start || left.end - right.end)
+    .map((shift) => ({
+      week_plan_id: shifts[0]?.week_plan_id ?? "",
+      day_of_week: shifts[0]?.day_of_week ?? 0,
+      role: "insider" as const,
+      start_time: clockTime(shift.start),
+      end_time: clockTime(shift.end),
+      assigned_member_id: null,
+      source: "suggested" as const,
+      notes: shift.note,
+    }));
+}
+
 function buildManagerShifts(planId: string, day: number, openMinute: number, closeMinute: number, settings: ForecastSettings): SuggestedShift[] {
   const start = openMinute - (Number(settings.manager_preopen_minutes) || 60);
   const end = closeMinute + (Number(settings.manager_postclose_minutes) || 60);
@@ -379,6 +449,7 @@ function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], h
       }
       const roleMaximum = role === "driver" && !settings.opening_driver_through_rush ? Math.min(maximum, 360) : maximum;
       let roleShifts = buildCoverageShifts(planId, day, role, points, windowStart, windowEnd, minimum, roleMaximum, role === "insider" ? "Oven demand coverage · rounded down except near-threshold mornings" : "Delivery demand coverage");
+      if (role === "insider" && roleShifts.length) roleShifts = optimizeInsiderClosingShifts(roleShifts, points, openMinute, windowStart, windowEnd, maximum);
       if (role === "driver" && roleShifts.length) roleShifts = optimizeDriverShifts(roleShifts, points, openMinute, windowStart, windowEnd, maximum, Boolean(settings.opening_driver_through_rush));
       if (role === "driver" && settings.late_driver_rule === "second_closer") roleShifts.forEach((shift) => { if (shift.end_time === clockTime(windowEnd)) shift.notes = "Second closing driver coverage"; });
       shifts.push(...roleShifts);
@@ -683,7 +754,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("demand_forecast_runs").update({ is_current: false, status: "superseded", updated_at: new Date().toISOString() }).eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true);
   const { data: run, error: runError } = await admin.from("demand_forecast_runs").insert({
-    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v4",
+    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v5",
     confidence_score: score, confidence_level: confidenceLevel(score), confidence_reasons: reasons,
     input_summary: {
       baseline_sets: baselineSets.length, baseline_weeks: baselineWeeks, recent_kpi_weeks: kpiRows.length,
@@ -714,7 +785,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   let editedPlanPreserved = false;
   if (!existingPlan || existingPlan.status !== "published") {
     const { data: plan, error: planError } = await admin.from("labor_week_plans").upsert({
-      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v4", forecast_run_id: run.id,
+      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v5", forecast_run_id: run.id,
       created_by: userId, updated_at: new Date().toISOString(),
     }, { onConflict: "store_id,week_start" }).select("id").single();
     if (planError || !plan) throw planError ?? new Error("The labor week plan could not be prepared.");
@@ -757,7 +828,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v4", manual_weekly_sales: manualWeeklySales },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v5", manual_weekly_sales: manualWeeklySales },
   });
 
   return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved };
