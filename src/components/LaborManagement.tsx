@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarDays,
@@ -277,6 +277,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const schedulePrintRef = useRef<HTMLDivElement>(null);
 
   const selectedStore = stores.find((store) => store.id === storeId);
   const minorShiftLimit = Math.min(5.75, Number(settings.minor_break_after_hours) || 5.75);
@@ -674,6 +676,80 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   });
   const roleDayHours = (role: LaborRole, day: number) => shifts.filter((shift) => shift.role === role && shift.day_of_week === day).reduce((sum, shift) => sum + shiftHours(shift), 0);
   const requiredRoleDayHours = (role: LaborRole, day: number) => demandIntervals.filter((interval) => interval.day_of_week === day).reduce((sum, interval) => sum + Number(interval[`required_${role}s` as "required_managers" | "required_insiders" | "required_drivers"] || 0) * .25, 0);
+  const openLandscapePdf = async () => {
+    const sheet = schedulePrintRef.current;
+    if (!sheet || exportingPdf) return;
+    const previewWindow = window.open("", "_blank");
+    if (previewWindow) {
+      previewWindow.document.title = "Preparing schedule PDF";
+      previewWindow.document.body.innerHTML = '<p style="font:600 16px Arial;padding:24px">Preparing your landscape schedule…</p>';
+    }
+    setExportingPdf(true);
+    setError("");
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
+      const canvas = await html2canvas(sheet, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        windowWidth: Math.max(1360, sheet.scrollWidth),
+        onclone: (documentClone) => {
+          const clonedSheet = documentClone.querySelector<HTMLElement>(".schedule-print-sheet");
+          if (clonedSheet) {
+            clonedSheet.style.width = "1360px";
+            clonedSheet.style.maxWidth = "none";
+            clonedSheet.style.margin = "0";
+            clonedSheet.style.boxShadow = "none";
+          }
+        },
+      });
+      const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter", compress: true });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 18;
+      const imageWidth = pageWidth - margin * 2;
+      const imageScale = imageWidth / canvas.width;
+      const maximumSliceHeight = Math.floor((pageHeight - margin * 2) / imageScale);
+      const sheetRect = sheet.getBoundingClientRect();
+      const canvasScale = canvas.height / Math.max(1, sheet.scrollHeight);
+      const rowBreaks = Array.from(sheet.querySelectorAll("tr, .schedule-print-footer"))
+        .map((element) => Math.round((element.getBoundingClientRect().bottom - sheetRect.top) * canvasScale))
+        .filter((position) => position > 0 && position < canvas.height)
+        .sort((left, right) => left - right);
+      let sourceY = 0;
+      let pageIndex = 0;
+      while (sourceY < canvas.height) {
+        const idealEnd = Math.min(canvas.height, sourceY + maximumSliceHeight);
+        const safeBreaks = rowBreaks.filter((position) => position > sourceY + maximumSliceHeight * .55 && position <= idealEnd);
+        const sourceEnd = idealEnd === canvas.height ? canvas.height : (safeBreaks.at(-1) || idealEnd);
+        const sliceHeight = Math.max(1, sourceEnd - sourceY);
+        const slice = document.createElement("canvas");
+        slice.width = canvas.width;
+        slice.height = sliceHeight;
+        slice.getContext("2d")?.drawImage(canvas, 0, sourceY, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
+        if (pageIndex > 0) pdf.addPage("letter", "landscape");
+        pdf.addImage(slice.toDataURL("image/jpeg", .94), "JPEG", margin, margin, imageWidth, sliceHeight * imageScale, undefined, "FAST");
+        sourceY = sourceEnd;
+        pageIndex += 1;
+      }
+      const filename = `${(selectedStore?.name || "Store").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")}-${weekStart}-schedule.pdf`;
+      const url = URL.createObjectURL(pdf.output("blob"));
+      if (previewWindow) {
+        previewWindow.location.href = url;
+        window.setTimeout(() => URL.revokeObjectURL(url), 120000);
+      } else {
+        pdf.save(filename);
+        URL.revokeObjectURL(url);
+      }
+      setMessage("Landscape schedule PDF created. It is ready to review and print.");
+    } catch (pdfError) {
+      previewWindow?.close();
+      setError(pdfError instanceof Error ? pdfError.message : "The landscape schedule PDF could not be created.");
+    } finally {
+      setExportingPdf(false);
+    }
+  };
 
   return (
     <div className="page labor-page">
@@ -733,12 +809,12 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
           </section>
           {showPrintPreview && <div className="modal-backdrop labor-print-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowPrintPreview(false); }}>
             <section className="labor-print-modal" role="dialog" aria-modal="true" aria-labelledby="labor-print-title">
-              <div className="labor-print-actions no-print"><div><p className="eyebrow">Pre-publish review</p><h2 id="labor-print-title">Printable week at a glance</h2><p>Review the draft below, then print a physical copy or choose “Save as PDF” in your browser.</p></div><div className="button-row"><button className="button secondary" onClick={() => setShowPrintPreview(false)}><X size={17} />Close</button><button className="button primary" onClick={() => window.print()}><Printer size={17} />Print / Save PDF</button></div></div>
-              <div className="schedule-print-sheet">
+              <div className="labor-print-actions no-print"><div><p className="eyebrow">Pre-publish review</p><h2 id="labor-print-title">Printable week at a glance</h2><p>Open the prepared landscape PDF, then print it or save it. Page size and orientation are set automatically.</p></div><div className="button-row"><button className="button secondary" onClick={() => setShowPrintPreview(false)}><X size={17} />Close</button><button className="button primary" onClick={() => void openLandscapePdf()} disabled={exportingPdf}><Printer size={17} />{exportingPdf ? "Preparing PDF…" : "Open landscape PDF"}</button></div></div>
+              <div className="schedule-print-sheet" ref={schedulePrintRef}>
                 <header className="schedule-print-header"><div><p>Team Powers · DASH-OS</p><h1>{selectedStore?.name || "Store"} Weekly Schedule</h1><strong>{formatWeek(weekStart)} – {formatWeek(weekEnd)}</strong></div><div><span className={`print-plan-status ${planStatus}`}>{planStatus === "published" ? "Published" : "Draft · Not published"}</span><small>Prepared by {profile.fullName}</small><small>Printed {new Date().toLocaleString()}</small></div></header>
                 <div className="print-change-legend"><strong>Shift key</strong><span className="system">System generated</span><span className="adjusted">✎ Adjusted</span><span className="added">+ Added</span><span className="open">OPEN = unassigned</span></div>
                 <table className="schedule-print-table">
-                  <thead><tr className="print-store-hours"><th>Store hours</th>{days.map((day, dayIndex) => { const hours = storeHours.find((item) => item.day_of_week === dayIndex); return <th key={day}>{hours ? `${displayTime(hours.open_time)}–${displayTime(hours.close_time)}` : "—"}</th>; })}<th>Week</th></tr><tr><th>Employee</th>{days.map((day) => <th key={day}>{day}</th>)}<th>Hours</th></tr></thead>
+                  <thead><tr className="print-store-hours"><th>Store hours</th>{days.map((day, dayIndex) => { const hours = storeHours.find((item) => item.day_of_week === dayIndex); return <th key={day}>{hours ? `${displayTime(hours.open_time)}–${displayTime(hours.close_time)}` : "—"}</th>; })}<th rowSpan={2} className="print-week-hours">Week<br />hours</th></tr><tr><th>Employee</th>{days.map((day) => <th key={day}>{day}</th>)}</tr></thead>
                   <tbody>{printableRows.map(({ role, rows }) => <Fragment key={role}><tr className={`print-role-heading ${role}`}><th colSpan={9}>{role === "driver" ? "Delivery Experts" : `${role[0].toUpperCase()}${role.slice(1)}s`}</th></tr>{rows.length === 0 ? <tr><td className="print-empty-row">No {role} shifts</td>{days.map((day) => <td key={day}>—</td>)}<td>0.00</td></tr> : rows.map((row) => <tr key={row.key}><th>{row.name}</th>{days.map((day, dayIndex) => <td key={day}>{row.shifts.filter((shift) => shift.day_of_week === dayIndex).map((shift) => { const status = shiftPrintStatus(shift); return <span key={shift.id} className={`print-shift ${status}`}><b>{displayTime(shift.start_time)}–{displayTime(shift.end_time)}</b>{status === "adjusted" ? <small>✎ Adjusted</small> : status === "added" ? <small>+ Added</small> : null}</span>; })}</td>)}<td className="print-hours-total">{row.shifts.reduce((sum, shift) => sum + shiftHours(shift), 0).toFixed(2)}</td></tr>)}<tr className="print-role-total"><th>Coverage needed</th>{days.map((day, dayIndex) => <td key={day}>{requiredRoleDayHours(role, dayIndex).toFixed(2)}</td>)}<td>{days.reduce((sum, _, dayIndex) => sum + requiredRoleDayHours(role, dayIndex), 0).toFixed(2)}</td></tr><tr className="print-role-total scheduled"><th>Hours scheduled</th>{days.map((day, dayIndex) => <td key={day}>{roleDayHours(role, dayIndex).toFixed(2)}</td>)}<td>{shifts.filter((shift) => shift.role === role).reduce((sum, shift) => sum + shiftHours(shift), 0).toFixed(2)}</td></tr></Fragment>)}
                     <tr className="print-grand-total"><th>Grand total hours</th>{days.map((day, dayIndex) => <td key={day}>{shifts.filter((shift) => shift.day_of_week === dayIndex).reduce((sum, shift) => sum + shiftHours(shift), 0).toFixed(2)}</td>)}<td>{totalHours.toFixed(2)}</td></tr>
                     <tr className="print-sales-total"><th>Forecast sales</th>{days.map((day, dayIndex) => <td key={day}>${Number(projections.find((projection) => projection.day_of_week === dayIndex)?.projected_sales || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>)}<td>${weeklySales.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td></tr>
