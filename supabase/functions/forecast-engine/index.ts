@@ -328,6 +328,7 @@ function optimizeInsiderClosingShifts(
   points: Array<{ minute: number; need: number }>,
   openMinute: number,
   windowStart: number,
+  minimum: number,
   maximum: number,
 ) {
   type InsiderDraft = { start: number; end: number; note: string };
@@ -374,6 +375,30 @@ function optimizeInsiderClosingShifts(
     const start = Math.max(windowStart, preferredLatestStart);
     return { ...shift, start, note: shift.end - start <= maximum ? "Closing insider coverage · start moved to 6:00 PM" : "Closing insider coverage · extended from the latest standard start" };
   });
+
+  // A short late demand increase can create a new minimum-length shift. When that
+  // shift is merged into an earlier rush shift, retaining its original ending
+  // leaves hours of coverage after the final interval that actually needs it.
+  // Trim FIFO (earliest start first) while preserving every required interval and
+  // the store's minimum shift length.
+  const trimOrder = [...drafts.keys()].sort((left, right) => drafts[left].start - drafts[right].start || drafts[left].end - drafts[right].end);
+  for (const index of trimOrder) {
+    const originalEnd = drafts[index].end;
+    const minimumEnd = drafts[index].start + minimum;
+    for (let candidateEnd = minimumEnd; candidateEnd <= originalEnd; candidateEnd += 15) {
+      const coversDemand = points.every((point) => {
+        const coverage = drafts.reduce((count, shift, shiftIndex) => {
+          const end = shiftIndex === index ? candidateEnd : shift.end;
+          return count + (point.minute >= shift.start && point.minute < end ? 1 : 0);
+        }, 0);
+        return coverage >= point.need;
+      });
+      if (!coversDemand) continue;
+      drafts[index].end = candidateEnd;
+      if (candidateEnd < originalEnd) drafts[index].note = `${drafts[index].note} · trimmed after final required interval`;
+      break;
+    }
+  }
 
   return drafts
     .sort((left, right) => left.start - right.start || left.end - right.end)
@@ -454,7 +479,7 @@ function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], h
       }
       const roleMaximum = role === "driver" && !settings.opening_driver_through_rush ? Math.min(maximum, 360) : maximum;
       let roleShifts = buildCoverageShifts(planId, day, role, points, windowStart, windowEnd, minimum, roleMaximum, role === "insider" ? "Oven demand coverage · rounded down except near-threshold mornings" : "Delivery demand coverage");
-      if (role === "insider" && roleShifts.length) roleShifts = optimizeInsiderClosingShifts(roleShifts, points, openMinute, windowStart, maximum);
+      if (role === "insider" && roleShifts.length) roleShifts = optimizeInsiderClosingShifts(roleShifts, points, openMinute, windowStart, minimum, maximum);
       if (role === "driver" && roleShifts.length) roleShifts = optimizeDriverShifts(roleShifts, points, openMinute, windowStart, windowEnd, maximum, Boolean(settings.opening_driver_through_rush));
       if (role === "driver" && settings.late_driver_rule === "second_closer") roleShifts.forEach((shift) => { if (shift.end_time === clockTime(windowEnd)) shift.notes = "Second closing driver coverage"; });
       shifts.push(...roleShifts);
