@@ -186,6 +186,7 @@ function optimizeDriverShifts(
   windowStart: number,
   windowEnd: number,
   maximum: number,
+  allowOpeningThroughRush: boolean,
 ) {
   type DriverDraft = { start: number; end: number; note: string };
   const toBusinessMinute = (time: string) => {
@@ -201,6 +202,9 @@ function optimizeDriverShifts(
   const preferredLatestStart = 18 * 60 + 30;
   const preferredMinimumClosingLength = Math.min(360, maximum);
   const preferredMaximumClosingLength = Math.min(480, maximum);
+  const preferredMinimumDayLength = Math.min(360, maximum);
+  const rushStart = businessMinute("16:00", openMinute);
+  const rushEnd = businessMinute("20:00", openMinute);
 
   const safelyCoversDemand = (remove: number[], start: number, end: number) => points.every((point) => {
     const existing = drafts.reduce((count, shift) => count + (point.minute >= shift.start && point.minute < shift.end ? 1 : 0), 0);
@@ -230,6 +234,38 @@ function optimizeDriverShifts(
     }
   };
 
+  const combineOpeningCoverage = () => {
+    if (!allowOpeningThroughRush) return;
+    while (true) {
+      const earlyOrder = [...drafts.keys()]
+        .filter((index) => drafts[index].start <= openMinute + 240)
+        .sort((left, right) => drafts[left].start - drafts[right].start || left - right);
+      const candidates: Array<{ early: number; later: number; start: number; end: number; savings: number; preference: number }> = [];
+      for (const early of earlyOrder) {
+        for (let later = 0; later < drafts.length; later += 1) {
+          if (early === later || drafts[later].start < drafts[early].start || drafts[later].start > preferredLatestStart) continue;
+          const start = drafts[early].start;
+          const end = Math.max(drafts[early].end, drafts[later].end);
+          const length = end - start;
+          if (length < preferredMinimumDayLength || length > maximum || end <= rushStart || start >= rushEnd) continue;
+          const previous = drafts[early].end - drafts[early].start + drafts[later].end - drafts[later].start;
+          const savings = previous - length;
+          if (savings < 15 || !safelyCoversDemand([early, later], start, end)) continue;
+          const earlyPosition = earlyOrder.indexOf(early);
+          // When coverage permits, the second daytime driver is the preferred
+          // through-rush shift; FIFO lets the first driver leave first.
+          const preference = earlyPosition === 1 ? 0 : earlyPosition === 0 ? 1 : earlyPosition + 1;
+          candidates.push({ early, later, start, end, savings, preference });
+        }
+      }
+      const best = candidates.sort((left, right) => right.savings - left.savings || left.preference - right.preference || left.start - right.start)[0];
+      if (!best) break;
+      drafts = drafts.filter((_, index) => index !== best.early && index !== best.later);
+      drafts.push({ start: best.start, end: best.end, note: "Day driver through rush · later short shift consolidated" });
+    }
+  };
+
+  combineOpeningCoverage();
   combineClosingCoverage();
   drafts = drafts.map((shift) => {
     const isClosing = shift.end >= windowEnd - 15;
@@ -315,7 +351,7 @@ function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], h
       }
       const roleMaximum = role === "driver" && !settings.opening_driver_through_rush ? Math.min(maximum, 360) : maximum;
       let roleShifts = buildCoverageShifts(planId, day, role, points, windowStart, windowEnd, minimum, roleMaximum, role === "insider" ? "Oven demand coverage · rounded down except near-threshold mornings" : "Delivery demand coverage");
-      if (role === "driver" && roleShifts.length) roleShifts = optimizeDriverShifts(roleShifts, points, openMinute, windowStart, windowEnd, maximum);
+      if (role === "driver" && roleShifts.length) roleShifts = optimizeDriverShifts(roleShifts, points, openMinute, windowStart, windowEnd, maximum, Boolean(settings.opening_driver_through_rush));
       if (role === "driver" && settings.late_driver_rule === "second_closer") roleShifts.forEach((shift) => { if (shift.end_time === clockTime(windowEnd)) shift.notes = "Second closing driver coverage"; });
       shifts.push(...roleShifts);
     }
