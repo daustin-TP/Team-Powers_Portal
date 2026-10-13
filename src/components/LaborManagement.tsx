@@ -664,9 +664,12 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       name: members.find((member) => member.id === memberId)?.display_name || "Inactive employee",
       shifts: roleShifts.filter((shift) => shift.assigned_member_id === memberId),
     })).sort((left, right) => left.name.localeCompare(right.name));
-    const openRows = roleShifts.filter((shift) => !shift.assigned_member_id)
-      .sort((left, right) => left.day_of_week - right.day_of_week || left.start_time.localeCompare(right.start_time))
-      .map((shift, index) => ({ key: `${role}-open-${shift.id}`, name: `OPEN SHIFT ${index + 1}`, shifts: [shift] }));
+    const openShiftsByDay = days.map((_, dayIndex) => roleShifts.filter((shift) => !shift.assigned_member_id && shift.day_of_week === dayIndex).sort((left, right) => left.start_time.localeCompare(right.start_time)));
+    const openRows = Array.from({ length: Math.max(0, ...openShiftsByDay.map((dayShifts) => dayShifts.length)) }, (_, index) => ({
+      key: `${role}-open-${index}`,
+      name: `OPEN SHIFT ${index + 1}`,
+      shifts: openShiftsByDay.flatMap((dayShifts) => dayShifts[index] ? [dayShifts[index]] : []),
+    }));
     return { role, rows: [...assignedRows, ...openRows] };
   });
   const roleDayHours = (role: LaborRole, day: number) => shifts.filter((shift) => shift.role === role && shift.day_of_week === day).reduce((sum, shift) => sum + shiftHours(shift), 0);
