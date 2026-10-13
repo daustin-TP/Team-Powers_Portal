@@ -808,20 +808,29 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     if (planDailyError || planIntervalError) throw planDailyError ?? planIntervalError;
 
     const [{ data: existingShifts, error: existingShiftError }, { data: structuralChanges, error: structuralChangeError }] = await Promise.all([
-      admin.from("labor_shifts").select("id,source,assigned_member_id").eq("week_plan_id", plan.id),
-      admin.from("labor_shift_changes").select("id").eq("week_plan_id", plan.id).limit(1),
+      admin.from("labor_shifts").select("id,day_of_week,role,source,assigned_member_id").eq("week_plan_id", plan.id),
+      admin.from("labor_shift_changes").select("id,shift_id,day_of_week,role").eq("week_plan_id", plan.id),
     ]);
     if (existingShiftError || structuralChangeError) throw existingShiftError ?? structuralChangeError;
-    const hasStructuralChanges = Boolean(structuralChanges?.length);
-    const safeToRebuild = !hasStructuralChanges && (existingShifts ?? []).every((shift) => shift.source === "suggested" && !shift.assigned_member_id);
-    editedPlanPreserved = hasStructuralChanges;
-    if (safeToRebuild) {
-      const { error: deleteShiftError } = await admin.from("labor_shifts").delete().eq("week_plan_id", plan.id).eq("source", "suggested");
-      if (deleteShiftError) throw deleteShiftError;
-      const suggestedShifts = buildSuggestedShifts(plan.id, rawIntervals, hours, settings);
-      if (suggestedShifts.length) {
-        const { error: insertShiftError } = await admin.from("labor_shifts").insert(suggestedShifts);
-        if (insertShiftError) throw insertShiftError;
+    const groupKey = (day: number, role: string) => `${day}|${role}`;
+    const protectedGroups = new Set<string>();
+    for (const shift of existingShifts ?? []) {
+      if (shift.source !== "suggested" || shift.assigned_member_id) protectedGroups.add(groupKey(shift.day_of_week, shift.role));
+    }
+    for (const change of structuralChanges ?? []) protectedGroups.add(groupKey(change.day_of_week, change.role));
+    editedPlanPreserved = protectedGroups.size > 0;
+
+    const suggestedShifts = buildSuggestedShifts(plan.id, rawIntervals, hours, settings);
+    for (let day = 0; day < 7; day += 1) {
+      for (const role of ["manager", "insider", "driver"] as const) {
+        if (protectedGroups.has(groupKey(day, role))) continue;
+        const { error: deleteShiftError } = await admin.from("labor_shifts").delete().eq("week_plan_id", plan.id).eq("day_of_week", day).eq("role", role);
+        if (deleteShiftError) throw deleteShiftError;
+        const replacements = suggestedShifts.filter((shift) => shift.day_of_week === day && shift.role === role);
+        if (replacements.length) {
+          const { error: insertShiftError } = await admin.from("labor_shifts").insert(replacements);
+          if (insertShiftError) throw insertShiftError;
+        }
       }
     }
   }
