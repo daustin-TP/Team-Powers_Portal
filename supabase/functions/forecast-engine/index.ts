@@ -212,7 +212,6 @@ function optimizeDriverShifts(
   points: Array<{ minute: number; need: number }>,
   openMinute: number,
   windowStart: number,
-  windowEnd: number,
   maximum: number,
   allowOpeningThroughRush: boolean,
 ) {
@@ -352,7 +351,7 @@ function optimizeInsiderClosingShifts(
   });
 
   while (true) {
-    const lateCloserIndexes = [...drafts.keys()].filter((index) => drafts[index].end >= windowEnd - 15 && drafts[index].start > preferredLatestStart);
+    const lateCloserIndexes = [...drafts.keys()].filter((index) => drafts[index].start > preferredLatestStart);
     const candidates: Array<{ earlier: number; closer: number; start: number; end: number; added: number }> = [];
     for (const closer of lateCloserIndexes) {
       for (let earlier = 0; earlier < drafts.length; earlier += 1) {
@@ -371,8 +370,7 @@ function optimizeInsiderClosingShifts(
   }
 
   drafts = drafts.map((shift) => {
-    const isClosing = shift.end >= windowEnd - 15;
-    if (!isClosing || shift.start <= preferredLatestStart) return shift;
+    if (shift.start <= preferredLatestStart) return shift;
     const earliestAllowedByMaximum = shift.end - maximum;
     if (earliestAllowedByMaximum > preferredLatestStart) return shift;
     const start = Math.max(windowStart, earliestAllowedByMaximum, Math.min(shift.start, preferredLatestStart));
@@ -449,7 +447,7 @@ function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], h
       }
       const roleMaximum = role === "driver" && !settings.opening_driver_through_rush ? Math.min(maximum, 360) : maximum;
       let roleShifts = buildCoverageShifts(planId, day, role, points, windowStart, windowEnd, minimum, roleMaximum, role === "insider" ? "Oven demand coverage · rounded down except near-threshold mornings" : "Delivery demand coverage");
-      if (role === "insider" && roleShifts.length) roleShifts = optimizeInsiderClosingShifts(roleShifts, points, openMinute, windowStart, windowEnd, maximum);
+      if (role === "insider" && roleShifts.length) roleShifts = optimizeInsiderClosingShifts(roleShifts, points, openMinute, windowStart, maximum);
       if (role === "driver" && roleShifts.length) roleShifts = optimizeDriverShifts(roleShifts, points, openMinute, windowStart, windowEnd, maximum, Boolean(settings.opening_driver_through_rush));
       if (role === "driver" && settings.late_driver_rule === "second_closer") roleShifts.forEach((shift) => { if (shift.end_time === clockTime(windowEnd)) shift.notes = "Second closing driver coverage"; });
       shifts.push(...roleShifts);
@@ -754,7 +752,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("demand_forecast_runs").update({ is_current: false, status: "superseded", updated_at: new Date().toISOString() }).eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true);
   const { data: run, error: runError } = await admin.from("demand_forecast_runs").insert({
-    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v5",
+    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v6",
     confidence_score: score, confidence_level: confidenceLevel(score), confidence_reasons: reasons,
     input_summary: {
       baseline_sets: baselineSets.length, baseline_weeks: baselineWeeks, recent_kpi_weeks: kpiRows.length,
@@ -785,7 +783,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   let editedPlanPreserved = false;
   if (!existingPlan || existingPlan.status !== "published") {
     const { data: plan, error: planError } = await admin.from("labor_week_plans").upsert({
-      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v5", forecast_run_id: run.id,
+      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v6", forecast_run_id: run.id,
       created_by: userId, updated_at: new Date().toISOString(),
     }, { onConflict: "store_id,week_start" }).select("id").single();
     if (planError || !plan) throw planError ?? new Error("The labor week plan could not be prepared.");
@@ -828,7 +826,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v5", manual_weekly_sales: manualWeeklySales },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v6", manual_weekly_sales: manualWeeklySales },
   });
 
   return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved };
