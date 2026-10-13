@@ -131,6 +131,34 @@ const businessMinute = (time: string, openMinute: number) => {
   return minute < openMinute ? minute + 1440 : minute;
 };
 
+function applyDriverRunTimeCoverage(
+  rows: IntervalProjection[],
+  hours: Map<number, { open: string; close: string }>,
+  runTimeMinutes: number,
+) {
+  const intervalMinutes = 15;
+  for (let day = 0; day < 7; day += 1) {
+    const storeHours = hours.get(day);
+    if (!storeHours) continue;
+    const openMinute = timeMinutes(storeHours.open);
+    const dayRows = rows
+      .filter((row) => row.day_of_week === day && isWithinBusinessHours(row.interval_start, storeHours.open, storeHours.close))
+      .sort((left, right) => businessMinute(left.interval_start, openMinute) - businessMinute(right.interval_start, openMinute));
+
+    for (const row of dayRows) {
+      const currentMinute = businessMinute(row.interval_start, openMinute);
+      const activeDriverLoad = dayRows.reduce((sum, dispatchRow) => {
+        const dispatchMinute = businessMinute(dispatchRow.interval_start, openMinute);
+        const elapsedMinutes = currentMinute - dispatchMinute;
+        if (elapsedMinutes < 0 || elapsedMinutes >= runTimeMinutes) return sum;
+        const intervalShareStillOut = clamp((runTimeMinutes - elapsedMinutes) / intervalMinutes, 0, 1);
+        return sum + dispatchRow.projected_deliveries * intervalShareStillOut;
+      }, 0);
+      row.required_drivers = Math.max(1, Math.ceil(activeDriverLoad - Number.EPSILON));
+    }
+  }
+}
+
 function buildCoverageShifts(
   planId: string,
   day: number,
@@ -577,6 +605,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   }
 
   const settings = settingsResult.data ?? {};
+  const averageRunTimeMinutes = Math.max(1, Number(settings.average_run_time_minutes) || 15);
   const hours = new Map<number, { open: string; close: string }>(
     (hoursResult.data ?? []).map((row) => [Number(row.day_of_week), { open: String(row.open_time), close: String(row.close_time) }]),
   );
@@ -594,8 +623,8 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     const morningEnd = 14 * 60;
     const nearNextInsider = intervalMinute < morningEnd && rawInsiders > 0 && rawInsiders - baseInsiders >= 0.75;
     row.required_insiders = nearNextInsider ? baseInsiders + 1 : baseInsiders;
-    row.required_drivers = Math.max(1, Math.ceil(row.projected_deliveries * (Number(settings.average_run_time_minutes) || 15) / 15));
   }
+  applyDriverRunTimeCoverage(rawIntervals, hours, averageRunTimeMinutes);
 
   const baselineWeeks = baselineSets.reduce((sum, set) => sum + Number(set.weeks_count || 0), 0);
   const metricCoverage = (["sales", "oven", "deliveries"] as MetricName[]).filter((metric) => baselineRows.some((row) => metricValue(row, metric) > 0)).length;
@@ -623,6 +652,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     `Sales blend uses 50% recent 4-week, 25% 13-week, and ${lastYearMatch ? "25% same week last year" : "normalized available history"}`,
     `Momentum adjustment is ${momentum >= 0 ? "+" : ""}${round(momentum * 100, 1)}% after the 25% factor and ±10% cap`,
     events.length ? `${events.length} event adjustment${events.length === 1 ? "" : "s"} reviewed` : "No special events overlap this week",
+    `Driver coverage carries delivery demand forward for the store's ${averageRunTimeMinutes}-minute average run time`,
   ];
   if (learningEvents) reasons.push(`${learningEvents} event${learningEvents === 1 ? " has" : "s have"} no learned lift yet`);
   if (manualWeeklySales) reasons.push("Manager-entered weekly sales target anchored the sales forecast");
@@ -653,7 +683,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("demand_forecast_runs").update({ is_current: false, status: "superseded", updated_at: new Date().toISOString() }).eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true);
   const { data: run, error: runError } = await admin.from("demand_forecast_runs").insert({
-    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v3",
+    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v4",
     confidence_score: score, confidence_level: confidenceLevel(score), confidence_reasons: reasons,
     input_summary: {
       baseline_sets: baselineSets.length, baseline_weeks: baselineWeeks, recent_kpi_weeks: kpiRows.length,
@@ -684,7 +714,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   let editedPlanPreserved = false;
   if (!existingPlan || existingPlan.status !== "published") {
     const { data: plan, error: planError } = await admin.from("labor_week_plans").upsert({
-      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v3", forecast_run_id: run.id,
+      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v4", forecast_run_id: run.id,
       created_by: userId, updated_at: new Date().toISOString(),
     }, { onConflict: "store_id,week_start" }).select("id").single();
     if (planError || !plan) throw planError ?? new Error("The labor week plan could not be prepared.");
@@ -727,7 +757,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v3", manual_weekly_sales: manualWeeklySales },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v4", manual_weekly_sales: manualWeeklySales },
   });
 
   return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved };
