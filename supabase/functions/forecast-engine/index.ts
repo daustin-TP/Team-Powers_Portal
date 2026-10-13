@@ -400,6 +400,31 @@ function optimizeInsiderClosingShifts(
     }
   }
 
+  // If the final increase only needs a minimum-length shift, trimming cannot
+  // shorten it. Slide those same paid hours earlier so the shift ends with the
+  // final required interval instead of leaving an idle tail late at night.
+  const finalRequiredEnd = points.reduce((latest, point) => point.need > 0 ? Math.max(latest, point.minute + 15) : latest, windowStart);
+  for (const index of trimOrder) {
+    const shift = drafts[index];
+    if (shift.end <= finalRequiredEnd) continue;
+    const duration = shift.end - shift.start;
+    const candidateEnd = finalRequiredEnd;
+    const candidateStart = Math.max(windowStart, candidateEnd - duration);
+    if (candidateEnd - candidateStart < minimum) continue;
+    const coversDemand = points.every((point) => {
+      const coverage = drafts.reduce((count, current, shiftIndex) => {
+        const start = shiftIndex === index ? candidateStart : current.start;
+        const end = shiftIndex === index ? candidateEnd : current.end;
+        return count + (point.minute >= start && point.minute < end ? 1 : 0);
+      }, 0);
+      return coverage >= point.need;
+    });
+    if (!coversDemand) continue;
+    shift.start = candidateStart;
+    shift.end = candidateEnd;
+    shift.note = `${shift.note} · repositioned to end with final required interval`;
+  }
+
   return drafts
     .sort((left, right) => left.start - right.start || left.end - right.end)
     .map((shift) => ({
