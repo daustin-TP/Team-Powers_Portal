@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CalendarDays,
@@ -8,12 +8,14 @@ import {
   FileDown,
   History,
   Plus,
+  Printer,
   RotateCcw,
   Save,
   Settings2,
   Trash2,
   Upload,
   Users,
+  X,
 } from "lucide-react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { Profile } from "../types";
@@ -274,6 +276,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
 
   const selectedStore = stores.find((store) => store.id === storeId);
   const minorShiftLimit = Math.min(5.75, Number(settings.minor_break_after_hours) || 5.75);
@@ -647,6 +650,27 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const daySales = projections.find((item) => item.day_of_week === selectedDay)?.projected_sales ?? 0;
   const dayHours = visibleShifts.reduce((sum, shift) => sum + shiftHours(shift), 0);
   const selectedAvailabilityEntry = availability.find((item) => item.member_id === availabilityForm.member_id && item.day_of_week === availabilityForm.day_of_week && item.kind === availabilityForm.kind);
+  const shiftPrintStatus = (shift: Shift) => {
+    const changes = shiftChanges.filter((change) => change.shift_id === shift.id);
+    if (changes.some((change) => change.change_type === "manual_added")) return "added" as const;
+    if (changes.some((change) => change.change_type === "time_edited")) return "adjusted" as const;
+    return shift.source === "manual" ? "added" as const : "system" as const;
+  };
+  const printableRows = (["manager", "insider", "driver"] as LaborRole[]).map((role) => {
+    const roleShifts = shifts.filter((shift) => shift.role === role);
+    const assignedIds = [...new Set(roleShifts.map((shift) => shift.assigned_member_id).filter((id): id is string => Boolean(id)))];
+    const assignedRows = assignedIds.map((memberId) => ({
+      key: `${role}-${memberId}`,
+      name: members.find((member) => member.id === memberId)?.display_name || "Inactive employee",
+      shifts: roleShifts.filter((shift) => shift.assigned_member_id === memberId),
+    })).sort((left, right) => left.name.localeCompare(right.name));
+    const openRows = roleShifts.filter((shift) => !shift.assigned_member_id)
+      .sort((left, right) => left.day_of_week - right.day_of_week || left.start_time.localeCompare(right.start_time))
+      .map((shift, index) => ({ key: `${role}-open-${shift.id}`, name: `OPEN SHIFT ${index + 1}`, shifts: [shift] }));
+    return { role, rows: [...assignedRows, ...openRows] };
+  });
+  const roleDayHours = (role: LaborRole, day: number) => shifts.filter((shift) => shift.role === role && shift.day_of_week === day).reduce((sum, shift) => sum + shiftHours(shift), 0);
+  const requiredRoleDayHours = (role: LaborRole, day: number) => demandIntervals.filter((interval) => interval.day_of_week === day).reduce((sum, interval) => sum + Number(interval[`required_${role}s` as "required_managers" | "required_insiders" | "required_drivers"] || 0) * .25, 0);
 
   return (
     <div className="page labor-page">
@@ -673,7 +697,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
           {forecast && <section className="forecast-confidence-panel"><div><span className={`forecast-confidence ${forecast.confidence_level}`}>{forecast.confidence_level} confidence · {Number(forecast.confidence_score).toFixed(0)}%</span><strong>${Number(forecast.weekly_projection.projected_sales).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><small>Expected range ${Number(forecast.weekly_projection.low_sales).toLocaleString(undefined, { maximumFractionDigits: 0 })}–${Number(forecast.weekly_projection.high_sales).toLocaleString(undefined, { maximumFractionDigits: 0 })}</small></div><div className="forecast-volume-grid"><span><strong>{Math.round(forecast.weekly_projection.projected_orders).toLocaleString()}</strong> orders</span><span><strong>{Math.round(forecast.weekly_projection.projected_oven_items).toLocaleString()}</strong> oven items</span><span><strong>{Math.round(forecast.weekly_projection.projected_deliveries).toLocaleString()}</strong> deliveries</span></div><details><summary>Why this confidence level?</summary><ul>{forecast.confidence_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></details></section>}
           <section className="labor-summary-grid"><article><span>Projected sales</span><strong>${weeklySales.toLocaleString()}</strong><small>Week of {formatWeek(weekStart)}</small></article><article><span>Scheduled hours</span><strong>{totalHours.toFixed(1)}</strong><small>{shifts.length} required shifts</small></article><article><span>Projected SPLH</span><strong>${weeklySplh.toFixed(2)}</strong><small>Sales ÷ scheduled hours</small></article><article><span>Status</span><strong className="labor-status">{planStatus}</strong><small>{shifts.filter((shift) => !shift.assigned_member_id).length} open shifts</small></article></section>
           {weekEvents.length > 0 && <section className="labor-event-strip"><CalendarDays size={20} /><div><strong>{weekEvents.length === 1 ? "Demand event this week" : `${weekEvents.length} demand events this week`}</strong><div>{weekEvents.map((event) => <button key={event.id} onClick={() => editEvent(event)}><span>{event.scope === "company" ? "Company" : selectedStore?.name}</span>{event.name}</button>)}</div></div></section>}
-          <div className="labor-toolbar"><div className="day-tabs">{days.map((day, index) => <button key={day} className={selectedDay === index ? "active" : ""} onClick={() => setSelectedDay(index)}>{day.slice(0, 3)}<small>{shifts.filter((shift) => shift.day_of_week === index).length}</small></button>)}</div><div className="button-row"><button className="button secondary" onClick={resetAssignments}><RotateCcw size={17} />Reset names</button><button className="button primary" onClick={publish}><FileDown size={17} />Publish</button></div></div>
+          <div className="labor-toolbar"><div className="day-tabs">{days.map((day, index) => <button key={day} className={selectedDay === index ? "active" : ""} onClick={() => setSelectedDay(index)}>{day.slice(0, 3)}<small>{shifts.filter((shift) => shift.day_of_week === index).length}</small></button>)}</div><div className="button-row"><button className="button secondary" onClick={resetAssignments}><RotateCcw size={17} />Reset names</button><button className="button secondary" onClick={() => setShowPrintPreview(true)} disabled={shifts.length === 0}><Printer size={17} />Print week</button><button className="button primary" onClick={publish}><FileDown size={17} />Publish</button></div></div>
           <section className="panel labor-day-panel"><div className="table-toolbar"><div><p className="eyebrow">{days[selectedDay]} builder</p><h2>Required shifts</h2><p>Managers first, then insiders and drivers; each group is ordered by start time.</p></div><div className="labor-day-metrics"><span>${Number(daySales).toLocaleString()} sales</span><strong>${dayHours ? (Number(daySales) / dayHours).toFixed(2) : "0.00"} SPLH</strong></div></div>
             <div className="manual-shift-builder"><div><strong>Add coverage</strong><small>Use 15-minute times. New shifts must follow the store’s minimum and maximum shift rules.</small></div><label>Role<select value={newShift.role} onChange={(event) => setNewShift({ ...newShift, role: event.target.value as LaborRole })}><option value="manager">Manager</option><option value="insider">Insider</option><option value="driver">Driver</option></select></label><label>Starts<input type="time" step="900" value={newShift.start_time} onChange={(event) => setNewShift({ ...newShift, start_time: event.target.value })} /></label><label>Ends<input type="time" step="900" value={newShift.end_time} onChange={(event) => setNewShift({ ...newShift, end_time: event.target.value })} /></label><button className="button secondary" onClick={() => void addManualShift()}><Plus size={17} />Add shift</button></div>
             {visibleShifts.length === 0 ? <div className="activity-empty">No suggested shifts have been generated for this day.</div> : <div className="responsive-table"><table className="labor-shift-table"><thead><tr><th>Role</th><th>Start</th><th>End</th><th>Hours</th><th>Assigned employee</th><th>Availability</th><th>Origin / changes</th><th aria-label="Shift actions" /></tr></thead><tbody>{visibleShifts.map((shift) => { const assigned = members.find((member) => member.id === shift.assigned_member_id); const status = assigned ? assigned.is_minor && shiftHours(shift) > minorShiftLimit ? `⛔ Break required over ${minorShiftLimit}h` : memberStatus(assigned, shift) : ""; const changes = shiftChanges.filter((change) => change.shift_id === shift.id); const lastChange = changes[0]; const originallyAutomated = shift.source === "suggested" || changes.some((change) => change.before_state?.source === "suggested"); return <tr key={shift.id} className={`${shift.role} ${shift.start_time <= "10:00" ? "opening" : ""} ${shift.end_time <= shift.start_time || shift.end_time >= "23:00" ? "closing" : ""} ${lastChange ? "shift-was-edited" : ""}`}><td><strong>{shift.role[0].toUpperCase() + shift.role.slice(1)}</strong></td><td><input className="shift-time-input" aria-label={`${shift.role} shift start`} type="time" step="900" value={shift.start_time.slice(0, 5)} onChange={(event) => void updateShiftTime(shift, "start_time", event.target.value)} /></td><td><input className="shift-time-input" aria-label={`${shift.role} shift end`} type="time" step="900" value={shift.end_time.slice(0, 5)} onChange={(event) => void updateShiftTime(shift, "end_time", event.target.value)} /></td><td>{shiftHours(shift).toFixed(2)}</td><td><select value={shift.assigned_member_id ?? ""} onChange={(event) => void assign(shift, event.target.value)}><option value="">Open shift</option>{members.filter((member) => member.qualified_roles.includes(shift.role)).map((member) => { const needsBreak = member.is_minor && shiftHours(shift) > minorShiftLimit; return <option key={member.id} value={member.id} disabled={needsBreak}>{needsBreak ? "⛔" : memberStatus(member, shift)} {member.display_name}{member.is_minor ? ` · Minor${needsBreak ? ` · over ${minorShiftLimit}h` : ""}` : ""}</option>; })}</select></td><td><span className={status.startsWith("⛔") ? "availability-bad" : status.startsWith("⚠") ? "availability-warning" : "availability-good"}>{status || "—"}</span></td><td><div className="shift-origin"><span className={lastChange ? "edited" : shift.source === "suggested" ? "generated" : "manual"}>{lastChange ? originallyAutomated ? "Automated · edited" : "Manual shift" : shift.source === "suggested" ? "System generated" : "Manual shift"}</span><small>{lastChange ? `${lastChange.changed_by_name} · ${new Date(lastChange.created_at).toLocaleString()}` : shift.notes}</small></div></td><td><button className="icon-button danger" aria-label={`Remove ${shift.role} shift`} title="Remove shift" onClick={() => void deleteShift(shift)}><Trash2 size={17} /></button></td></tr>; })}</tbody></table></div>}
@@ -704,6 +728,23 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
               })}</section>)}</article>;
             })}</div>
           </section>
+          {showPrintPreview && <div className="modal-backdrop labor-print-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowPrintPreview(false); }}>
+            <section className="labor-print-modal" role="dialog" aria-modal="true" aria-labelledby="labor-print-title">
+              <div className="labor-print-actions no-print"><div><p className="eyebrow">Pre-publish review</p><h2 id="labor-print-title">Printable week at a glance</h2><p>Review the draft below, then print a physical copy or choose “Save as PDF” in your browser.</p></div><div className="button-row"><button className="button secondary" onClick={() => setShowPrintPreview(false)}><X size={17} />Close</button><button className="button primary" onClick={() => window.print()}><Printer size={17} />Print / Save PDF</button></div></div>
+              <div className="schedule-print-sheet">
+                <header className="schedule-print-header"><div><p>Team Powers · DASH-OS</p><h1>{selectedStore?.name || "Store"} Weekly Schedule</h1><strong>{formatWeek(weekStart)} – {formatWeek(weekEnd)}</strong></div><div><span className={`print-plan-status ${planStatus}`}>{planStatus === "published" ? "Published" : "Draft · Not published"}</span><small>Prepared by {profile.fullName}</small><small>Printed {new Date().toLocaleString()}</small></div></header>
+                <div className="print-change-legend"><strong>Shift key</strong><span className="system">System generated</span><span className="adjusted">✎ Adjusted</span><span className="added">+ Added</span><span className="open">OPEN = unassigned</span></div>
+                <table className="schedule-print-table">
+                  <thead><tr className="print-store-hours"><th>Store hours</th>{days.map((day, dayIndex) => { const hours = storeHours.find((item) => item.day_of_week === dayIndex); return <th key={day}>{hours ? `${displayTime(hours.open_time)}–${displayTime(hours.close_time)}` : "—"}</th>; })}<th>Week</th></tr><tr><th>Employee</th>{days.map((day) => <th key={day}>{day}</th>)}<th>Hours</th></tr></thead>
+                  <tbody>{printableRows.map(({ role, rows }) => <Fragment key={role}><tr className={`print-role-heading ${role}`}><th colSpan={9}>{role === "driver" ? "Delivery Experts" : `${role[0].toUpperCase()}${role.slice(1)}s`}</th></tr>{rows.length === 0 ? <tr><td className="print-empty-row">No {role} shifts</td>{days.map((day) => <td key={day}>—</td>)}<td>0.00</td></tr> : rows.map((row) => <tr key={row.key}><th>{row.name}</th>{days.map((day, dayIndex) => <td key={day}>{row.shifts.filter((shift) => shift.day_of_week === dayIndex).map((shift) => { const status = shiftPrintStatus(shift); return <span key={shift.id} className={`print-shift ${status}`}><b>{displayTime(shift.start_time)}–{displayTime(shift.end_time)}</b>{status === "adjusted" ? <small>✎ Adjusted</small> : status === "added" ? <small>+ Added</small> : null}</span>; })}</td>)}<td className="print-hours-total">{row.shifts.reduce((sum, shift) => sum + shiftHours(shift), 0).toFixed(2)}</td></tr>)}<tr className="print-role-total"><th>Coverage needed</th>{days.map((day, dayIndex) => <td key={day}>{requiredRoleDayHours(role, dayIndex).toFixed(2)}</td>)}<td>{days.reduce((sum, _, dayIndex) => sum + requiredRoleDayHours(role, dayIndex), 0).toFixed(2)}</td></tr><tr className="print-role-total scheduled"><th>Hours scheduled</th>{days.map((day, dayIndex) => <td key={day}>{roleDayHours(role, dayIndex).toFixed(2)}</td>)}<td>{shifts.filter((shift) => shift.role === role).reduce((sum, shift) => sum + shiftHours(shift), 0).toFixed(2)}</td></tr></Fragment>)}
+                    <tr className="print-grand-total"><th>Grand total hours</th>{days.map((day, dayIndex) => <td key={day}>{shifts.filter((shift) => shift.day_of_week === dayIndex).reduce((sum, shift) => sum + shiftHours(shift), 0).toFixed(2)}</td>)}<td>{totalHours.toFixed(2)}</td></tr>
+                    <tr className="print-sales-total"><th>Forecast sales</th>{days.map((day, dayIndex) => <td key={day}>${Number(projections.find((projection) => projection.day_of_week === dayIndex)?.projected_sales || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>)}<td>${weeklySales.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td></tr>
+                  </tbody>
+                </table>
+                <footer className="schedule-print-footer"><span>{shifts.filter((shift) => !shift.assigned_member_id).length} open shifts</span><span>{shiftChanges.filter((change) => change.change_type === "time_edited").length} shift adjustments</span><span>{shifts.filter((shift) => shiftPrintStatus(shift) === "added").length} added shifts</span><strong>Projected SPLH ${weeklySplh.toFixed(2)}</strong></footer>
+              </div>
+            </section>
+          </div>}
         </>
       ) : view === "employees" ? (
         <div className="roster-layout">
