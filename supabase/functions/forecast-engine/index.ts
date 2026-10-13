@@ -212,6 +212,7 @@ function optimizeDriverShifts(
   points: Array<{ minute: number; need: number }>,
   openMinute: number,
   windowStart: number,
+  windowEnd: number,
   maximum: number,
   allowOpeningThroughRush: boolean,
 ) {
@@ -327,7 +328,6 @@ function optimizeInsiderClosingShifts(
   points: Array<{ minute: number; need: number }>,
   openMinute: number,
   windowStart: number,
-  windowEnd: number,
   maximum: number,
 ) {
   type InsiderDraft = { start: number; end: number; note: string };
