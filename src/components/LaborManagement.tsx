@@ -67,6 +67,11 @@ type DemandInterval = {
   required_managers: number;
   required_insiders: number;
   required_drivers: number;
+  oven_outlier_candidate: boolean;
+  oven_outlier_status: "none" | "unreviewed" | "timed_order_week" | "timed_order_recurring" | "keep_full";
+  oven_outlier_original: number | null;
+  oven_outlier_baseline: number | null;
+  oven_prep_minutes: number | null;
 };
 type ForecastRun = {
   id: string;
@@ -281,6 +286,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [showPrintPreview, setShowPrintPreview] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [builderZoom, setBuilderZoom] = useState<65 | 80 | 100>(100);
+  const [savingOutlier, setSavingOutlier] = useState("");
   const schedulePrintRef = useRef<HTMLDivElement>(null);
 
   const selectedStore = stores.find((store) => store.id === storeId);
@@ -311,6 +317,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     }), [demandIntervals, selectedDay, selectedDayOpen, visibleShifts]);
   const coverageGapIntervals = coverageRows.filter((row) => row.gaps > 0).length;
   const coverageExactIntervals = coverageRows.filter((row) => row.gaps === 0 && row.excess === 0).length;
+  const unreviewedOutliers = coverageRows.filter((row) => row.oven_outlier_status === "unreviewed");
 
   useEffect(() => {
     const loadStores = async () => {
@@ -365,7 +372,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         supabase.from("labor_shifts").select("id,week_plan_id,day_of_week,role,start_time,end_time,assigned_member_id,notes,source").eq("week_plan_id", planResult.data.id),
         supabase.from("labor_shift_changes").select("id,store_id,week_plan_id,shift_id,day_of_week,role,change_type,change_summary,before_state,after_state,changed_by,changed_by_name,created_at").eq("week_plan_id", planResult.data.id).order("created_at", { ascending: false }),
         supabase.from("labor_daily_projections").select("day_of_week,projected_sales").eq("week_plan_id", planResult.data.id),
-        supabase.from("labor_demand_intervals").select("day_of_week,interval_start,projected_sales,projected_oven_items,projected_deliveries,required_managers,required_insiders,required_drivers").eq("week_plan_id", planResult.data.id),
+        supabase.from("labor_demand_intervals").select("day_of_week,interval_start,projected_sales,projected_oven_items,projected_deliveries,required_managers,required_insiders,required_drivers,oven_outlier_candidate,oven_outlier_status,oven_outlier_original,oven_outlier_baseline,oven_prep_minutes").eq("week_plan_id", planResult.data.id),
       ]);
       if (shiftResult.error || changeResult.error || projectionResult.error || demandResult.error) setError(shiftResult.error?.message || changeResult.error?.message || projectionResult.error?.message || demandResult.error?.message || "Schedule could not be loaded.");
       setShifts((shiftResult.data ?? []) as Shift[]); setShiftChanges((changeResult.data ?? []) as ShiftChange[]); setProjections((projectionResult.data ?? []) as DayProjection[]); setDemandIntervals((demandResult.data ?? []) as DemandInterval[]); setLoading(false);
@@ -587,6 +594,26 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     setMessage(result.published_plan_preserved ? "Forecast generated. The already-published schedule was preserved." : result.edited_plan_preserved ? "Forecast updated. Manager-edited required shifts were preserved with their change history." : "All seven days of minimum required shifts were generated automatically from historical demand, recent trends, store settings, and scheduled events.");
     setGeneratingForecast(false);
   };
+  const saveOutlierDecision = async (row: DemandInterval, scope: "week" | "recurring", handling: "timed_order" | "keep_full") => {
+    if (!supabase) { setMessage("Timed-order choice saved for this demo session."); return; }
+    const key = `${row.day_of_week}-${row.interval_start}-${scope}-${handling}`;
+    setSavingOutlier(key); setError(""); setMessage("");
+    let removal = supabase.from("labor_interval_adjustments").delete().eq("store_id", storeId).eq("scope", scope).eq("day_of_week", row.day_of_week).eq("interval_start", row.interval_start);
+    removal = scope === "week" ? removal.eq("week_start", weekStart) : removal.is("week_start", null);
+    const { error: removalError } = await removal;
+    if (removalError) { setError(removalError.message); setSavingOutlier(""); return; }
+    const { error: saveError } = await supabase.from("labor_interval_adjustments").insert({
+      store_id: storeId, scope, week_start: scope === "week" ? weekStart : null,
+      day_of_week: row.day_of_week, interval_start: row.interval_start,
+      handling, prep_minutes: 90, created_by: profile.id, created_by_name: profile.fullName,
+    });
+    if (saveError) { setError(saveError.message); setSavingOutlier(""); return; }
+    await generateForecast();
+    setMessage(handling === "timed_order"
+      ? `Timed order saved ${scope === "recurring" ? "as a recurring pattern" : "for this week"}. Excess production was moved into the prior 90-minute prep window and required shifts were rebuilt.`
+      : "Full staffing was retained for this demand spike and the decision was recorded.");
+    setSavingOutlier("");
+  };
   const editEvent = (event: SchedulingEvent) => {
     setEventForm({
       ...event,
@@ -775,11 +802,13 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
             {visibleShifts.length === 0 ? <div className="activity-empty">No suggested shifts have been generated for this day.</div> : <div className={`responsive-table daily-builder-table zoom-${builderZoom}`}><table className="labor-shift-table"><thead><tr><th>Role</th><th>Start</th><th>End</th><th>Hours</th><th>Assigned employee</th><th>Availability</th><th>Origin / changes</th><th aria-label="Shift actions" /></tr></thead><tbody>{visibleShifts.map((shift) => { const assigned = members.find((member) => member.id === shift.assigned_member_id); const needsBreak = Boolean(assigned?.is_minor && shiftHours(shift) > minorShiftLimit); const status = assigned ? needsBreak ? "⚠ 30-minute break required" : memberStatus(assigned, shift) : ""; const changes = shiftChanges.filter((change) => change.shift_id === shift.id); const lastChange = changes[0]; const originallyAutomated = shift.source === "suggested" || changes.some((change) => change.before_state?.source === "suggested"); return <tr key={shift.id} className={`${shift.role} ${shift.start_time <= "10:00" ? "opening" : ""} ${shift.end_time <= shift.start_time || shift.end_time >= "23:00" ? "closing" : ""} ${lastChange ? "shift-was-edited" : ""}`}><td><strong>{shift.role[0].toUpperCase() + shift.role.slice(1)}</strong></td><td><input className="shift-time-input" aria-label={`${shift.role} shift start`} type="time" step="900" value={shift.start_time.slice(0, 5)} onChange={(event) => void updateShiftTime(shift, "start_time", event.target.value)} /></td><td><input className="shift-time-input" aria-label={`${shift.role} shift end`} type="time" step="900" value={shift.end_time.slice(0, 5)} onChange={(event) => void updateShiftTime(shift, "end_time", event.target.value)} /></td><td>{shiftHours(shift).toFixed(2)}</td><td><select value={shift.assigned_member_id ?? ""} onChange={(event) => void assign(shift, event.target.value)}><option value="">Open shift</option>{members.filter((member) => member.qualified_roles.includes(shift.role)).map((member) => { const optionNeedsBreak = member.is_minor && shiftHours(shift) > minorShiftLimit; return <option key={member.id} value={member.id}>{optionNeedsBreak ? "⚠" : memberStatus(member, shift)} {member.display_name}{member.is_minor ? ` · Minor${optionNeedsBreak ? " · 30m break required" : ""}` : ""}</option>; })}</select></td><td><span className={status.startsWith("⛔") ? "availability-bad" : status.startsWith("⚠") ? "availability-warning" : "availability-good"}>{status || "—"}</span></td><td><div className="shift-origin"><span className={lastChange ? "edited" : shift.source === "suggested" ? "generated" : "manual"}>{lastChange ? originallyAutomated ? "Automated · edited" : "Manual shift" : shift.source === "suggested" ? "System generated" : "Manual shift"}</span><small>{lastChange ? `${lastChange.changed_by_name} · ${new Date(lastChange.created_at).toLocaleString()}` : shift.notes}</small></div></td><td><button className="icon-button danger" aria-label={`Remove ${shift.role} shift`} title="Remove shift" onClick={() => void deleteShift(shift)}><Trash2 size={17} /></button></td></tr>; })}</tbody></table></div>}
             {shiftChanges.some((change) => change.day_of_week === selectedDay) && <details className="shift-change-history"><summary>View {days[selectedDay]} shift change history</summary><div>{shiftChanges.filter((change) => change.day_of_week === selectedDay).map((change) => <article key={change.id}><span className={change.change_type}>{change.change_type.replaceAll("_", " ")}</span><div><strong>{change.change_summary}</strong><small>{change.changed_by_name} · {new Date(change.created_at).toLocaleString()}</small></div></article>)}</div></details>}
           </section>
+          {unreviewedOutliers.length > 0 && <div className="timed-order-alert"><AlertTriangle size={20} /><div><strong>{unreviewedOutliers.length} likely timed order{unreviewedOutliers.length === 1 ? "" : "s"} detected on {days[selectedDay]}</strong><span>Expand the 15-minute details below to confirm advance preparation or retain full staffing.</span></div></div>}
           <details className="panel labor-coverage-panel">
-            <summary><div><p className="eyebrow">Optional diagnostic</p><h2>Advanced 15-minute coverage details</h2><small>Open only when you want to inspect how {days[selectedDay]} shifts match the projected demand.</small></div><div className="coverage-summary"><span className={coverageGapIntervals ? "gap" : "covered"}>{coverageGapIntervals ? `${coverageGapIntervals} intervals with gaps` : "✓ Every interval covered"}</span><small>{coverageExactIntervals} exact-fit intervals</small></div></summary>
-            {coverageRows.length === 0 ? <div className="activity-empty">Generate the forecast to create the interval staffing requirements.</div> : <div className="responsive-table"><table className="coverage-table"><thead><tr><th>Time</th><th>Sales</th><th>Oven</th><th>Deliveries</th><th>Managers<br /><small>Need / Scheduled</small></th><th>Insiders<br /><small>Need / Scheduled</small></th><th>Drivers<br /><small>Need / Scheduled</small></th><th>Result</th></tr></thead><tbody>{coverageRows.map((row) => {
+            <summary><div><p className="eyebrow">Optional diagnostic</p><h2>Advanced 15-minute coverage details</h2><small>Open only when you want to inspect how {days[selectedDay]} shifts match the projected demand.</small></div><div className="coverage-summary">{unreviewedOutliers.length > 0 && <span className="review">⚠ {unreviewedOutliers.length} needs review</span>}<span className={coverageGapIntervals ? "gap" : "covered"}>{coverageGapIntervals ? `${coverageGapIntervals} intervals with gaps` : "✓ Every interval covered"}</span><small>{coverageExactIntervals} exact-fit intervals</small></div></summary>
+            {coverageRows.length === 0 ? <div className="activity-empty">Generate the forecast to create the interval staffing requirements.</div> : <div className="responsive-table"><table className="coverage-table"><thead><tr><th>Time</th><th>Sales</th><th>Oven</th><th>Deliveries</th><th>Managers<br /><small>Need / Scheduled</small></th><th>Insiders<br /><small>Need / Scheduled</small></th><th>Drivers<br /><small>Need / Scheduled</small></th><th>Result</th><th>Demand review</th></tr></thead><tbody>{coverageRows.map((row) => {
               const coverageCell = (role: LaborRole) => { const difference = row.scheduled[role] - row.required[role]; return <span className={difference < 0 ? "coverage-gap" : difference > 0 ? "coverage-extra" : "coverage-fit"}>{row.required[role]} / {row.scheduled[role]}</span>; };
-              return <tr key={`${row.day_of_week}-${row.interval_start}`} className={row.gaps ? "has-gap" : row.excess ? "has-extra" : "is-covered"}><td><strong>{displayTime(row.interval_start)}</strong></td><td>${Number(row.projected_sales).toFixed(0)}</td><td>{Number(row.projected_oven_items).toFixed(1)}</td><td>{Number(row.projected_deliveries).toFixed(1)}</td><td>{coverageCell("manager")}</td><td>{coverageCell("insider")}</td><td>{coverageCell("driver")}</td><td>{row.gaps ? <span className="coverage-result gap">Short {row.gaps}</span> : row.excess ? <span className="coverage-result extra">+{row.excess} above minimum</span> : <span className="coverage-result covered">Exact</span>}</td></tr>;
+              const decisionKey = (scope: "week" | "recurring", handling: "timed_order" | "keep_full") => `${row.day_of_week}-${row.interval_start}-${scope}-${handling}`;
+              return <tr key={`${row.day_of_week}-${row.interval_start}`} className={`${row.gaps ? "has-gap" : row.excess ? "has-extra" : "is-covered"} ${row.oven_outlier_candidate ? "oven-outlier" : ""}`}><td><strong>{displayTime(row.interval_start)}</strong></td><td>${Number(row.projected_sales).toFixed(0)}</td><td>{Number(row.projected_oven_items).toFixed(1)}{row.oven_outlier_original !== null && row.oven_outlier_status.startsWith("timed_order") && <small className="oven-original">was {Number(row.oven_outlier_original).toFixed(1)}</small>}</td><td>{Number(row.projected_deliveries).toFixed(1)}</td><td>{coverageCell("manager")}</td><td>{coverageCell("insider")}</td><td>{coverageCell("driver")}</td><td>{row.gaps ? <span className="coverage-result gap">Short {row.gaps}</span> : row.excess ? <span className="coverage-result extra">+{row.excess} above minimum</span> : <span className="coverage-result covered">Exact</span>}</td><td>{!row.oven_outlier_candidate ? <span className="outlier-none">—</span> : row.oven_outlier_status === "unreviewed" ? <div className="outlier-actions"><strong>⚠ Likely timed order</strong><small>{Number(row.oven_outlier_original).toFixed(1)} items versus about {Number(row.oven_outlier_baseline).toFixed(1)} nearby</small><button disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", "timed_order")}>{savingOutlier === decisionKey("week", "timed_order") ? "Saving…" : "Prep early · this week"}</button><button disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "recurring", "timed_order")}>{savingOutlier === decisionKey("recurring", "timed_order") ? "Saving…" : "Prep early · recurring"}</button><button className="keep-full" disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", "keep_full")}>{savingOutlier === decisionKey("week", "keep_full") ? "Saving…" : "Keep full staffing"}</button></div> : <div className={`outlier-decision ${row.oven_outlier_status}`}><strong>{row.oven_outlier_status === "keep_full" ? "Full staffing retained" : row.oven_outlier_status === "timed_order_recurring" ? "✓ Recurring timed order" : "✓ Timed order this week"}</strong>{row.oven_outlier_status.startsWith("timed_order") && <small>Prepared across the prior {row.oven_prep_minutes || 90} minutes</small>}<button className="keep-full" disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", row.oven_outlier_status === "keep_full" ? "timed_order" : "keep_full")}>Change decision</button></div>}</td></tr>;
             })}</tbody></table></div>}
           </details>
           <section className="panel labor-week-glance">
