@@ -357,14 +357,17 @@ tbody tr:last-child td { border-bottom: 0; }
   .labor-plan-controls{grid-template-columns:1fr;min-width:0;width:100%}.labor-summary-grid,.labor-settings-grid,.labor-data-grid{grid-template-columns:1fr}.forecast-command-actions,.forecast-confidence-panel,.forecast-volume-grid{grid-template-columns:1fr}.forecast-confidence-panel ul{columns:1}.labor-hours-row{grid-template-columns:1fr 1fr}.labor-hours-row>strong{grid-column:1 / -1}.labor-day-metrics{text-align:left}.labor-day-panel .table-toolbar{align-items:flex-start}.manual-shift-builder{grid-template-columns:1fr}.manual-shift-builder>div{grid-column:auto}.labor-nav button{font-size:.78rem}.labor-summary-grid article{min-height:95px}.labor-event-form-row,.labor-impact-grid{grid-template-columns:1fr}.event-card{grid-template-columns:52px minmax(0,1fr)}.event-actions{grid-column:2}
 }
 
-@page{size:landscape;margin:.3in}
+@page{size:letter landscape;margin:.25in}
 @media print{
-  html,body,#root{background:#fff!important}
+  html,body,#root,.app-shell,main,.page{height:auto!important;min-height:0!important;overflow:visible!important;background:#fff!important}
   body *{visibility:hidden!important}
+  .labor-print-backdrop,.labor-print-modal,.schedule-print-sheet{display:block!important;visibility:visible!important}
   .schedule-print-sheet,.schedule-print-sheet *{visibility:visible!important}
-  .schedule-print-sheet{position:absolute;left:0;top:0;width:100%;min-height:0;margin:0;padding:0;box-shadow:none;color:#000}
-  .schedule-print-table{font-size:7px}
-  .schedule-print-table thead{display:table-header-group}
+  .labor-print-backdrop{position:static!important;inset:auto!important;width:auto!important;height:auto!important;padding:0!important;background:#fff!important;overflow:visible!important}
+  .labor-print-modal{width:auto!important;max-width:none!important;max-height:none!important;overflow:visible!important;border-radius:0!important;background:#fff!important;box-shadow:none!important}
+  .schedule-print-sheet{position:static!important;left:auto!important;top:auto!important;width:auto!important;min-height:0;margin:0;padding:0;box-shadow:none;color:#000;overflow:visible!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .schedule-print-table{width:100%!important;font-size:7px}
+  .schedule-print-table thead{display:table-row-group}
   .schedule-print-table tr{break-inside:avoid;page-break-inside:avoid}
   .schedule-print-header,.print-change-legend{break-inside:avoid;page-break-inside:avoid}
   .no-print{display:none!important}
