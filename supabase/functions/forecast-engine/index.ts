@@ -371,10 +371,8 @@ function optimizeInsiderClosingShifts(
 
   drafts = drafts.map((shift) => {
     if (shift.start <= preferredLatestStart) return shift;
-    const earliestAllowedByMaximum = shift.end - maximum;
-    if (earliestAllowedByMaximum > preferredLatestStart) return shift;
-    const start = Math.max(windowStart, earliestAllowedByMaximum, Math.min(shift.start, preferredLatestStart));
-    return { ...shift, start, note: "Closing insider coverage · start moved to 6:00 PM" };
+    const start = Math.max(windowStart, preferredLatestStart);
+    return { ...shift, start, note: shift.end - start <= maximum ? "Closing insider coverage · start moved to 6:00 PM" : "Closing insider coverage · extended from the latest standard start" };
   });
 
   return drafts
@@ -432,16 +430,25 @@ function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], h
       let points = rows.map((row) => ({ minute: businessMinute(row.interval_start, openMinute), need: role === "insider" ? row.required_insiders : row.required_drivers }));
       const windowStart = role === "driver" ? openMinute - (Number(settings.driver_preopen_minutes) || 0) : openMinute;
       let windowEnd = closeMinute;
-      if (role === "driver" && settings.late_driver_rule === "hour_before_close") {
-        windowEnd = closeMinute - 60;
-        points = points.filter((point) => point.minute < windowEnd);
-      }
-      if (role === "driver" && settings.late_driver_rule === "second_closer") {
-        windowEnd += Number(settings.driver_postclose_minutes) || 60;
-        for (let minute = closeMinute - 60; minute < windowEnd; minute += 15) {
-          const existing = points.find((point) => point.minute === minute);
-          if (existing) existing.need = Math.max(existing.need, 2);
-          else points.push({ minute, need: 2 });
+      if (role === "driver") {
+        for (let minute = windowStart; minute < openMinute; minute += 15) points.push({ minute, need: 1 });
+        if (settings.late_driver_rule === "hour_before_close") {
+          windowEnd = closeMinute - 60;
+          points = points.filter((point) => point.minute < windowEnd);
+        } else {
+          windowEnd = closeMinute + Math.max(0, Number(settings.driver_postclose_minutes) || 0);
+          for (let minute = closeMinute; minute < windowEnd; minute += 15) {
+            const existing = points.find((point) => point.minute === minute);
+            if (existing) existing.need = Math.max(existing.need, 1);
+            else points.push({ minute, need: 1 });
+          }
+        }
+        if (settings.late_driver_rule === "second_closer") {
+          for (let minute = closeMinute - 60; minute < windowEnd; minute += 15) {
+            const existing = points.find((point) => point.minute === minute);
+            if (existing) existing.need = Math.max(existing.need, 2);
+            else points.push({ minute, need: 2 });
+          }
         }
         points.sort((left, right) => left.minute - right.minute);
       }
