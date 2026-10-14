@@ -26,6 +26,7 @@ type KpiMetric = {
   final_goal: string;
   status: string;
   previous_goal?: string;
+  previous_goal_source?: "saved" | "automatic";
 };
 
 type Commitment = {
@@ -44,6 +45,7 @@ type Commitment = {
     variance_percent: string;
     status: string;
     previous_goal?: string;
+    previous_goal_source?: "saved" | "automatic";
   };
   accountability: { focus_area: string; action_plan: string; owner: string };
   labor: KpiMetric;
@@ -53,6 +55,7 @@ type Commitment = {
   adt: KpiMetric;
   extreme_orders: { actual: string; goal?: string; variance?: string; status: string };
   overall_status: string;
+  uses_automatic_previous_goals?: boolean;
 };
 
 type SupervisorGroup = { id: string; name: string; stores: string[] };
@@ -282,12 +285,12 @@ function score(item: Commitment) {
 
 function commitmentReviewRows(item: Commitment) {
   return [
-    { name: "Sales", previous: item.sales.previous_goal, actual: item.sales.actual, next: item.sales.final_goal, status: item.sales.status },
-    { name: "Labor", previous: item.labor.previous_goal, actual: item.labor.actual, next: item.labor.final_goal, status: item.labor.status },
-    { name: "SPLH", previous: item.splh.previous_goal, actual: item.splh.actual, next: item.splh.final_goal, status: item.splh.status },
-    { name: "Food variance", previous: item.food_variance.previous_goal, actual: item.food_variance.actual, next: item.food_variance.final_goal, status: item.food_variance.status },
-    { name: "Load", previous: item.load.previous_goal, actual: item.load.actual, next: item.load.final_goal, status: item.load.status },
-    { name: "ADT", previous: item.adt.previous_goal, actual: item.adt.actual, next: item.adt.final_goal, status: item.adt.status },
+    { name: "Sales", previous: item.sales.previous_goal, previousSource: item.sales.previous_goal_source, actual: item.sales.actual, next: item.sales.final_goal, status: item.sales.status },
+    { name: "Labor", previous: item.labor.previous_goal, previousSource: item.labor.previous_goal_source, actual: item.labor.actual, next: item.labor.final_goal, status: item.labor.status },
+    { name: "SPLH", previous: item.splh.previous_goal, previousSource: item.splh.previous_goal_source, actual: item.splh.actual, next: item.splh.final_goal, status: item.splh.status },
+    { name: "Food variance", previous: item.food_variance.previous_goal, previousSource: item.food_variance.previous_goal_source, actual: item.food_variance.actual, next: item.food_variance.final_goal, status: item.food_variance.status },
+    { name: "Load", previous: item.load.previous_goal, previousSource: item.load.previous_goal_source, actual: item.load.actual, next: item.load.final_goal, status: item.load.status },
+    { name: "ADT", previous: item.adt.previous_goal, previousSource: item.adt.previous_goal_source, actual: item.adt.actual, next: item.adt.final_goal, status: item.adt.status },
   ];
 }
 
@@ -363,10 +366,30 @@ function goalValue(goals: Record<string, unknown>, key: string) {
   return Number.isFinite(number) ? number : null;
 }
 
-function goalStatus(actualText: string, goal: number | null, lowerIsBetter = false) {
+function metricPerformance(metricName: string, actualText: string, goal: number | null) {
   const actual = numericValue(actualText);
-  if (actual === null || goal === null) return "Pending";
-  return lowerIsBetter ? (actual <= goal ? "Yes" : "No") : (actual >= goal ? "Yes" : "No");
+  if (actual === null || goal === null) return "pending" as const;
+  const isPercent = metricName === "Labor" || metricName === "Food variance";
+  const normalizedActual = isPercent && Math.abs(actual) <= 1 ? actual * 100 : actual;
+  const normalizedGoal = isPercent && Math.abs(goal) <= 1 ? goal * 100 : goal;
+  const lowerIsBetter = ["Labor", "Food variance", "Load", "ADT"].includes(metricName);
+  const tolerance: Record<string, number> = { Sales: 500, Labor: 0.3, SPLH: 1, "Food variance": 0.2, Load: 0.5, ADT: 0.5 };
+  const difference = lowerIsBetter ? normalizedActual - normalizedGoal : normalizedGoal - normalizedActual;
+  if (difference <= 0) return "hit" as const;
+  return difference <= (tolerance[metricName] ?? 0) ? "close" as const : "miss" as const;
+}
+
+function goalStatus(metricName: string, actualText: string, goal: number | null) {
+  const band = metricPerformance(metricName, actualText, goal);
+  return band === "hit" ? "Yes" : band === "close" ? "Close" : band === "miss" ? "No" : "Pending";
+}
+
+function statusClass(status: string) {
+  const normalized = status.toLowerCase();
+  if (["yes", "met", "goals met", "on track"].includes(normalized)) return "hit";
+  if (normalized === "close") return "close";
+  if (normalized === "no") return "miss";
+  return "pending";
 }
 
 function weightedAverage(values: number[]) {
@@ -439,12 +462,12 @@ function databaseCommitment(
   const foodGoal = goalValue(goals, "food_variance");
   const loadGoal = goalValue(goals, "load");
   const adtGoal = goalValue(goals, "adt");
-  const previousSalesGoal = goalValue(previousGoals, "sales");
-  const previousLaborGoal = goalValue(previousGoals, "labor");
-  const previousSplhGoal = goalValue(previousGoals, "splh");
-  const previousFoodGoal = goalValue(previousGoals, "food_variance");
-  const previousLoadGoal = goalValue(previousGoals, "load");
-  const previousAdtGoal = goalValue(previousGoals, "adt");
+  const savedPreviousSalesGoal = goalValue(previousGoals, "sales");
+  const savedPreviousLaborGoal = goalValue(previousGoals, "labor");
+  const savedPreviousSplhGoal = goalValue(previousGoals, "splh");
+  const savedPreviousFoodGoal = goalValue(previousGoals, "food_variance");
+  const savedPreviousLoadGoal = goalValue(previousGoals, "load");
+  const savedPreviousAdtGoal = goalValue(previousGoals, "adt");
   const salesActual = metricText(metrics, "royalty_sales", "Pending");
   const laborActual = metricText(metrics, "labor_percent", "Pending");
   const splhActual = metricText(metrics, "splh", "Pending");
@@ -457,17 +480,35 @@ function databaseCommitment(
   const foodTrajectoryValue = projectedTrajectory(history, "food_difference_percent");
   const loadTrajectoryValue = projectedTrajectory(history, "avg_load");
   const adtTrajectoryValue = projectedTrajectory(history, "avg_adt");
+  const priorHistory = history.filter((row) => row.week_end < result.week_end);
+  const resolvePreviousGoal = (saved: number | null, automatic: string) => {
+    if (saved !== null) return { value: saved, source: "saved" as const };
+    const fallback = numericValue(automatic);
+    return { value: fallback, source: fallback === null ? undefined : "automatic" as const };
+  };
+  const previousSalesGoal = resolvePreviousGoal(savedPreviousSalesGoal, roundedGoal(projectedTrajectory(priorHistory, "royalty_sales"), 100));
+  const previousLaborTrajectory = projectedTrajectory(priorHistory, "labor_percent");
+  const previousSplhTrajectory = projectedTrajectory(priorHistory, "splh");
+  const previousFoodTrajectory = projectedTrajectory(priorHistory, "food_difference_percent");
+  const previousLoadTrajectory = projectedTrajectory(priorHistory, "avg_load");
+  const previousAdtTrajectory = projectedTrajectory(priorHistory, "avg_adt");
+  const previousLaborGoal = resolvePreviousGoal(savedPreviousLaborGoal, preciseGoal(suggestedGoal(priorHistory, "labor_percent", previousLaborTrajectory, true, 0.002), 4));
+  const previousSplhGoal = resolvePreviousGoal(savedPreviousSplhGoal, preciseGoal(suggestedGoal(priorHistory, "splh", previousSplhTrajectory, false, 0.25), 2));
+  const previousFoodGoal = resolvePreviousGoal(savedPreviousFoodGoal, preciseGoal(suggestedGoal(priorHistory, "food_difference_percent", previousFoodTrajectory, true, 0.001), 4));
+  const previousLoadGoal = resolvePreviousGoal(savedPreviousLoadGoal, preciseGoal(suggestedGoal(priorHistory, "avg_load", previousLoadTrajectory, true, 0.1), 2));
+  const previousAdtGoal = resolvePreviousGoal(savedPreviousAdtGoal, preciseGoal(suggestedGoal(priorHistory, "avg_adt", previousAdtTrajectory, true, 0.25), 2));
   const salesSuggested = roundedGoal(salesTrajectoryValue, 100);
   const laborSuggested = preciseGoal(suggestedGoal(history, "labor_percent", laborTrajectoryValue, true, 0.002), 4);
   const splhSuggested = preciseGoal(suggestedGoal(history, "splh", splhTrajectoryValue, false, 0.25), 2);
   const foodSuggested = preciseGoal(suggestedGoal(history, "food_difference_percent", foodTrajectoryValue, true, 0.001), 4);
   const loadSuggested = preciseGoal(suggestedGoal(history, "avg_load", loadTrajectoryValue, true, 0.1), 2);
   const adtSuggested = preciseGoal(suggestedGoal(history, "avg_adt", adtTrajectoryValue, true, 0.25), 2);
-  const metric = (trajectory: string, suggested: string, supervisor: number | null, previousGoal: number | null, actual: string, lowerIsBetter = false): KpiMetric => ({
+  const metric = (name: string, trajectory: string, suggested: string, supervisor: number | null, previousGoal: { value: number | null; source?: "saved" | "automatic" }, actual: string): KpiMetric => ({
     trajectory, suggested_goal: suggested, supervisor_goal: supervisor,
     actual, final_goal: supervisor === null ? suggested : String(supervisor),
-    previous_goal: previousGoal === null ? "" : String(previousGoal),
-    status: goalStatus(actual, previousGoal, lowerIsBetter),
+    previous_goal: previousGoal.value === null ? "" : String(previousGoal.value),
+    previous_goal_source: previousGoal.source,
+    status: goalStatus(name, actual, previousGoal.value),
   });
   const commitment: Commitment = {
     store_id: result.store_id, source: "database", row_number: 0, week_end: result.week_end, store,
@@ -477,19 +518,20 @@ function databaseCommitment(
       supervisor_goal: salesGoal,
       actual: salesActual,
       final_goal: salesGoal === null ? salesSuggested : String(salesGoal),
-      variance: "", variance_percent: "", previous_goal: previousSalesGoal === null ? "" : String(previousSalesGoal), status: goalStatus(salesActual, previousSalesGoal),
+      variance: "", variance_percent: "", previous_goal: previousSalesGoal.value === null ? "" : String(previousSalesGoal.value), previous_goal_source: previousSalesGoal.source, status: goalStatus("Sales", salesActual, previousSalesGoal.value),
     },
     accountability: { focus_area: goalRow?.focus_area ?? "", action_plan: goalRow?.action_plan ?? "", owner: goalRow?.owner ?? "" },
-    labor: metric(preciseGoal(laborTrajectoryValue, 4), laborSuggested, laborGoal, previousLaborGoal, laborActual, true),
-    splh: metric(preciseGoal(splhTrajectoryValue, 2), splhSuggested, splhGoal, previousSplhGoal, splhActual),
-    food_variance: metric(preciseGoal(foodTrajectoryValue, 4), foodSuggested, foodGoal, previousFoodGoal, foodActual, true),
-    load: metric(preciseGoal(loadTrajectoryValue, 2), loadSuggested, loadGoal, previousLoadGoal, loadActual, true),
-    adt: metric(preciseGoal(adtTrajectoryValue, 2), adtSuggested, adtGoal, previousAdtGoal, adtActual, true),
+    labor: metric("Labor", preciseGoal(laborTrajectoryValue, 4), laborSuggested, laborGoal, previousLaborGoal, laborActual),
+    splh: metric("SPLH", preciseGoal(splhTrajectoryValue, 2), splhSuggested, splhGoal, previousSplhGoal, splhActual),
+    food_variance: metric("Food variance", preciseGoal(foodTrajectoryValue, 4), foodSuggested, foodGoal, previousFoodGoal, foodActual),
+    load: metric("Load", preciseGoal(loadTrajectoryValue, 2), loadSuggested, loadGoal, previousLoadGoal, loadActual),
+    adt: metric("ADT", preciseGoal(adtTrajectoryValue, 2), adtSuggested, adtGoal, previousAdtGoal, adtActual),
     extreme_orders: { actual: metricText(metrics, "extreme_order_percent", "Pending"), goal: metricText(metrics, "extreme_order_goal", "1.0%"), status: "Pending" },
     overall_status: "Pending",
+    uses_automatic_previous_goals: [previousSalesGoal, previousLaborGoal, previousSplhGoal, previousFoodGoal, previousLoadGoal, previousAdtGoal].some((goal) => goal.source === "automatic"),
   };
   const statuses = [commitment.sales.status, commitment.labor.status, commitment.splh.status, commitment.food_variance.status, commitment.load.status, commitment.adt.status];
-  commitment.overall_status = statuses.some((status) => status === "No") ? "Needs Follow-Up" : statuses.some((status) => status === "Yes") ? "Goals Met" : "Pending";
+  commitment.overall_status = statuses.some((status) => status === "No") ? "Needs Follow-Up" : statuses.some((status) => status === "Close") ? "Close" : statuses.some((status) => status === "Yes") ? "Goals Met" : "Pending";
   return commitment;
 }
 
@@ -721,12 +763,12 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   };
 
   const metrics = selected ? [
-    { name: "Sales", trajectory: selected.sales.model_projection, suggested: selected.sales.recommended_goal, finalGoal: selected.sales.final_goal, previousGoal: selected.sales.previous_goal, actual: selected.sales.actual, status: selected.sales.status, overridden: selected.sales.supervisor_goal !== null },
-    { name: "Labor", trajectory: selected.labor.trajectory, suggested: selected.labor.suggested_goal, finalGoal: selected.labor.final_goal, previousGoal: selected.labor.previous_goal, actual: selected.labor.actual, status: selected.labor.status, overridden: selected.labor.supervisor_goal !== null },
-    { name: "SPLH", trajectory: selected.splh.trajectory, suggested: selected.splh.suggested_goal, finalGoal: selected.splh.final_goal, previousGoal: selected.splh.previous_goal, actual: selected.splh.actual, status: selected.splh.status, overridden: selected.splh.supervisor_goal !== null },
-    { name: "Food variance", trajectory: selected.food_variance.trajectory, suggested: selected.food_variance.suggested_goal, finalGoal: selected.food_variance.final_goal, previousGoal: selected.food_variance.previous_goal, actual: selected.food_variance.actual, status: selected.food_variance.status, overridden: selected.food_variance.supervisor_goal !== null },
-    { name: "Load", trajectory: selected.load.trajectory, suggested: selected.load.suggested_goal, finalGoal: selected.load.final_goal, previousGoal: selected.load.previous_goal, actual: selected.load.actual, status: selected.load.status, overridden: selected.load.supervisor_goal !== null },
-    { name: "ADT", trajectory: selected.adt.trajectory, suggested: selected.adt.suggested_goal, finalGoal: selected.adt.final_goal, previousGoal: selected.adt.previous_goal, actual: selected.adt.actual, status: selected.adt.status, overridden: selected.adt.supervisor_goal !== null },
+    { name: "Sales", trajectory: selected.sales.model_projection, suggested: selected.sales.recommended_goal, finalGoal: selected.sales.final_goal, previousGoal: selected.sales.previous_goal, previousSource: selected.sales.previous_goal_source, actual: selected.sales.actual, status: selected.sales.status, overridden: selected.sales.supervisor_goal !== null },
+    { name: "Labor", trajectory: selected.labor.trajectory, suggested: selected.labor.suggested_goal, finalGoal: selected.labor.final_goal, previousGoal: selected.labor.previous_goal, previousSource: selected.labor.previous_goal_source, actual: selected.labor.actual, status: selected.labor.status, overridden: selected.labor.supervisor_goal !== null },
+    { name: "SPLH", trajectory: selected.splh.trajectory, suggested: selected.splh.suggested_goal, finalGoal: selected.splh.final_goal, previousGoal: selected.splh.previous_goal, previousSource: selected.splh.previous_goal_source, actual: selected.splh.actual, status: selected.splh.status, overridden: selected.splh.supervisor_goal !== null },
+    { name: "Food variance", trajectory: selected.food_variance.trajectory, suggested: selected.food_variance.suggested_goal, finalGoal: selected.food_variance.final_goal, previousGoal: selected.food_variance.previous_goal, previousSource: selected.food_variance.previous_goal_source, actual: selected.food_variance.actual, status: selected.food_variance.status, overridden: selected.food_variance.supervisor_goal !== null },
+    { name: "Load", trajectory: selected.load.trajectory, suggested: selected.load.suggested_goal, finalGoal: selected.load.final_goal, previousGoal: selected.load.previous_goal, previousSource: selected.load.previous_goal_source, actual: selected.load.actual, status: selected.load.status, overridden: selected.load.supervisor_goal !== null },
+    { name: "ADT", trajectory: selected.adt.trajectory, suggested: selected.adt.suggested_goal, finalGoal: selected.adt.final_goal, previousGoal: selected.adt.previous_goal, previousSource: selected.adt.previous_goal_source, actual: selected.adt.actual, status: selected.adt.status, overridden: selected.adt.supervisor_goal !== null },
   ] : [];
   const rankings = ordered(scopedCommitments);
   const scopedForecasts = sharedForecasts.filter((forecast) => viewLevel === "company" || (viewLevel === "supervisor" && selectedGroup?.stores.includes(forecast.store)) || (viewLevel === "store" && forecast.store === selectedStore));
@@ -839,16 +881,18 @@ export default function KPITracker({ profile }: { profile: Profile }) {
           {viewLevel !== "store" ? (
             <section className="panel table-panel kpi-leaderboard kpi-monday-review">
               <div className="table-toolbar"><div><p className="eyebrow">Monday leadership review</p><h2>{viewLevel === "company" ? "Company commitments" : `${selectedGroup?.name ?? "Supervisor"} commitments`}</h2><p>Review the commitment for {formatWeekRange(addIsoDays(weekEnd, -6), weekEnd)}, compare the actual result, then open a store to set its plan for {formatWeekRange(addIsoDays(weekEnd, 1), addIsoDays(weekEnd, 7))}.</p></div></div>
+              <div className="kpi-performance-legend"><span className="hit">Hit</span><span className="close">Close</span><span className="miss">Missed</span><small>Close means within $500 sales, 0.3 labor points, $1 SPLH, 0.2 food points, or 0.5 minute for Load and ADT.</small></div>
               <div className="responsive-table"><table><thead><tr><th>Rank</th><th>Store</th><th>Previous commitment</th><th>Actual result</th><th>Where we landed</th><th>New commitment</th><th>Monday action</th></tr></thead><tbody>{rankings.map((item, index) => {
                 const itemScore = score(item);
                 const reviewRows = commitmentReviewRows(item);
                 const missed = reviewRows.filter((metric) => metric.status.toLowerCase() === "no");
+                const close = reviewRows.filter((metric) => metric.status.toLowerCase() === "close");
                 return <tr key={item.store}>
                   <td><span className={`rank-badge rank-${index + 1}`}>{index + 1}</span></td>
                   <td><button className="kpi-store-link" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>{storeLabel(item.store)}</button></td>
-                  <td><div className="kpi-review-metrics">{reviewRows.map((metric) => <span key={metric.name}><small>{metric.name}</small><strong>{displayCommitmentValue(metric.name, metric.previous ?? "", "Not set")}</strong></span>)}</div></td>
-                  <td><div className="kpi-review-metrics">{reviewRows.map((metric) => <span key={metric.name}><small>{metric.name}</small><strong>{displayCommitmentValue(metric.name, metric.actual, "Pending")}</strong></span>)}</div></td>
-                  <td><strong className="kpi-review-score">{itemScore.percent === null ? "No prior commitment" : `${itemScore.hits}/${itemScore.total} met`}</strong>{missed.length > 0 ? <div className="kpi-miss-list">{missed.map((metric) => <span key={metric.name}>{metric.name}</span>)}</div> : itemScore.total > 0 ? <span className="kpi-all-met">All measured goals met</span> : <small className="kpi-score-detail">The first comparison appears after a prior-week commitment exists.</small>}</td>
+                  <td><div className="kpi-review-metrics">{reviewRows.map((metric) => <span key={metric.name}><small>{metric.name}</small><strong>{displayCommitmentValue(metric.name, metric.previous ?? "", "Not set")}</strong>{metric.previousSource === "automatic" && <em>Auto suggested</em>}</span>)}</div></td>
+                  <td><div className="kpi-review-metrics">{reviewRows.map((metric) => <span className={`kpi-result-value ${statusClass(metric.status)}`} key={metric.name}><small>{metric.name}</small><strong>{displayCommitmentValue(metric.name, metric.actual, "Pending")}</strong></span>)}</div></td>
+                  <td><strong className="kpi-review-score">{itemScore.percent === null ? "No prior commitment" : `${itemScore.hits}/${itemScore.total} met`}</strong>{missed.length > 0 && <div className="kpi-miss-list">{missed.map((metric) => <span key={metric.name}>{metric.name}</span>)}</div>}{close.length > 0 && <div className="kpi-close-list">{close.map((metric) => <span key={metric.name}>{metric.name} close</span>)}</div>}{missed.length === 0 && close.length === 0 && itemScore.total > 0 ? <span className="kpi-all-met">All measured goals met</span> : itemScore.total === 0 ? <small className="kpi-score-detail">The first comparison appears after a prior-week commitment exists.</small> : null}</td>
                   <td><div className="kpi-review-metrics">{reviewRows.map((metric) => <span key={metric.name}><small>{metric.name}</small><strong>{displayCommitmentValue(metric.name, metric.next, "Suggested")}</strong></span>)}</div></td>
                   <td><button className="button secondary kpi-plan-button" onClick={() => { setSelectedStore(item.store); setViewLevel("store"); }}>Review &amp; set plan</button></td>
                 </tr>;
@@ -856,7 +900,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
             </section>
           ) : selected && (
             <div className="kpi-layout">
-              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">{storeLabel(selected.store)}</p><h2>Monday performance plan</h2><p>Close the loop on {formatWeekRange(addIsoDays(weekEnd, -6), weekEnd)}, then set the commitment for {formatWeekRange(addIsoDays(weekEnd, 1), addIsoDays(weekEnd, 7))}.</p></div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Previous commitment</th><th>Actual result</th><th>Result</th><th>Trajectory</th><th>Suggested</th><th>New commitment</th></tr></thead><tbody>{metrics.map(({ name, trajectory, suggested, finalGoal, previousGoal, actual, status, overridden }) => <tr key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, previousGoal ?? "", "Not set")}</td><td>{displayCommitmentValue(name, actual, "Pending")}</td><td><span className={`kpi-status ${String(status).toLowerCase()}`}>{status || "Pending"}</span></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong><small className={`kpi-goal-source ${overridden ? "supervisor" : "suggested"}`}>{overridden ? "Supervisor override" : "Suggested default"}</small></td></tr>)}</tbody></table></div></section>
+              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">{storeLabel(selected.store)}</p><h2>Monday performance plan</h2><p>Close the loop on {formatWeekRange(addIsoDays(weekEnd, -6), weekEnd)}, then set the commitment for {formatWeekRange(addIsoDays(weekEnd, 1), addIsoDays(weekEnd, 7))}.</p>{selected.uses_automatic_previous_goals && <span className="kpi-auto-commitment">Previous-week gaps filled with automatic suggested commitments</span>}</div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="kpi-performance-legend"><span className="hit">Hit</span><span className="close">Close</span><span className="miss">Missed</span></div><div className="responsive-table"><table><thead><tr><th>Metric</th><th>Previous commitment</th><th>Actual result</th><th>Result</th><th>Trajectory</th><th>Suggested</th><th>New commitment</th></tr></thead><tbody>{metrics.map(({ name, trajectory, suggested, finalGoal, previousGoal, previousSource, actual, status, overridden }) => <tr className={`kpi-performance-row ${statusClass(status)}`} key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, previousGoal ?? "", "Not set")}{previousSource === "automatic" && <small className="kpi-auto-goal-note">Auto suggested</small>}</td><td><strong>{displayCommitmentValue(name, actual, "Pending")}</strong></td><td><span className={`kpi-status ${statusClass(status)}`}>{status || "Pending"}</span></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong><small className={`kpi-goal-source ${overridden ? "supervisor" : "suggested"}`}>{overridden ? "Supervisor override" : "Suggested default"}</small></td></tr>)}</tbody></table></div></section>
               <form className="panel kpi-editor" onSubmit={save}>
                 <div className="panel-heading"><div><p className="eyebrow">Supervisor commitment</p><h2>Set the weekly plan</h2></div><Target size={23} /></div>
                 <div className="kpi-goal-grid">
