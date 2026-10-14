@@ -17,6 +17,7 @@ import {
   Wrench,
   MonitorCog,
   Receipt,
+  ShieldAlert,
   ShieldCheck,
   Users,
   X,
@@ -36,6 +37,7 @@ import SupportTickets from "./components/SupportTickets";
 import KPITracker from "./components/KPITracker";
 import LaborManagement from "./components/LaborManagement";
 import ReportImportCenter from "./components/ReportImportCenter";
+import HumanResources from "./components/HumanResources";
 
 const navigation: {
   id: PortalSection;
@@ -46,6 +48,7 @@ const navigation: {
   { id: "home", label: "Home", icon: Home },
   { id: "kpi", label: "KPI dashboard", icon: Gauge },
   { id: "labor", label: "Labor & scheduling", icon: CalendarClock, roles: ["manager", "supervisor", "admin"] },
+  { id: "hr", label: "Human Resources", icon: ShieldAlert, roles: ["manager", "supervisor", "admin"] },
   { id: "imports", label: "Weekly data imports", icon: UploadCloud, roles: ["supervisor", "admin"] },
   { id: "uniforms", label: "Uniforms", icon: Package },
   { id: "smallwares", label: "Smallwares", icon: ShoppingBag },
@@ -72,7 +75,7 @@ async function loadProfile(userId: string, email: string): Promise<Profile | nul
   if (!supabase) return demoProfile;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id,email,full_name,role,location,active")
+    .select("id,email,full_name,role,location,active,store_id")
     .eq("id", userId)
     .maybeSingle();
 
@@ -93,6 +96,7 @@ async function loadProfile(userId: string, email: string): Promise<Profile | nul
     role: data.role,
     location: data.location ?? "",
     active: data.active,
+    storeId: data.store_id,
     permissions: (permissionRows ?? []).map((item: { permission: string }) => item.permission),
   };
 }
@@ -203,6 +207,7 @@ export default function App() {
     home: <Dashboard profile={profile} onNavigate={selectSection} />,
     kpi: <KPITracker profile={profile} />,
     labor: <LaborManagement profile={profile} />,
+    hr: <HumanResources profile={profile} />,
     imports: <ReportImportCenter profile={profile} />,
     uniforms: <Uniforms profile={profile} />,
     smallwares: <Uniforms profile={profile} category="smallware" />,

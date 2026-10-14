@@ -7,6 +7,7 @@ export type Profile = {
   role: Role;
   location: string;
   active: boolean;
+  storeId?: string | null;
   permissions?: string[];
 };
 
@@ -14,6 +15,7 @@ export type PortalSection =
   | "home"
   | "kpi"
   | "labor"
+  | "hr"
   | "imports"
   | "uniforms"
   | "smallwares"
