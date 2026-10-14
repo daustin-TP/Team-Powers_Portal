@@ -232,7 +232,7 @@ function optimizeDriverShifts(
   type DriverDraft = { start: number; end: number; note: string };
   const toBusinessMinute = (time: string) => {
     const minute = timeMinutes(time);
-    return minute < openMinute ? minute + 1440 : minute;
+    return minute < windowStart ? minute + 1440 : minute;
   };
   let drafts: DriverDraft[] = shifts.map((shift) => {
     const start = toBusinessMinute(shift.start_time);
@@ -476,7 +476,7 @@ function buildManagerShifts(planId: string, day: number, openMinute: number, clo
   return buildCoverageShifts(planId, day, "manager", points, start, end, minimum, maximum, "Required management coverage");
 }
 
-function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], hours: Map<number, { open: string; close: string }>, settings: ForecastSettings) {
+export function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], hours: Map<number, { open: string; close: string }>, settings: ForecastSettings) {
   const minimum = Math.max(180, (Number(settings.minimum_shift_hours) || 3) * 60);
   const maximum = Math.max(minimum, (Number(settings.max_shift_hours) || 9) * 60);
   const shifts: SuggestedShift[] = [];
@@ -494,24 +494,17 @@ function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], h
       const windowStart = role === "driver" ? openMinute - (Number(settings.driver_preopen_minutes) || 0) : openMinute;
       let windowEnd = closeMinute;
       if (role === "driver") {
-        for (let minute = windowStart; minute < openMinute; minute += 15) points.push({ minute, need: 1 });
-        if (settings.late_driver_rule === "hour_before_close") {
-          windowEnd = closeMinute - 60;
-          points = points.filter((point) => point.minute < windowEnd);
-        } else {
-          windowEnd = closeMinute + Math.max(0, Number(settings.driver_postclose_minutes) || 0);
-          for (let minute = closeMinute; minute < windowEnd; minute += 15) {
-            const existing = points.find((point) => point.minute === minute);
-            if (existing) existing.need = Math.max(existing.need, 1);
-            else points.push({ minute, need: 1 });
-          }
-        }
-        if (settings.late_driver_rule === "second_closer") {
-          for (let minute = closeMinute - 60; minute < windowEnd; minute += 15) {
-            const existing = points.find((point) => point.minute === minute);
-            if (existing) existing.need = Math.max(existing.need, 2);
-            else points.push({ minute, need: 2 });
-          }
+        // The final driver always covers cleanup. The late-driver rule applies
+        // only to the second-to-last driver, never to the whole driver window.
+        windowEnd = closeMinute + Math.max(0, Number(settings.driver_postclose_minutes) || 0);
+        const lateDriverEnd = settings.late_driver_rule === "hour_before_close" ? closeMinute - 60
+          : settings.late_driver_rule === "second_closer" ? windowEnd : closeMinute;
+        const lateDriverStart = Math.max(openMinute, lateDriverEnd - minimum);
+        for (let minute = windowStart; minute < windowEnd; minute += 15) {
+          const minimumDrivers = minute >= lateDriverStart && minute < lateDriverEnd ? 2 : 1;
+          const existing = points.find((point) => point.minute === minute);
+          if (existing) existing.need = Math.max(existing.need, minimumDrivers);
+          else points.push({ minute, need: minimumDrivers });
         }
         points.sort((left, right) => left.minute - right.minute);
       }
