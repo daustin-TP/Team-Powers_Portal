@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
   CheckCircle2,
+  Sparkles,
   ChevronRight,
   ClipboardCheck,
   CreditCard,
@@ -254,6 +255,12 @@ export default function App() {
             );
           })}
         </nav>
+
+        {["manager", "supervisor", "admin"].includes(profile.role) && (
+          <a className="sidebar-support" href={import.meta.env.VITE_CELEBRATIONS_URL || "/celebrations"}>
+            <Sparkles size={18} /><span>Celebrations</span><small>Share a team win</small>
+          </a>
+        )}
 
         <a className="sidebar-support" href="mailto:daustin@powerspizza.com?subject=Dash-OS%20support">
           <span>Support or suggestions</span>
