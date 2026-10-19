@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { Profile } from "../types";
+import { rankStores, rankingMetrics, summarizeGroup, type StoreRanking } from "../../supabase/functions/kpi-dashboard/analytics";
 
 type KpiMetric = {
   trajectory: string;
@@ -58,7 +59,7 @@ type Commitment = {
   uses_automatic_previous_goals?: boolean;
 };
 
-type SupervisorGroup = { id: string; name: string; stores: string[] };
+type SupervisorGroup = { id: string; name: string; stores: string[]; store_ids?: string[]; summary?: ReturnType<typeof summarizeGroup> };
 type KpiAccess = {
   canEdit: boolean;
   canViewAll: boolean;
@@ -545,6 +546,9 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   const [weeklyMetricsError, setWeeklyMetricsError] = useState("");
   const [selectedStore, setSelectedStore] = useState("");
   const [selectedSupervisor, setSelectedSupervisor] = useState("");
+  const [companyRankings, setCompanyRankings] = useState<StoreRanking[]>([]);
+  const [companyStoreCount, setCompanyStoreCount] = useState(0);
+  const requestId = useRef(0);
   const [viewLevel, setViewLevel] = useState<ViewLevel>(profile.role === "supervisor" || profile.role === "admin" ? "company" : "store");
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>("commitments");
   const [weeklyMetricSort, setWeeklyMetricSort] = useState<WeeklyMetricSort>({ key: "store", direction: "asc" });
@@ -562,15 +566,17 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     supervisorGroups: [],
   });
 
-  const selected = useMemo(() => commitments.find((item) => item.store === selectedStore) ?? commitments[0], [commitments, selectedStore]);
-  const selectedGroup = access.supervisorGroups.find((group) => group.id === selectedSupervisor) ?? access.supervisorGroups[0];
+  const selected = useMemo(() => commitments.find((item) => item.store === selectedStore), [commitments, selectedStore]);
+  const selectedGroup = profile.role === "supervisor"
+    ? access.supervisorGroups.find((group) => group.id === profile.id)
+    : access.supervisorGroups.find((group) => group.id === selectedSupervisor) ?? access.supervisorGroups[0];
   const scopedCommitments = useMemo(() => {
-    if (viewLevel === "supervisor" && selectedGroup) return commitments.filter((item) => selectedGroup.stores.includes(item.store));
-    if (viewLevel === "store" && selected) return [selected];
+    if (viewLevel === "supervisor") return commitments.filter((item) => selectedGroup?.stores.includes(item.store));
+    if (viewLevel === "store") return selected ? [selected] : [];
     return commitments;
   }, [commitments, selected, selectedGroup, viewLevel]);
   const scopedWeeklyMetrics = useMemo(() => {
-    if (viewLevel === "supervisor" && selectedGroup) return weeklyMetrics.filter((item) => selectedGroup.stores.includes(item.store));
+    if (viewLevel === "supervisor") return weeklyMetrics.filter((item) => selectedGroup?.stores.includes(item.store));
     if (viewLevel === "store" && selectedStore) return weeklyMetrics.filter((item) => item.store === selectedStore);
     return weeklyMetrics;
   }, [weeklyMetrics, selectedStore, selectedGroup, viewLevel]);
@@ -590,125 +596,54 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     setSelectedSupervisor((current) => nextAccess.supervisorGroups.some((group) => group.id === current) ? current : nextAccess.supervisorGroups[0]?.id ?? "");
   };
 
-  const loadCommitments = async () => {
-    setCommitmentsLoading(true);
-    setCommitments([]);
-    setError("");
-    setMessage("");
+  const loadDashboard = async () => {
+    const request = ++requestId.current;
+    setCommitmentsLoading(true); setMetricsLoading(true);
+    setError(""); setWeeklyMetricsError("");
+    setCommitments([]); setWeeklyMetrics([]); setCompanyRankings([]);
+    setCompanyStoreCount(0);
+    setAccess((current) => ({ ...current, supervisorGroups: [] }));
+    setSharedForecasts([]); setNextWeekForecasts([]); setCurrentGoalCount(0);
     if (!isSupabaseConfigured || !supabase) {
       const demo = demoCommitments.map((item) => ({ ...item, week_end: weekEnd }));
-      setCommitments(demo);
-      setSelectedStore(demo[0]?.store ?? "");
-      setAccess((current) => ({ ...current, supervisorGroups: [{ id: "demo-supervisor", name: "North Area", stores: demo.map((item) => item.store) }] }));
-      setViewLevel("company");
-      setCommitmentsLoading(false);
-      return;
+      const results = demoWeeklyMetrics.map((item) => ({ ...item, store_id: item.store, week_end: weekEnd }));
+      const stores = results.map((item) => ({ id: item.store, name: storeLabel(item.store), store_number: item.store }));
+      setCommitments(demo); setWeeklyMetrics(results); setCompanyRankings(rankStores(stores, results)); setCompanyStoreCount(stores.length);
+      setSelectedStore((current) => current || demo[0]?.store || "");
+      applyAccess({ canEdit: true, canViewAll: true, editableStores: null, assignedStores: stores.map((store) => store.id), supervisorGroups: [
+        { id: profile.role === "supervisor" ? profile.id : "demo-north", name: "North Area", stores: stores.slice(0,1).map((store) => store.id), summary: summarizeGroup(results.slice(0,1)) },
+        { id: "demo-south", name: "South Area", stores: stores.slice(1).map((store) => store.id), summary: summarizeGroup(results.slice(1)) },
+      ] });
+      setCommitmentsLoading(false); setMetricsLoading(false); return;
     }
-
-    const commitmentWeekEnd = addIsoDays(weekEnd, 7);
-    const planningWeekStart = addIsoDays(weekEnd, 1);
-    const [resultRows, goalRows, historyRows, forecastRows] = await Promise.all([
-      supabase.from("kpi_weekly_results").select("store_id,week_end,metrics,stores(name)").eq("week_end", weekEnd),
-      supabase.from("kpi_goal_commitments").select("store_id,week_end,goals,focus_area,action_plan,owner").in("week_end", [weekEnd, commitmentWeekEnd]),
-      supabase.from("kpi_weekly_results").select("store_id,week_end,metrics").gte("week_end", addIsoDays(weekEnd, -77)).lte("week_end", weekEnd).order("week_end", { ascending: true }),
-      supabase.from("demand_forecast_runs").select("store_id,weekly_projection").eq("week_start", planningWeekStart).eq("is_current", true),
-    ]);
-    if (!resultRows.error) {
-      const goalsByStore = new Map((goalRows.data ?? []).filter((item) => item.week_end === commitmentWeekEnd).map((item) => [item.store_id, item]));
-      const previousGoalsByStore = new Map((goalRows.data ?? []).filter((item) => item.week_end === weekEnd).map((item) => [item.store_id, item]));
-      const historyByStore = new Map<string, HistoricalKpiResult[]>();
-      for (const item of historyRows.data ?? []) {
-        const existing = historyByStore.get(item.store_id) ?? [];
-        existing.push(item as HistoricalKpiResult);
-        historyByStore.set(item.store_id, existing);
-      }
-      const forecastsByStoreId = new Map((forecastRows.data ?? []).map((item) => [item.store_id, item]));
-      const rows = (resultRows.data ?? []).map((item) => databaseCommitment(
-        item as Parameters<typeof databaseCommitment>[0],
-        goalsByStore.get(item.store_id),
-        previousGoalsByStore.get(item.store_id),
-        historyByStore.get(item.store_id) ?? [],
-        forecastsByStoreId.get(item.store_id),
-      ));
-      setCommitments(rows); setSelectedStore((current) => rows.length === 0 ? current : rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setCommitmentsLoading(false); return;
+    const { data, error: loadError } = await supabase.functions.invoke("kpi-dashboard", { body: { week_end: weekEnd } });
+    if (request !== requestId.current) return;
+    if (loadError || !data?.ok) {
+      setError(data?.error || loadError?.message || "The KPI dashboard could not be loaded.");
+      setCommitmentsLoading(false); setMetricsLoading(false); return;
     }
-    const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_commitments", week_end: weekEnd } });
-    if (invokeError || !data?.ok) {
-      setError(data?.error || invokeError?.message || "The KPI data could not be loaded.");
-      setCommitments([]);
-      setCommitmentsLoading(false);
-      return;
-    }
-
-    const rows = (data.result ?? []).map((item: Commitment) => ({ ...item, source: "sheet_bridge" as const })) as Commitment[];
-    const nextAccess = accessFromResponse(data);
-    setCommitments(rows);
-    applyAccess(nextAccess);
-    setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? "");
-    setCommitmentsLoading(false);
-  };
-
-  const loadWeeklyMetrics = async () => {
-    setMetricsLoading(true);
-    setWeeklyMetrics([]);
-    setWeeklyMetricsError("");
-    setError("");
-    if (!isSupabaseConfigured || !supabase) {
-      const demo = demoWeeklyMetrics.map((item) => ({ ...item, week_end: weekEnd }));
-      setWeeklyMetrics(demo);
-      setSelectedStore((current) => demo.some((item) => item.store === current) ? current : demo[0]?.store ?? "");
-      setMetricsLoading(false);
-      return;
-    }
-
-    const directRows = await supabase.from("kpi_weekly_results").select("store_id,week_end,metrics,stores(name)").eq("week_end", weekEnd);
-    if (!directRows.error) {
-      const rows = (directRows.data ?? []).map((item) => {
-        const storeRecord = Array.isArray(item.stores) ? item.stores[0] : item.stores;
-        const metrics = item.metrics as Record<string, unknown>;
-        return { store_id: item.store_id, store: metricText(metrics, "store_number", storeRecord?.name ?? "Store").replace(/^Store\s+/i, "").split(" · ")[0], week_end: item.week_end, metrics } as WeeklyMetricRow;
-      });
-      setWeeklyMetrics(rows); setSelectedStore((current) => rows.length === 0 ? current : rows.some((item) => item.store === current) ? current : rows[0]?.store ?? ""); setMetricsLoading(false); return;
-    }
-    const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", { body: { action: "get_weekly_metrics", week_end: weekEnd } });
-    if (invokeError || !data?.ok) {
-      setWeeklyMetrics([]);
-      setWeeklyMetricsError(data?.error || invokeError?.message || "The weekly KPI results could not be loaded.");
-      setMetricsLoading(false);
-      return;
-    }
-
-    const rows = (data.result ?? []) as WeeklyMetricRow[];
-    setWeeklyMetrics(rows);
     applyAccess(accessFromResponse(data));
-    setSelectedStore((current) => rows.some((item) => item.store === current) ? current : rows[0]?.store ?? "");
-    setMetricsLoading(false);
+    const resultRows = data.results as Array<Parameters<typeof databaseCommitment>[0]>;
+    const goals = data.goals as Array<{ store_id: string; week_end: string; goals: Record<string, unknown>; focus_area: string; action_plan: string; owner: string }>;
+    const history = data.history as HistoricalKpiResult[];
+    const forecasts = data.forecasts as SharedForecast[];
+    const rows = resultRows.map((item) => databaseCommitment(item,
+      goals.find((goal) => goal.store_id === item.store_id && goal.week_end === addIsoDays(weekEnd, 7)),
+      goals.find((goal) => goal.store_id === item.store_id && goal.week_end === weekEnd),
+      history.filter((row) => row.store_id === item.store_id),
+      forecasts.find((forecast) => forecast.store_id === item.store_id && forecast.week_start === addIsoDays(weekEnd, 1)),
+    ));
+    setCommitments(rows);
+    setWeeklyMetrics(resultRows.map((row) => ({ store_id: row.store_id, store: String(row.metrics.store_number), week_end: row.week_end, metrics: row.metrics })));
+    setCompanyRankings(data.rankings); setCompanyStoreCount(data.company_store_count);
+    setSelectedStore((current) => data.rankings.some((row: StoreRanking) => row.store === current) ? current : data.rankings[0]?.store ?? "");
+    setSharedForecasts(forecasts.filter((forecast) => forecast.week_start === addIsoDays(weekEnd, 1)));
+    setNextWeekForecasts(forecasts.filter((forecast) => forecast.week_start === addIsoDays(weekEnd, 8)));
+    setCurrentGoalCount(goals.filter((goal) => goal.week_end === addIsoDays(weekEnd, 7)).length);
+    setCommitmentsLoading(false); setMetricsLoading(false);
   };
 
-  const loadSharedForecasts = async () => {
-    if (!isSupabaseConfigured || !supabase) { setSharedForecasts([]); setNextWeekForecasts([]); setCurrentGoalCount(0); return; }
-    const currentWeekStart = addIsoDays(weekEnd, 1);
-    const nextWeekStart = addIsoDays(weekEnd, 8);
-    const [forecastResult, goalsResult] = await Promise.all([
-      supabase.from("demand_forecast_runs").select("store_id,week_start,confidence_score,confidence_level,weekly_projection,stores(name,store_number)").in("week_start", [currentWeekStart, nextWeekStart]).eq("is_current", true),
-      supabase.from("kpi_goal_commitments").select("id", { count: "exact", head: true }).eq("week_end", addIsoDays(weekEnd, 7)),
-    ]);
-    if (forecastResult.error) { setSharedForecasts([]); setNextWeekForecasts([]); return; }
-    const rows = (forecastResult.data ?? []).map((row) => {
-      const storeRecord = Array.isArray(row.stores) ? row.stores[0] : row.stores;
-      const storeNumber = String(storeRecord?.store_number ?? String(storeRecord?.name ?? "").match(/\b\d{4}\b/)?.[0] ?? "");
-      return { store_id: row.store_id, store: storeNumber, week_start: row.week_start, confidence_score: Number(row.confidence_score), confidence_level: row.confidence_level, weekly_projection: row.weekly_projection ?? {} } as SharedForecast;
-    }).filter((row) => row.store);
-    setSharedForecasts(rows.filter((row) => row.week_start === currentWeekStart));
-    setNextWeekForecasts(rows.filter((row) => row.week_start === nextWeekStart));
-    setCurrentGoalCount(goalsResult.count ?? 0);
-  };
-
-  useEffect(() => {
-    if (dashboardMode === "details") void loadWeeklyMetrics();
-    else void loadCommitments();
-  }, [weekEnd, dashboardMode]);
-  useEffect(() => { void loadSharedForecasts(); }, [weekEnd]);
+  useEffect(() => { void loadDashboard(); return () => { requestId.current += 1; }; }, [weekEnd, profile.id]);
   useEffect(() => { setDraft(selected ? draftFromCommitment(selected) : emptyDraft()); }, [selected]);
 
   const save = async (event: FormEvent) => {
@@ -731,7 +666,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
         focus_area: draft.focus_area, action_plan: draft.action_plan, owner: draft.owner, updated_by: profile.id, updated_at: new Date().toISOString(),
       }, { onConflict: "store_id,week_end" });
       if (databaseError) { setError(databaseError.message); setSaving(false); return; }
-      setMessage(`Store ${selected.store} commitment saved in Dash-OS.`); setSaving(false); await Promise.all([loadCommitments(), loadSharedForecasts()]); return;
+      setMessage(`Store ${selected.store} commitment saved in Dash-OS.`); setSaving(false); await loadDashboard(); return;
     }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", {
       body: {
@@ -808,12 +743,12 @@ export default function KPITracker({ profile }: { profile: Profile }) {
   const storeTabs = dashboardMode === "details"
     ? weeklyMetrics.map((item) => ({ store: item.store, status: "Weekly results" }))
     : commitments.map((item) => ({ store: item.store, status: item.overall_status }));
-  const refreshCurrentView = () => dashboardMode === "details" ? loadWeeklyMetrics() : loadCommitments();
+  const refreshCurrentView = () => loadDashboard();
 
   const levelControls = access.canViewAll && (
     <div className="kpi-view-switcher" role="tablist" aria-label="KPI view level">
       <button role="tab" aria-selected={viewLevel === "company"} className={viewLevel === "company" ? "active" : ""} onClick={() => setViewLevel("company")}><Building2 size={18} /><span>Whole company<small>All visible stores</small></span></button>
-      <button role="tab" aria-selected={viewLevel === "supervisor"} className={viewLevel === "supervisor" ? "active" : ""} onClick={() => setViewLevel("supervisor")} disabled={!access.supervisorGroups.length}><Users size={18} /><span>Supervisor view<small>Compare area groups</small></span></button>
+      <button role="tab" aria-selected={viewLevel === "supervisor"} className={viewLevel === "supervisor" ? "active" : ""} onClick={() => setViewLevel("supervisor")} ><Users size={18} /><span>Supervisor view<small>Compare area groups</small></span></button>
       <button role="tab" aria-selected={viewLevel === "store"} className={viewLevel === "store" ? "active" : ""} onClick={() => setViewLevel("store")}><Store size={18} /><span>Individual store<small>Detailed weekly plan</small></span></button>
     </div>
   );
@@ -841,11 +776,21 @@ export default function KPITracker({ profile }: { profile: Profile }) {
 
       {levelControls}
       {viewLevel === "supervisor" && access.canViewAll && (
-        <section className="kpi-scope-bar"><label>Supervisor group<select value={selectedGroup?.id ?? ""} onChange={(event) => setSelectedSupervisor(event.target.value)}>{access.supervisorGroups.map((group) => <option value={group.id} key={group.id}>{group.name} · {group.stores.length} stores</option>)}</select></label><p>Showing {selectedGroup?.stores.join(", ") || "no assigned stores"}</p></section>
+        <section className="kpi-scope-bar"><label>Supervisor group<select disabled={profile.role === "supervisor"} value={selectedGroup?.id ?? ""} onChange={(event) => setSelectedSupervisor(event.target.value)}>{(profile.role === "supervisor" ? access.supervisorGroups.filter((group) => group.id === profile.id) : access.supervisorGroups).map((group) => <option value={group.id} key={group.id}>{group.name} · {group.stores.length} stores</option>)}</select></label><p>Showing {selectedGroup?.stores.map(storeLabel).join(", ") || "no assigned stores"}</p></section>
       )}
       {viewLevel === "store" && storeTabs.length > 0 && (
         <div className="kpi-store-tabs" role="tablist" aria-label="Store selection">{storeTabs.map((item) => <button role="tab" aria-selected={selectedStore === item.store} className={selectedStore === item.store ? "active" : ""} key={item.store} onClick={() => setSelectedStore(item.store)}>{storeLabel(item.store)}<span>{item.status}</span></button>)}</div>
       )}
+      {!currentLoading && companyRankings.length > 0 && <section className="panel kpi-company-ranks">
+        <div className="table-toolbar"><div><p className="eyebrow">Company comparison · {companyStoreCount} active stores</p><h2>Six KPI rankings</h2><p>Sales has two independent ranks: weekly dollars and PCYA growth. #1 is best. Ties share a rank; N/A is excluded from that metric.</p></div></div>
+        <div className="responsive-table"><table><thead><tr><th>Store</th>{rankingMetrics.map((metric) => <th key={metric.key}>{metric.label}<small className="kpi-score-detail">{metric.lower ? "Lower is better" : "Higher is better"}</small></th>)}</tr></thead><tbody>
+          {companyRankings.filter((row) => viewLevel === "company" || (viewLevel === "store" ? row.store === selectedStore : selectedGroup?.stores.includes(row.store))).map((row) => <tr key={row.store_id}><th scope="row">{row.name}<small className="kpi-score-detail">{row.store}</small></th>{rankingMetrics.map((metric) => { const entry = row.metrics[metric.key]; return <td key={metric.key}><strong>{entry.rank === null ? "N/A" : (entry.tied ? "T" : "") + entry.rank + " of " + entry.eligible}</strong><small className="kpi-score-detail">{entry.value === null ? metric.key === "pcya" ? "No comparable prior-year sales" : "No result" : metric.format === "percent" ? (entry.value * 100).toFixed(2) + "%" : metric.format === "currency" ? formatCurrency(entry.value, 2) : entry.value.toFixed(2) + " min"}</small></td>; })}</tr>)}
+        </tbody></table></div>
+        <p className="security-note">Ranks use the selected week's actual results across the company, regardless of this view's filter. PCYA compares only stores with positive prior-year sales. Food variance uses the reported signed variance.</p>
+      </section>}
+      {viewLevel === "supervisor" && !currentLoading && <section className="panel kpi-group-performance"><h2>{selectedGroup?.name || "Supervisor group"} performance</h2>
+        {!selectedGroup?.stores.length ? <p>No stores assigned. An administrator can set this up in Team access → Supervisor store groups.</p> : <><p>{selectedGroup.stores.length} assigned stores · Results week ending {weekEnd}</p><div className="kpi-group-metrics">{rankingMetrics.map((metric) => { const value = selectedGroup.summary?.values[metric.key] ?? null; return <article key={metric.key}><span>{metric.label}</span><strong>{value === null ? "N/A" : metric.format === "percent" ? (value * 100).toFixed(2) + "%" : metric.format === "currency" ? formatCurrency(value, 2) : value.toFixed(2) + " min"}</strong><small>{metric.key === "sales" ? "Group total" : metric.key === "pcya" ? "Comparable-store sales growth" : "Store average"} · {selectedGroup.summary?.counts[metric.key] ?? 0} reporting</small></article>; })}</div></>}
+      </section>}
       {scopedNextForecasts.length > 0 && <section className="kpi-forward-forecast"><div><span>Following-week outlook</span><strong>{formatCurrency(nextProjectedSalesTotal, 2)}</strong><small>{scopedNextForecasts.length} store{scopedNextForecasts.length === 1 ? "" : "s"} · {nextAverageConfidence.toFixed(0)}% average confidence</small></div><p>Use this early view to start staffing and sales planning before the week becomes current.</p></section>}
 
       {currentLoading ? (
