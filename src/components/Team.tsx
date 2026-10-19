@@ -17,10 +17,14 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const [stores,setStores]=useState<Store[]>([]); const [newStore,setNewStore]=useState(""); const [newStoreNumber,setNewStoreNumber]=useState("");
   const [showInvite, setShowInvite] = useState(false);
   const [email, setEmail] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [role, setRole] = useState<Role>("employee");
   const [location, setLocation] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [nameSaving, setNameSaving] = useState<string | null>(null);
+  const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [groupSupervisor, setGroupSupervisor] = useState("");
   const [assignmentSaving, setAssignmentSaving] = useState(false);
@@ -99,13 +103,26 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const setKpiAccess=async(m:Member,enabled:boolean)=>{await setPermission(m,"kpi_view",enabled);if(!enabled){await setPermission(m,"kpi_edit_goals",false);await setPermission(m,"kpi_view_all",false)}};
   const setCapability=async(m:Member,c:"maintenance"|"technology",enabled:boolean)=>{if(!supabase)return;const r=enabled?await supabase.from("profile_capabilities").insert({profile_id:m.id,capability:c}):await supabase.from("profile_capabilities").delete().eq("profile_id",m.id).eq("capability",c);if(r.error)setMessage(r.error.message);else setMembers(v=>v.map(x=>x.id===m.id?{...x,capabilities:enabled?[...(x.capabilities??[]),c]:(x.capabilities??[]).filter(y=>y!==c)}:x))};
   const changeRole=async(m:Member,nextRole:Role)=>{if(m.email.toLowerCase()===OWNER_EMAIL){setMessage("The portal owner must remain an administrator.");return}if(!supabase)return;const {error}=await supabase.from("profiles").update({role:nextRole,updated_at:new Date().toISOString()}).eq("id",m.id);if(error){setMessage(error.message);return}await supabase.from("invited_employees").update({role:nextRole}).eq("email",m.email.toLowerCase());await loadDirectory();setMessage(`${m.fullName} is now assigned the ${nextRole} role.`)};
+  const saveMemberName=async(m:Member)=>{
+    const fullName=(nameDrafts[m.id]??m.fullName).trim().replace(/\s+/g," ");
+    if(fullName.split(" ").length<2){setMessage("Enter both a first and last name.");return}
+    if(!supabase)return;
+    setNameSaving(m.id);setMessage("");
+    const {error}=await supabase.from("profiles").update({full_name:fullName,updated_at:new Date().toISOString()}).eq("id",m.id);
+    if(error){setMessage(error.message);setNameSaving(null);return}
+    const inviteUpdate=await supabase.from("invited_employees").update({full_name:fullName}).eq("email",m.email.toLowerCase());
+    if(inviteUpdate.error){setMessage(`The profile name was saved, but the invitation record could not be updated: ${inviteUpdate.error.message}`)}else setMessage(`${fullName}'s name was saved.`);
+    setMembers(current=>current.map(member=>member.id===m.id?{...member,fullName}:member));
+    setNameDrafts(current=>{const next={...current};delete next[m.id];return next});
+    setNameSaving(null);
+  };
 
   const invite = async (event: FormEvent) => {
     event.preventDefault();
     setSaving(true);
     setMessage("");
     const normalizedEmail = email.trim().toLowerCase();
-    const fullName = normalizedEmail.split("@")[0].replace(/[._-]/g, " ");
+    const fullName = `${firstName.trim()} ${lastName.trim()}`.trim().replace(/\s+/g, " ");
     if (supabase) {
       const { error } = await supabase.from("invited_employees").upsert(
         {
@@ -136,6 +153,8 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
     }
     setMessage(`${normalizedEmail} is authorized and can request a sign-in link.`);
     setEmail("");
+    setFirstName("");
+    setLastName("");
     setLocation("");
     setShowInvite(false);
     setSaving(false);
@@ -181,6 +200,8 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
       {showInvite && (
         <form className="invite-card" onSubmit={invite}>
           <div><p className="eyebrow">New team member</p><h2>Send an invitation</h2></div>
+          <label>First name<input value={firstName} onChange={(event) => setFirstName(event.target.value)} autoComplete="given-name" required /></label>
+          <label>Last name<input value={lastName} onChange={(event) => setLastName(event.target.value)} autoComplete="family-name" required /></label>
           <label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@powerspizza.com" required /></label>
           <label>Portal role<select value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="employee">Employee</option><option value="supervisor">Supervisor</option><option value="manager">Manager</option><option value="accounting">Accounting</option><option value="admin">Administrator</option></select></label>
           <label>Store<select value={location} onChange={e=>setLocation(e.target.value)}><option value="">Unassigned</option>{stores.filter(s=>s.active).map(s=><option key={s.id}>{s.name}</option>)}</select></label>
@@ -203,6 +224,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
                 <td className="member-actions"><button className="icon-button" aria-label={`Open options for ${member.fullName}`} aria-expanded={openMenu === member.id} onClick={() => setOpenMenu(openMenu === member.id ? null : member.id)}><MoreHorizontal size={18} /></button>
                   {openMenu === member.id && <div className="member-menu">
                     <strong>{member.fullName}</strong>
+                    <label>First and last name<div className="member-name-editor"><input value={nameDrafts[member.id]??member.fullName} onChange={e=>setNameDrafts(current=>({...current,[member.id]:e.target.value}))}/><button type="button" className="button secondary" disabled={nameSaving===member.id||(nameDrafts[member.id]??member.fullName).trim()===member.fullName} onClick={()=>void saveMemberName(member)}>{nameSaving===member.id?"Saving…":"Save name"}</button></div></label>
                     {member.email.toLowerCase() === OWNER_EMAIL || member.id === currentProfile.id
                       ? <span>This administrator account is protected.</span>
                       : <button type="button" onClick={() => toggle(member.id)}>{member.active ? <><UserX size={15}/> Deactivate access</> : <><UserCheck size={15}/> Reactivate access</>}</button>}
