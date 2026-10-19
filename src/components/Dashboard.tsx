@@ -120,8 +120,8 @@ export default function Dashboard({
       tone: "green",
     },
     {
-      title: "Order uniforms",
-      detail: "Request shirts, hats, and other approved items.",
+      title: "Order store uniforms",
+      detail: "Restock approved uniforms for the store’s on-hand inventory.",
       icon: Package,
       section: "uniforms",
       tone: "green",

@@ -7,6 +7,7 @@ import {
   CreditCard,
   Gauge,
   CalendarClock,
+  CalendarDays,
   UploadCloud,
   Home,
   LogOut,
@@ -38,6 +39,7 @@ import KPITracker from "./components/KPITracker";
 import LaborManagement from "./components/LaborManagement";
 import ReportImportCenter from "./components/ReportImportCenter";
 import HumanResources from "./components/HumanResources";
+import OperationsCalendar from "./components/OperationsCalendar";
 
 const navigation: {
   id: PortalSection;
@@ -48,9 +50,10 @@ const navigation: {
   { id: "home", label: "Home", icon: Home },
   { id: "kpi", label: "KPI dashboard", icon: Gauge },
   { id: "labor", label: "Labor & scheduling", icon: CalendarClock, roles: ["manager", "supervisor", "admin"] },
+  { id: "calendar", label: "Team calendar", icon: CalendarDays },
   { id: "hr", label: "Human Resources", icon: ShieldAlert, roles: ["manager", "supervisor", "admin"] },
   { id: "imports", label: "Weekly data imports", icon: UploadCloud, roles: ["supervisor", "admin"] },
-  { id: "uniforms", label: "Uniforms", icon: Package },
+  { id: "uniforms", label: "Store uniforms", icon: Package },
   { id: "smallwares", label: "Smallwares", icon: ShoppingBag },
   { id: "maintenance", label: "Maintenance", icon: Wrench },
   { id: "technology", label: "Technology", icon: MonitorCog },
@@ -207,6 +210,7 @@ export default function App() {
     home: <Dashboard profile={profile} onNavigate={selectSection} />,
     kpi: <KPITracker profile={profile} />,
     labor: <LaborManagement profile={profile} />,
+    calendar: <OperationsCalendar profile={profile} />,
     hr: <HumanResources profile={profile} />,
     imports: <ReportImportCenter profile={profile} />,
     uniforms: <Uniforms profile={profile} />,

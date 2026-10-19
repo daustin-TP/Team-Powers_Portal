@@ -15,6 +15,7 @@ export type PortalSection =
   | "home"
   | "kpi"
   | "labor"
+  | "calendar"
   | "hr"
   | "imports"
   | "uniforms"
