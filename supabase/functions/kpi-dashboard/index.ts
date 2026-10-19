@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.110.9';
-import { dashboardAccess, rankStores, summarizeGroup } from './analytics.ts';
+import { dashboardAccess, isIndividualStore, rankStores, summarizeGroup } from './analytics.ts';
 
 const headers = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
@@ -55,7 +55,7 @@ export async function handleDashboard(request: Request) {
       admin.from('demand_forecast_runs').select('store_id,week_start,confidence_score,confidence_level,weekly_projection').in('store_id', ids).in('week_start', [addDays(weekEnd, 1), addDays(weekEnd, 8)]).eq('is_current', true),
     ]) : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
     for (const result of [goalsResult, historyResult, forecastResult]) if (result.error) throw result.error;
-    return json({ ok: true, week_end: weekEnd, company_store_count: stores.length,
+    return json({ ok: true, week_end: weekEnd, company_store_count: stores.filter(isIndividualStore).length,
       stores: visibleStores,
       rankings: rankStores(stores, results).filter((row) => visibleIds.has(row.store_id)),
       results: results.filter((row) => visibleIds.has(row.store_id)).map((row) => ({ ...row, stores: storeMap.get(row.store_id), metrics: { ...row.metrics, store_number: label(row.store_id) } })),

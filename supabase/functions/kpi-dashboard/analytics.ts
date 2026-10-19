@@ -10,6 +10,9 @@ export const rankingMetrics = [
 export type RankingKey = typeof rankingMetrics[number]['key'];
 export type Result = { store_id: string; metrics: Record<string, unknown> };
 export type Store = { id: string; name: string; store_number: string | null };
+export function isIndividualStore(store: Store): boolean {
+  return ![store.name, store.store_number].some((value) => /^all\s*stores$/i.test((value ?? '').trim()));
+}
 export type RankValue = { value: number | null; rank: number | null; eligible: number; tied: boolean };
 export type StoreRanking = { store_id: string; store: string; name: string; metrics: Record<RankingKey, RankValue> };
 
@@ -36,7 +39,7 @@ export function metricValue(metrics: Record<string, unknown>, key: RankingKey) {
 }
 export function rankStores(stores: Store[], results: Result[]): StoreRanking[] {
   const byId = new Map(results.map((row) => [row.store_id, row.metrics]));
-  const rows = stores.map((store) => ({ store_id: store.id, store: store.store_number || store.name, name: store.name,
+  const rows = stores.filter(isIndividualStore).map((store) => ({ store_id: store.id, store: store.store_number || store.name, name: store.name,
     metrics: Object.fromEntries(rankingMetrics.map((metric) => [metric.key, { value: metricValue(byId.get(store.id) ?? {}, metric.key), rank: null, eligible: 0, tied: false }])) as Record<RankingKey, RankValue>,
   }));
   for (const metric of rankingMetrics) {

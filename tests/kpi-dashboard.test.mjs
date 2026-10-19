@@ -34,6 +34,15 @@ test('seven independent ranks use the right direction and competition ties', () 
   assert.equal(ranks[1].metrics.pcya.eligible, 2);
   assert.equal(ranks[2].metrics.pcya.rank, 2);
 });
+test('All Stores totals do not occupy ranks or increase ranking counts', () => {
+  const combined = { id: 'total', name: ' All Stores ', store_number: null };
+  const ranks = rankStores([...stores, combined], [...results, { store_id: 'total', metrics: { royalty_sales: 400 } }]);
+  assert.equal(ranks.length, 3);
+  assert.equal(ranks[1].metrics.sales.rank, 1);
+  assert.equal(ranks[1].metrics.sales.eligible, 3);
+  assert.equal(analytics.isIndividualStore(combined), false);
+  assert.equal(analytics.isIndividualStore({ id: 'total', name: 'Combined', store_number: 'ALL STORES' }), false);
+});
 test('missing data is unranked, zero results are real, and store count is dynamic', () => {
   const ranks = rankStores([...stores, {id:'d',name:'New store',store_number:'4'}], [...results,{store_id:'d',metrics:{royalty_sales:0,labor_percent:'N/A'}}]);
   assert.equal(ranks.length, 4);
