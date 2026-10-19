@@ -399,6 +399,7 @@ tbody tr:last-child td { border-bottom: 0; }
 /* KPI company rankings and supervisor groups */
 .kpi-company-ranks,.kpi-group-performance,.supervisor-store-admin{padding:24px;margin-top:20px}
 .kpi-company-ranks table{min-width:940px;width:100%}
+.kpi-sticky-table{position:relative;max-height:min(72vh,760px);overflow:auto;isolation:isolate}.kpi-sticky-table thead th{position:sticky;top:0;z-index:5;background:#f4f7fa;box-shadow:inset 0 -1px #d8e0e8}.kpi-store-sticky th:first-child,.kpi-store-sticky td:first-child,.kpi-metric-sticky th:first-child,.kpi-metric-sticky td:first-child{position:sticky;left:0;min-width:155px;z-index:4;background:#fff;box-shadow:1px 0 #d8e0e8}.kpi-store-sticky thead th:first-child,.kpi-metric-sticky thead th:first-child{z-index:7;background:#edf3f8}.kpi-ranking-sticky th:first-child,.kpi-ranking-sticky td:first-child{position:sticky;left:0;width:72px;min-width:72px;z-index:4;background:#fff}.kpi-ranking-sticky th:nth-child(2),.kpi-ranking-sticky td:nth-child(2){position:sticky;left:72px;min-width:170px;z-index:4;background:#fff;box-shadow:1px 0 #d8e0e8}.kpi-ranking-sticky thead th:first-child,.kpi-ranking-sticky thead th:nth-child(2){z-index:7;background:#edf3f8}.kpi-sticky-table tbody tr:hover td:first-child,.kpi-ranking-sticky tbody tr:hover td:nth-child(2){background:#f1f8fd}
 .kpi-company-ranks td strong{font-size:1.05rem;color:var(--text,#172332)}
 .kpi-company-ranks .security-note{margin-top:16px}
 .kpi-group-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:16px}
