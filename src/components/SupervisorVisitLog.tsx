@@ -25,7 +25,7 @@ type ProductRating = "" | "great" | "remake";
 type VisitStatus = "draft" | "submitted";
 type CheckAnswer = { rating: Rating; comment: string };
 type ProductAnswer = { rating: ProductRating; comment: string };
-type PerformanceAnswer = { last28: string; visitWeek: string; goal: string; onTrack: "" | "yes" | "no"; comment: string };
+type StoreGoals = { posted: "" | "yes" | "no"; needsAdjustment: string; onTrack: string };
 type UrgentItem = { item: string; assignedTo: string; completionTime: string };
 type FollowUp = { item: string; owner: string; dueDate: string; completed: boolean };
 
@@ -35,7 +35,7 @@ type VisitForm = {
   visitTime: string;
   checks: Record<string, CheckAnswer>;
   products: Record<string, ProductAnswer>;
-  performance: Record<string, PerformanceAnswer>;
+  goals: StoreGoals;
   urgentItems: UrgentItem[];
   keyWins: string[];
   opportunities: string[];
@@ -123,16 +123,15 @@ const checkGroups = {
 } as const;
 
 const productItems = ["Pizza 1", "Pizza 2", "Pizza 3", "Pizza 4", "Pizza 5", "5-Cut Test", "Scale / Job Aids in Use", "Baking Equipment Clean"];
-const performanceItems = ["Sales", "PCYA", "Order Count", "Labor %", "Food Variance %", "Load Time", "eADT", "Extremes %", "AWUS", "SPLH", "Current VOC"];
 const steps: Step[] = [
   { key: "details", label: "Visit details", short: "Details" },
   { key: "carry", label: "Carry-out experience", short: "Carry-out" },
   { key: "product", label: "Product evaluation", short: "Product" },
   { key: "dough_food", label: "Dough & food safety", short: "Food safety" },
-  { key: "urgent", label: "Urgent items", short: "Urgent" },
   { key: "employee", label: "Employee work area", short: "Work area" },
+  { key: "urgent", label: "Urgent items", short: "Urgent" },
   { key: "systems", label: "Systems & operations", short: "Systems" },
-  { key: "performance", label: "Performance snapshot", short: "Performance" },
+  { key: "goals", label: "Store goals", short: "Goals" },
   { key: "recap", label: "Overall image & recap", short: "Recap" },
   { key: "review", label: "Review & submit", short: "Review" },
 ];
@@ -149,7 +148,7 @@ const emptyForm = (): VisitForm => ({
   visitTime: "",
   checks: {},
   products: {},
-  performance: {},
+  goals: { posted: "", needsAdjustment: "", onTrack: "" },
   urgentItems: Array.from({ length: 4 }, () => ({ item: "", assignedTo: "", completionTime: "" })),
   keyWins: ["", "", ""],
   opportunities: ["", "", ""],
@@ -161,7 +160,7 @@ const normalizeForm = (value?: Partial<VisitForm> | null): VisitForm => ({
   ...(value ?? {}),
   checks: value?.checks ?? {},
   products: value?.products ?? {},
-  performance: value?.performance ?? {},
+  goals: value?.goals ?? { posted: "", needsAdjustment: "", onTrack: "" },
   urgentItems: Array.from({ length: 4 }, (_, index) => value?.urgentItems?.[index] ?? { item: "", assignedTo: "", completionTime: "" }),
   keyWins: Array.from({ length: 3 }, (_, index) => value?.keyWins?.[index] ?? ""),
   opportunities: Array.from({ length: 3 }, (_, index) => value?.opportunities?.[index] ?? ""),
@@ -170,17 +169,11 @@ const normalizeForm = (value?: Partial<VisitForm> | null): VisitForm => ({
 
 const allChecks = Object.values(checkGroups).flat();
 const formStats = (form: VisitForm, storeId: string) => {
-  const expected = 3 + allChecks.length + productItems.length + performanceItems.length * 4;
+  const expected = 4 + allChecks.length + productItems.length;
   let complete = Number(Boolean(storeId)) + Number(Boolean(form.managerName.trim())) + Number(Boolean(form.visitDate));
   complete += allChecks.filter(([key]) => Boolean(form.checks[key]?.rating)).length;
   complete += productItems.filter((_, index) => Boolean(form.products[`product_${index}`]?.rating)).length;
-  performanceItems.forEach((_, index) => {
-    const item = form.performance[`metric_${index}`];
-    if (item?.last28.trim()) complete += 1;
-    if (item?.visitWeek.trim()) complete += 1;
-    if (item?.goal.trim()) complete += 1;
-    if (item?.onTrack) complete += 1;
-  });
+  complete += Number(Boolean(form.goals.posted));
   const sectionTouched = (key: string) => {
     if (key === "details") return Boolean(storeId || form.managerName || form.visitTime);
     if (key === "carry") return checkGroups.carry.some(([id]) => form.checks[id]?.rating || form.checks[id]?.comment);
@@ -189,14 +182,14 @@ const formStats = (form: VisitForm, storeId: string) => {
     if (key === "urgent") return form.urgentItems.some((item) => item.item || item.assignedTo || item.completionTime);
     if (key === "employee") return checkGroups.employee.some(([id]) => form.checks[id]?.rating || form.checks[id]?.comment);
     if (key === "systems") return checkGroups.systems.some(([id]) => form.checks[id]?.rating || form.checks[id]?.comment);
-    if (key === "performance") return Object.values(form.performance).some((item) => Object.values(item).some(Boolean));
+    if (key === "goals") return Boolean(form.goals.posted || form.goals.needsAdjustment || form.goals.onTrack);
     if (key === "recap") return checkGroups.overall.some(([id]) => form.checks[id]?.rating || form.checks[id]?.comment)
       || form.keyWins.some(Boolean) || form.opportunities.some(Boolean) || form.followUps.some((item) => item.item || item.owner || item.dueDate);
     return false;
   };
   const issues = Object.values(form.checks).filter((item) => item.rating === "no").length
     + Object.values(form.products).filter((item) => item.rating === "remake").length
-    + Object.values(form.performance).filter((item) => item.onTrack === "no").length;
+    + Number(form.goals.posted === "no");
   return {
     percent: Math.round((complete / expected) * 100),
     missing: expected - complete,
@@ -380,11 +373,6 @@ export default function SupervisorVisitLog({ profile }: { profile: Profile }) {
     ...current,
     products: { ...current.products, [key]: { ...(current.products[key] ?? { rating: "", comment: "" }), ...patch } },
   }));
-  const setPerformance = (key: string, patch: Partial<PerformanceAnswer>) => setForm((current) => ({
-    ...current,
-    performance: { ...current.performance, [key]: { ...(current.performance[key] ?? { last28: "", visitWeek: "", goal: "", onTrack: "", comment: "" }), ...patch } },
-  }));
-
   const renderRating = (value: Rating, onChange: (value: Rating) => void) => <div className="visit-rating" role="group" aria-label="Rating">
     {(["yes", "no", "na"] as Rating[]).map((item) => <button type="button" key={item} className={`${item} ${value === item ? "selected" : ""}`} onClick={() => onChange(item)} disabled={readOnly}>
       {item === "yes" ? <Check size={15} /> : item === "no" ? <XCircle size={15} /> : null}{item === "na" ? "N/A" : item.toUpperCase()}
@@ -401,7 +389,7 @@ export default function SupervisorVisitLog({ profile }: { profile: Profile }) {
 
   const sectionPhotos = photos.filter((photo) => photo.section_key === steps[stepIndex].key);
   const photoArea = stepIndex > 0 && stepIndex < 9 ? <section className="visit-photo-area">
-    <div><Camera size={21} /><div><strong>Photos for this section</strong><small>Add supporting photos from the phone camera or photo library.</small></div></div>
+    <div><Camera size={21} /><div><strong>{steps[stepIndex].key === "goals" ? "Photo of the posted goals" : "Photos for this section"}</strong><small>{steps[stepIndex].key === "goals" ? "Add a current photo of the in-store goal board or posted goals." : "Add supporting photos from the phone camera or photo library."}</small></div></div>
     {!readOnly && <label className="button secondary visit-photo-button"><ImagePlus size={17} />{uploading ? "Uploading…" : "Add photos"}<input type="file" accept="image/*,.heic,.heif" multiple disabled={uploading} onChange={(event) => void uploadPhotos(event.target.files)} /></label>}
     {sectionPhotos.length > 0 && <div className="visit-photo-grid">{sectionPhotos.map((photo) => <article key={photo.id}>
       {photo.url ? <img src={photo.url} alt={photo.caption || photo.original_name} /> : <div className="visit-photo-placeholder">Photo</div>}
@@ -428,16 +416,20 @@ export default function SupervisorVisitLog({ profile }: { profile: Profile }) {
     if (key === "urgent") return <section className="visit-line-items"><h3>Urgent items to be completed by EOD</h3>{form.urgentItems.map((item, index) => <article key={index}><label>Item<textarea rows={2} value={item.item} onChange={(event) => setForm((current) => ({ ...current, urgentItems: current.urgentItems.map((entry, i) => i === index ? { ...entry, item: event.target.value } : entry) }))} placeholder="What must be completed?" disabled={readOnly} /></label><label>Assigned to<input value={item.assignedTo} onChange={(event) => setForm((current) => ({ ...current, urgentItems: current.urgentItems.map((entry, i) => i === index ? { ...entry, assignedTo: event.target.value } : entry) }))} disabled={readOnly} /></label><label>Completion time<input type="time" value={item.completionTime} onChange={(event) => setForm((current) => ({ ...current, urgentItems: current.urgentItems.map((entry, i) => i === index ? { ...entry, completionTime: event.target.value } : entry) }))} disabled={readOnly} /></label></article>)}</section>;
     if (key === "employee") return renderCheckGroup("Employee work area", checkGroups.employee);
     if (key === "systems") return renderCheckGroup("Systems & operations", checkGroups.systems);
-    if (key === "performance") return <section className="visit-performance"><h3>Performance snapshot</h3><div className="table-scroll"><table><thead><tr><th>Metric</th><th>Last 28 days</th><th>Visit week</th><th>Goal</th><th>On track?</th><th>Comments / coaching</th></tr></thead><tbody>{performanceItems.map((label, index) => {
-      const itemKey = `metric_${index}`; const item = form.performance[itemKey] ?? { last28: "", visitWeek: "", goal: "", onTrack: "", comment: "" };
-      return <tr key={itemKey}><th>{label}</th><td><input value={item.last28} onChange={(event) => setPerformance(itemKey, { last28: event.target.value })} disabled={readOnly} /></td><td><input value={item.visitWeek} onChange={(event) => setPerformance(itemKey, { visitWeek: event.target.value })} disabled={readOnly} /></td><td><input value={item.goal} onChange={(event) => setPerformance(itemKey, { goal: event.target.value })} disabled={readOnly} /></td><td><select value={item.onTrack} onChange={(event) => setPerformance(itemKey, { onTrack: event.target.value as PerformanceAnswer["onTrack"] })} disabled={readOnly}><option value="">—</option><option value="yes">Yes</option><option value="no">No</option></select></td><td><input value={item.comment} onChange={(event) => setPerformance(itemKey, { comment: event.target.value })} disabled={readOnly} /></td></tr>;
-    })}</tbody></table></div></section>;
+    if (key === "goals") return <section className="visit-goals">
+      <div className="visit-goals-intro"><div><p className="eyebrow">In-store accountability</p><h3>Are store goals posted and updated?</h3><p>The KPI Dashboard remains the detailed performance source. This section confirms that the team can see the current priorities in the store.</p></div><div className="visit-rating goals" role="group" aria-label="Are store goals posted and updated?">
+        <button type="button" className={`yes ${form.goals.posted === "yes" ? "selected" : ""}`} onClick={() => setForm((current) => ({ ...current, goals: { ...current.goals, posted: "yes" } }))} disabled={readOnly}><Check size={15} />Yes</button>
+        <button type="button" className={`no ${form.goals.posted === "no" ? "selected" : ""}`} onClick={() => setForm((current) => ({ ...current, goals: { ...current.goals, posted: "no" } }))} disabled={readOnly}><XCircle size={15} />No</button>
+      </div></div>
+      <div className="visit-goal-notes"><label>What goals need to be adjusted?<textarea rows={5} value={form.goals.needsAdjustment} onChange={(event) => setForm((current) => ({ ...current, goals: { ...current.goals, needsAdjustment: event.target.value } }))} placeholder="Note the goal, why it needs adjustment, and the next action…" disabled={readOnly} /></label><label>What goals are on track to hit?<textarea rows={5} value={form.goals.onTrack} onChange={(event) => setForm((current) => ({ ...current, goals: { ...current.goals, onTrack: event.target.value } }))} placeholder="Record what is working and should be reinforced…" disabled={readOnly} /></label></div>
+    </section>;
     if (key === "recap") return <div className="visit-recap">{renderCheckGroup("Overall image", checkGroups.overall)}<div className="visit-recap-columns"><section><h3>Key wins</h3>{form.keyWins.map((value, index) => <textarea key={index} rows={2} value={value} onChange={(event) => setForm((current) => ({ ...current, keyWins: current.keyWins.map((entry, i) => i === index ? event.target.value : entry) }))} placeholder={`Win ${index + 1}`} disabled={readOnly} />)}</section><section><h3>Opportunities & coaching points</h3>{form.opportunities.map((value, index) => <textarea key={index} rows={2} value={value} onChange={(event) => setForm((current) => ({ ...current, opportunities: current.opportunities.map((entry, i) => i === index ? event.target.value : entry) }))} placeholder={`Opportunity ${index + 1}`} disabled={readOnly} />)}</section></div><section className="visit-line-items follow-up"><h3>Follow-up</h3>{form.followUps.map((item, index) => <article key={index}><label>Item<input value={item.item} onChange={(event) => setForm((current) => ({ ...current, followUps: current.followUps.map((entry, i) => i === index ? { ...entry, item: event.target.value } : entry) }))} disabled={readOnly} /></label><label>Owner<input value={item.owner} onChange={(event) => setForm((current) => ({ ...current, followUps: current.followUps.map((entry, i) => i === index ? { ...entry, owner: event.target.value } : entry) }))} disabled={readOnly} /></label><label>Due date<input type="date" value={item.dueDate} onChange={(event) => setForm((current) => ({ ...current, followUps: current.followUps.map((entry, i) => i === index ? { ...entry, dueDate: event.target.value } : entry) }))} disabled={readOnly} /></label><label className="visit-complete-toggle"><input type="checkbox" checked={item.completed} onChange={(event) => setForm((current) => ({ ...current, followUps: current.followUps.map((entry, i) => i === index ? { ...entry, completed: event.target.checked } : entry) }))} disabled={readOnly} />Completed</label></article>)}</section></div>;
     return <div className="visit-review">
       <div className={`visit-completion-ring ${stats.percent === 100 ? "complete" : ""}`}><strong>{stats.percent}%</strong><span>complete</span></div>
       <div><p className="eyebrow">Ready for review</p><h3>{stores.find((store) => store.id === storeId)?.name ?? "Store not selected"} · {formatDate(form.visitDate)}</h3><p>{stats.sections} sections touched · {stats.issues} items need attention · {photos.length} photos attached</p></div>
       {stats.percent < 100 && <div className="visit-warning"><AlertTriangle /><div><strong>This visit is not fully completed.</strong><span>{stats.missing} expected answers are blank. You may still submit it after confirming.</span></div></div>}
       <section className="visit-review-summary"><article><span>Manager</span><strong>{form.managerName || "Not entered"}</strong></article><article><span>Visit time</span><strong>{form.visitTime ? formatTime(form.visitTime) : "Not entered"}</strong></article><article><span>Issues found</span><strong>{stats.issues}</strong></article><article><span>Photo evidence</span><strong>{photos.length}</strong></article></section>
+      {(form.goals.needsAdjustment || form.goals.onTrack) && <div className="visit-review-notes"><section><h4>Goals needing adjustment</h4><p>{form.goals.needsAdjustment || "None noted"}</p></section><section><h4>Goals on track</h4><p>{form.goals.onTrack || "None noted"}</p></section></div>}
       {(form.keyWins.some(Boolean) || form.opportunities.some(Boolean)) && <div className="visit-review-notes"><section><h4>Key wins</h4>{form.keyWins.filter(Boolean).map((item, index) => <p key={index}>{item}</p>)}</section><section><h4>Opportunities</h4>{form.opportunities.filter(Boolean).map((item, index) => <p key={index}>{item}</p>)}</section></div>}
     </div>;
   };
