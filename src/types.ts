@@ -13,6 +13,7 @@ export type Profile = {
 
 export type PortalSection =
   | "home"
+  | "payroll"
   | "kpi"
   | "labor"
   | "calendar"

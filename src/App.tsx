@@ -40,6 +40,7 @@ import KPITracker from "./components/KPITracker";
 import LaborManagement from "./components/LaborManagement";
 import ReportImportCenter from "./components/ReportImportCenter";
 import HumanResources from "./components/HumanResources";
+import PayrollCenter from "./components/PayrollCenter";
 import OperationsCalendar from "./components/OperationsCalendar";
 import SupervisorVisitLog from "./components/SupervisorVisitLog";
 
@@ -50,6 +51,7 @@ const navigation: {
   roles?: Role[];
 }[] = [
   { id: "home", label: "Home", icon: Home },
+  { id: "payroll", label: "Payroll", icon: CreditCard, roles: ["manager", "supervisor", "admin"] },
   { id: "kpi", label: "KPI dashboard", icon: Gauge },
   { id: "labor", label: "Labor & scheduling", icon: CalendarClock, roles: ["manager", "supervisor", "admin"] },
   { id: "calendar", label: "Team calendar", icon: CalendarDays },
@@ -211,6 +213,7 @@ export default function App() {
 
   const content = {
     home: <Dashboard profile={profile} onNavigate={selectSection} />,
+    payroll: <PayrollCenter profile={profile} />,
     kpi: <KPITracker profile={profile} />,
     labor: <LaborManagement profile={profile} />,
     calendar: <OperationsCalendar profile={profile} />,
