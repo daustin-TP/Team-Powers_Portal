@@ -144,6 +144,30 @@ const businessMinute = (time: string, openMinute: number) => {
   return minute < openMinute ? minute + 1440 : minute;
 };
 
+export function requiredInsidersForOvenDemand(
+  projectedOvenItems: number,
+  managerCapacity: number,
+  insiderCapacity: number,
+  useMorningNearThreshold = false,
+) {
+  const excessItems = Math.max(0, Number(projectedOvenItems) - Math.max(0, Number(managerCapacity) || 0));
+  if (excessItems <= Number.EPSILON) return 0;
+
+  const safeInsiderCapacity = Math.max(Number.EPSILON, Number(insiderCapacity) || 1);
+  const rawInsiders = excessItems / safeInsiderCapacity;
+  const wholeInsiders = Math.floor(rawInsiders);
+
+  // Once oven demand exceeds the manager's configured capacity, an insider is
+  // required even when the remaining work is less than one full capacity block.
+  // Additional insiders still round down to protect labor, with the existing
+  // morning near-threshold rule retained for the next whole person.
+  let required = Math.max(1, wholeInsiders);
+  if (useMorningNearThreshold && rawInsiders - wholeInsiders >= 0.75) {
+    required = Math.max(required, wholeInsiders + 1);
+  }
+  return required;
+}
+
 function applyDriverRunTimeCoverage(
   rows: IntervalProjection[],
   hours: Map<number, { open: string; close: string }>,
@@ -803,12 +827,14 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     const managerCapacity = Number(weekend ? settings.weekend_manager_items_per_15 : settings.manager_items_per_15) || 1;
     const insiderCapacity = Number(weekend ? settings.weekend_insider_items_per_15 : settings.insider_items_per_15) || 1;
     row.required_managers = 1;
-    const rawInsiders = Math.max(0, (row.projected_oven_items - managerCapacity) / insiderCapacity);
-    const baseInsiders = Math.floor(rawInsiders);
     const intervalMinute = storeHours ? businessMinute(row.interval_start, timeMinutes(storeHours.open)) : timeMinutes(row.interval_start);
     const morningEnd = 14 * 60;
-    const nearNextInsider = intervalMinute < morningEnd && rawInsiders > 0 && rawInsiders - baseInsiders >= 0.75;
-    row.required_insiders = nearNextInsider ? baseInsiders + 1 : baseInsiders;
+    row.required_insiders = requiredInsidersForOvenDemand(
+      row.projected_oven_items,
+      managerCapacity,
+      insiderCapacity,
+      intervalMinute < morningEnd,
+    );
   }
   applyDriverRunTimeCoverage(rawIntervals, hours, averageRunTimeMinutes);
 
@@ -870,7 +896,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("demand_forecast_runs").update({ is_current: false, status: "superseded", updated_at: new Date().toISOString() }).eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true);
   const { data: run, error: runError } = await admin.from("demand_forecast_runs").insert({
-    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v7",
+    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v8",
     confidence_score: score, confidence_level: confidenceLevel(score), confidence_reasons: reasons,
     input_summary: {
       baseline_sets: baselineSets.length, baseline_weeks: baselineWeeks, recent_kpi_weeks: kpiRows.length,
@@ -901,7 +927,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   let editedPlanPreserved = false;
   if (!existingPlan || existingPlan.status !== "published") {
     const { data: plan, error: planError } = await admin.from("labor_week_plans").upsert({
-      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v7", forecast_run_id: run.id,
+      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v8", forecast_run_id: run.id,
       created_by: userId, updated_at: new Date().toISOString(),
     }, { onConflict: "store_id,week_start" }).select("id").single();
     if (planError || !plan) throw planError ?? new Error("The labor week plan could not be prepared.");
@@ -956,7 +982,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v7", manual_weekly_sales: manualWeeklySales, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v8", manual_weekly_sales: manualWeeklySales, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied },
   });
 
   return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved };
