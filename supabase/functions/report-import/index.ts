@@ -1,4 +1,5 @@
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.110.9";
+import { automaticGoals, planningWeek } from '../kpi-dashboard/goals.ts';
 import * as XLSX from "npm:xlsx@0.18.5";
 import JSZip from "npm:jszip@3.10.1";
 
@@ -303,6 +304,15 @@ async function importKpi(client: ReturnType<typeof createClient>, batch: Batch, 
   if (!upserts.length) throw new Error("No configured stores were found in the KPI report.");
   const { error } = await client.from("kpi_weekly_results").upsert(upserts, { onConflict: "store_id,week_end" });
   if (error) throw error;
+  // Freeze next week's automatic commitments as results arrive, even if nobody opens the dashboard.
+  const ids = upserts.map(row=>row.store_id);
+  const [history,forecasts] = await Promise.all([
+    client.from('kpi_weekly_results').select('store_id,week_end,metrics').in('store_id',ids).gte('week_end',addDays(end,-77)).lte('week_end',end).order('week_end'),
+    client.from('demand_forecast_runs').select('store_id,weekly_projection').in('store_id',ids).eq('week_start',addDays(end,1)).eq('is_current',true),
+  ]);
+  if (history.error || forecasts.error) throw history.error || forecasts.error;
+  const defaults=ids.flatMap(store_id=>[end,addDays(end,7)].map(week_end=>({store_id,week_end,reconstructed:week_end<planningWeek(),goals:automaticGoals((history.data??[]).filter(r=>r.store_id===store_id),week_end,week_end>end?(forecasts.data??[]).find(f=>f.store_id===store_id)?.weekly_projection?.projected_sales:undefined)}))).filter(r=>Object.values(r.goals).some(v=>v!==null));
+  if(defaults.length) {const saved=await client.from('kpi_automatic_goals').upsert(defaults,{onConflict:'store_id,week_end',ignoreDuplicates:true});if(saved.error)throw saved.error;}
   return { rowCount: upserts.length, warnings, metadata: { begin, end, storesImported: upserts.length, storesInReport: primary.length } };
 }
 
