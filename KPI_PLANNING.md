@@ -19,9 +19,9 @@ The existing weekly screen remains the default. Trends and Regional plans are se
 5. The supervisor sees only released/closed reports addressed to their account, can record action progress and outcomes, and sees subsequent imported results through the follow-up week. Admin closes the review when all actions are done. Concurrent edits use a version check.
 6. A PDF export includes the snapshot, flags, notes, actions, and follow-up values. Unsaved exports are labeled as drafts. No email is sent and no scheduled email job is created.
 
-## Deployment order — approval required
+## Deployment order
 
-This change has not been deployed. Automatic approval review rejected the production schema change pending explicit user approval.
+The user approved production deployment on October 23, 2026. The migration and all three functions are deployed; the rollback integration checks passed.
 
 1. Apply `20261021114453_kpi_weekly_planning.sql` to the existing Dash Supabase project. No existing goals or results are rewritten by this migration. It adds two service-only tables, two trigger guards, and narrows goal writes to supervisors/admins.
 2. Run `tests/kpi-planning-database.sql` (transaction rolls back), inspect security advisors, and verify the new table grants. RLS is enabled with no user policies on the two service-only tables; authenticated/anon grants are revoked intentionally.
@@ -32,5 +32,5 @@ This change has not been deployed. Automatic approval review rejected the produc
 
 - 94 unit/integration-harness tests pass, including calendar/DST boundaries, no result leakage into automatic goals, outliers/missing data, role isolation, Director release, conflict handling, and locked instructions.
 - TypeScript build and Vite production build pass. The existing large-bundle advisory remains.
-- The live database integration script is prepared but not run because the migration is awaiting approval.
+- The live database integration script passed and rolled back all test records. Security advisors show the expected service-only table policy notices and existing unrelated warnings.
 - Local browser preview could not connect to the desktop development server. Authenticated end-to-end and visual checks remain to be completed after deployment access is approved.
