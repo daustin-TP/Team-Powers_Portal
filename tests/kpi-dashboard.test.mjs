@@ -12,6 +12,7 @@ function load(file, bindings = {}) {
   return context.exports;
 }
 const analytics = load('../supabase/functions/kpi-dashboard/analytics.ts');
+const goalModel = load('../supabase/functions/kpi-dashboard/goals.ts',{require:()=>analytics,Intl,Date});
 const { rankStores, summarizeGroup, dashboardAccess } = analytics;
 const stores = ['a','b','c'].map((id) => ({ id, name: id, store_number: id }));
 const results = [
@@ -80,14 +81,14 @@ function handlerFor(profile, permissions = []) {
     stores:stores.map((store)=>({...store,active:true})),
     kpi_weekly_results:results.map((row)=>({...row,week_end:'2026-10-11'})),
     kpi_goal_commitments: stores.map((store)=>({store_id:store.id,week_end:'2026-10-18',goals:{sales:100}})),
-    demand_forecast_runs:[],
+    demand_forecast_runs:[], kpi_automatic_goals:[],
   };
   const client = { auth:{getUser:async()=>({data:{user:{id:profile.id}},error:null})}, from(name) {
     let data = tables[name]; let single=false;
-    const query={select(){return this},eq(k,v){data=data.filter((r)=>r[k]===v);return this},in(k,vs){data=data.filter((r)=>vs.includes(r[k]));return this},gte(k,v){data=data.filter((r)=>r[k]>=v);return this},lte(k,v){data=data.filter((r)=>r[k]<=v);return this},order(){return this},maybeSingle(){single=true;return this},then(resolve){resolve({data:single?data[0]??null:data,error:null})}};
+    const query={upsert(rows){for(const row of rows)if(!tables[name].some(r=>r.store_id===row.store_id&&r.week_end===row.week_end))tables[name].push(row);return this},select(){return this},eq(k,v){data=data.filter((r)=>r[k]===v);return this},in(k,vs){data=data.filter((r)=>vs.includes(r[k]));return this},gte(k,v){data=data.filter((r)=>r[k]>=v);return this},lte(k,v){data=data.filter((r)=>r[k]<=v);return this},order(){return this},maybeSingle(){single=true;return this},then(resolve){resolve({data:single?data[0]??null:data,error:null})}};
     return query;
   }};
-  return load('../supabase/functions/kpi-dashboard/index.ts', {require:(name)=>name.includes('analytics')?analytics:{createClient:()=>client},Deno:{env:{get:()=> 'test'},serve:()=>{}},Response,console}).handleDashboard;
+  return load('../supabase/functions/kpi-dashboard/index.ts', {require:(name)=>name.includes('analytics')?analytics:name.includes('goals')?goalModel:{createClient:()=>client},Deno:{env:{get:()=> 'test'},serve:()=>{}},Response,console}).handleDashboard;
 }
 const request = (week='2026-10-11') => new Request('https://example.test',{method:'POST',headers:{Authorization:'Bearer test','Content-Type':'application/json'},body:JSON.stringify({week_end:week})});
 test('store-only response ranks against the company without leaking other raw records or groups', async()=>{

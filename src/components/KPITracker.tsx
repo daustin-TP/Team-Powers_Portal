@@ -19,6 +19,11 @@ import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import { rankStores, rankingMetrics, summarizeGroup, type StoreRanking } from "../../supabase/functions/kpi-dashboard/analytics";
 
+import KPITrends from './KPITrends';
+import './kpi-planning.css';
+import KPIRegionalPlans from './KPIRegionalPlans';
+import { planningWeek } from '../../supabase/functions/kpi-dashboard/goals';
+
 type KpiMetric = {
   trajectory: string;
   suggested_goal: string;
@@ -68,7 +73,7 @@ type KpiAccess = {
   supervisorGroups: SupervisorGroup[];
 };
 type ViewLevel = "company" | "supervisor" | "store";
-type DashboardMode = "commitments" | "details";
+type DashboardMode = "commitments" | "details" | "trends" | "plans";
 type WeeklyMetricRow = {
   store_id?: string;
   store: string;
@@ -169,12 +174,7 @@ function storeNumberValue(store: string) {
   return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
 }
 
-function mostRecentCompletedSunday() {
-  const date = new Date();
-  date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() - (date.getDay() === 0 ? 7 : date.getDay()));
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
+function mostRecentCompletedSunday() { return addIsoDays(planningWeek(), -7); }
 
 function addIsoDays(value: string, days: number) {
   const date = new Date(`${value}T12:00:00Z`);
@@ -451,6 +451,8 @@ function databaseCommitment(
   previousGoalRow?: { goals?: Record<string, unknown> },
   history: HistoricalKpiResult[] = [],
   forecast?: { weekly_projection?: { projected_sales?: number } } | null,
+  automatic: Record<string, unknown> = {},
+  priorAutomatic: Record<string, unknown> = {},
 ): Commitment {
   const metrics = result.metrics ?? {};
   const goals = goalRow?.goals ?? {};
@@ -487,23 +489,23 @@ function databaseCommitment(
     const fallback = numericValue(automatic);
     return { value: fallback, source: fallback === null ? undefined : "automatic" as const };
   };
-  const previousSalesGoal = resolvePreviousGoal(savedPreviousSalesGoal, roundedGoal(projectedTrajectory(priorHistory, "royalty_sales"), 100));
+  const previousSalesGoal = resolvePreviousGoal(savedPreviousSalesGoal, priorAutomatic.sales === null ? "" : priorAutomatic.sales !== undefined ? String(priorAutomatic.sales) : roundedGoal(projectedTrajectory(priorHistory, "royalty_sales"), 100));
   const previousLaborTrajectory = projectedTrajectory(priorHistory, "labor_percent");
   const previousSplhTrajectory = projectedTrajectory(priorHistory, "splh");
   const previousFoodTrajectory = projectedTrajectory(priorHistory, "food_difference_percent");
   const previousLoadTrajectory = projectedTrajectory(priorHistory, "avg_load");
   const previousAdtTrajectory = projectedTrajectory(priorHistory, "avg_adt");
-  const previousLaborGoal = resolvePreviousGoal(savedPreviousLaborGoal, preciseGoal(suggestedGoal(priorHistory, "labor_percent", previousLaborTrajectory, true, 0.002), 4));
-  const previousSplhGoal = resolvePreviousGoal(savedPreviousSplhGoal, preciseGoal(suggestedGoal(priorHistory, "splh", previousSplhTrajectory, false, 0.25), 2));
-  const previousFoodGoal = resolvePreviousGoal(savedPreviousFoodGoal, preciseGoal(suggestedGoal(priorHistory, "food_difference_percent", previousFoodTrajectory, true, 0.001), 4));
-  const previousLoadGoal = resolvePreviousGoal(savedPreviousLoadGoal, preciseGoal(suggestedGoal(priorHistory, "avg_load", previousLoadTrajectory, true, 0.1), 2));
-  const previousAdtGoal = resolvePreviousGoal(savedPreviousAdtGoal, preciseGoal(suggestedGoal(priorHistory, "avg_adt", previousAdtTrajectory, true, 0.25), 2));
-  const salesSuggested = roundedGoal(salesTrajectoryValue, 100);
-  const laborSuggested = preciseGoal(suggestedGoal(history, "labor_percent", laborTrajectoryValue, true, 0.002), 4);
-  const splhSuggested = preciseGoal(suggestedGoal(history, "splh", splhTrajectoryValue, false, 0.25), 2);
-  const foodSuggested = preciseGoal(suggestedGoal(history, "food_difference_percent", foodTrajectoryValue, true, 0.001), 4);
-  const loadSuggested = preciseGoal(suggestedGoal(history, "avg_load", loadTrajectoryValue, true, 0.1), 2);
-  const adtSuggested = preciseGoal(suggestedGoal(history, "avg_adt", adtTrajectoryValue, true, 0.25), 2);
+  const previousLaborGoal = resolvePreviousGoal(savedPreviousLaborGoal, priorAutomatic.labor === null ? "" : priorAutomatic.labor !== undefined ? String(priorAutomatic.labor) : preciseGoal(suggestedGoal(priorHistory, "labor_percent", previousLaborTrajectory, true, 0.002), 4));
+  const previousSplhGoal = resolvePreviousGoal(savedPreviousSplhGoal, priorAutomatic.splh === null ? "" : priorAutomatic.splh !== undefined ? String(priorAutomatic.splh) : preciseGoal(suggestedGoal(priorHistory, "splh", previousSplhTrajectory, false, 0.25), 2));
+  const previousFoodGoal = resolvePreviousGoal(savedPreviousFoodGoal, priorAutomatic.food_variance === null ? "" : priorAutomatic.food_variance !== undefined ? String(priorAutomatic.food_variance) : preciseGoal(suggestedGoal(priorHistory, "food_difference_percent", previousFoodTrajectory, true, 0.001), 4));
+  const previousLoadGoal = resolvePreviousGoal(savedPreviousLoadGoal, priorAutomatic.load === null ? "" : priorAutomatic.load !== undefined ? String(priorAutomatic.load) : preciseGoal(suggestedGoal(priorHistory, "avg_load", previousLoadTrajectory, true, 0.1), 2));
+  const previousAdtGoal = resolvePreviousGoal(savedPreviousAdtGoal, priorAutomatic.adt === null ? "" : priorAutomatic.adt !== undefined ? String(priorAutomatic.adt) : preciseGoal(suggestedGoal(priorHistory, "avg_adt", previousAdtTrajectory, true, 0.25), 2));
+  const salesSuggested = automatic.sales === null ? "" : automatic.sales !== undefined ? String(automatic.sales) : roundedGoal(salesTrajectoryValue, 100);
+  const laborSuggested = automatic.labor === null ? "" : automatic.labor !== undefined ? String(automatic.labor) : preciseGoal(suggestedGoal(history, "labor_percent", laborTrajectoryValue, true, 0.002), 4);
+  const splhSuggested = automatic.splh === null ? "" : automatic.splh !== undefined ? String(automatic.splh) : preciseGoal(suggestedGoal(history, "splh", splhTrajectoryValue, false, 0.25), 2);
+  const foodSuggested = automatic.food_variance === null ? "" : automatic.food_variance !== undefined ? String(automatic.food_variance) : preciseGoal(suggestedGoal(history, "food_difference_percent", foodTrajectoryValue, true, 0.001), 4);
+  const loadSuggested = automatic.load === null ? "" : automatic.load !== undefined ? String(automatic.load) : preciseGoal(suggestedGoal(history, "avg_load", loadTrajectoryValue, true, 0.1), 2);
+  const adtSuggested = automatic.adt === null ? "" : automatic.adt !== undefined ? String(automatic.adt) : preciseGoal(suggestedGoal(history, "avg_adt", adtTrajectoryValue, true, 0.25), 2);
   const metric = (name: string, trajectory: string, suggested: string, supervisor: number | null, previousGoal: { value: number | null; source?: "saved" | "automatic" }, actual: string): KpiMetric => ({
     trajectory, suggested_goal: suggested, supervisor_goal: supervisor,
     actual, final_goal: supervisor === null ? suggested : String(supervisor),
@@ -537,6 +539,9 @@ function databaseCommitment(
 }
 
 export default function KPITracker({ profile }: { profile: Profile }) {
+  const [reportDirty,setReportDirty]=useState(false);
+  const [historyRows,setHistoryRows]=useState<HistoricalKpiResult[]>([]);
+  const [trendStores,setTrendStores]=useState<{id:string;name:string;store_number:string|null}[]>([]);
   const [weekEnd, setWeekEnd] = useState(mostRecentCompletedSunday());
   const [commitments, setCommitments] = useState<Commitment[]>([]);
   const [weeklyMetrics, setWeeklyMetrics] = useState<WeeklyMetricRow[]>([]);
@@ -580,7 +585,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     if (viewLevel === "store" && selectedStore) return weeklyMetrics.filter((item) => item.store === selectedStore);
     return weeklyMetrics;
   }, [weeklyMetrics, selectedStore, selectedGroup, viewLevel]);
-  const canEditSelected = Boolean(selected && access.canEdit && (access.editableStores === null || access.editableStores.includes(selected.store)));
+  const canEditSelected = Boolean(selected && weekEnd === mostRecentCompletedSunday() && access.canEdit && (access.editableStores === null || access.editableStores.includes(selected.store)));
 
   const accessFromResponse = (data: Record<string, any>): KpiAccess => ({
     canEdit: Boolean(data.access?.can_edit),
@@ -601,13 +606,14 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     setCommitmentsLoading(true); setMetricsLoading(true);
     setError(""); setWeeklyMetricsError("");
     setCommitments([]); setWeeklyMetrics([]); setCompanyRankings([]);
-    setCompanyStoreCount(0);
+    setCompanyStoreCount(0); setHistoryRows([]); setTrendStores([]);
     setAccess((current) => ({ ...current, supervisorGroups: [] }));
     setSharedForecasts([]); setNextWeekForecasts([]); setCurrentGoalCount(0);
     if (!isSupabaseConfigured || !supabase) {
       const demo = demoCommitments.map((item) => ({ ...item, week_end: weekEnd }));
       const results = demoWeeklyMetrics.map((item) => ({ ...item, store_id: item.store, week_end: weekEnd }));
       const stores = results.map((item) => ({ id: item.store, name: storeLabel(item.store), store_number: item.store }));
+      setHistoryRows(results as HistoricalKpiResult[]); setTrendStores(stores);
       setCommitments(demo); setWeeklyMetrics(results); setCompanyRankings(rankStores(stores, results)); setCompanyStoreCount(stores.length);
       setSelectedStore((current) => current || demo[0]?.store || "");
       applyAccess({ canEdit: true, canViewAll: true, editableStores: null, assignedStores: stores.map((store) => store.id), supervisorGroups: [
@@ -626,12 +632,16 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     const resultRows = data.results as Array<Parameters<typeof databaseCommitment>[0]>;
     const goals = data.goals as Array<{ store_id: string; week_end: string; goals: Record<string, unknown>; focus_area: string; action_plan: string; owner: string }>;
     const history = data.history as HistoricalKpiResult[];
+    setHistoryRows(history); setTrendStores(data.stores);
+    const autos = (data.automatic_goals ?? []) as {store_id:string;week_end:string;goals:Record<string,unknown>}[];
     const forecasts = data.forecasts as SharedForecast[];
     const rows = resultRows.map((item) => databaseCommitment(item,
       goals.find((goal) => goal.store_id === item.store_id && goal.week_end === addIsoDays(weekEnd, 7)),
       goals.find((goal) => goal.store_id === item.store_id && goal.week_end === weekEnd),
       history.filter((row) => row.store_id === item.store_id),
       forecasts.find((forecast) => forecast.store_id === item.store_id && forecast.week_start === addIsoDays(weekEnd, 1)),
+      autos.find(a=>a.store_id===item.store_id&&a.week_end===addIsoDays(weekEnd,7))?.goals,
+      autos.find(a=>a.store_id===item.store_id&&a.week_end===weekEnd)?.goals,
     ));
     setCommitments(rows);
     setWeeklyMetrics(resultRows.map((row) => ({ store_id: row.store_id, store: String(row.metrics.store_number), week_end: row.week_end, metrics: row.metrics })));
@@ -666,7 +676,7 @@ export default function KPITracker({ profile }: { profile: Profile }) {
         focus_area: draft.focus_area, action_plan: draft.action_plan, owner: draft.owner, updated_by: profile.id, updated_at: new Date().toISOString(),
       }, { onConflict: "store_id,week_end" });
       if (databaseError) { setError(databaseError.message); setSaving(false); return; }
-      setMessage(`Store ${selected.store} commitment saved in Dash-OS.`); setSaving(false); await loadDashboard(); return;
+      setMessage(`Store ${selected.store} goals saved for ${formatWeekRange(addIsoDays(weekEnd,1),addIsoDays(weekEnd,7))}. Completed results are unchanged.`); setSaving(false); await loadDashboard(); return;
     }
     const { data, error: invokeError } = await supabase.functions.invoke("kpi-bridge", {
       body: {
@@ -770,10 +780,14 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       {message && <p className="inline-message"><CheckCircle2 size={17} /> {message}</p>}
 
       <div className="kpi-dashboard-mode" role="tablist" aria-label="Dashboard detail">
-        <button role="tab" aria-selected={dashboardMode === "commitments"} className={dashboardMode === "commitments" ? "active" : ""} onClick={() => setDashboardMode("commitments")}><LayoutList size={18} /><span>Commitments<small>Goals, status, and action plans</small></span></button>
-        <button role="tab" aria-selected={dashboardMode === "details"} className={dashboardMode === "details" ? "active" : ""} onClick={() => setDashboardMode("details")}><TableProperties size={18} /><span>Weekly metric totals<small>Every imported KPI in one view</small></span></button>
+        <button role="tab" aria-selected={dashboardMode === "commitments"} className={dashboardMode === "commitments" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("commitments")}><LayoutList size={18} /><span>Commitments<small>Goals, status, and action plans</small></span></button>
+        <button role="tab" aria-selected={dashboardMode === "details"} className={dashboardMode === "details" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("details")}><TableProperties size={18} /><span>Weekly metric totals<small>Every imported KPI in one view</small></span></button>
+        <button role="tab" aria-selected={dashboardMode === "trends"} className={dashboardMode === "trends" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("trends")}><BarChart3 size={18}/><span>Trends<small>Compare progress over time</small></span></button>
+        {['admin','supervisor'].includes(profile.role)&&<button role="tab" aria-selected={dashboardMode === "plans"} className={dashboardMode === "plans" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("plans")}><Target size={18}/><span>Regional plans<small>Reports, actions, and follow-up</small></span></button>}
+
       </div>
 
+      {dashboardMode === 'trends' ? (currentLoading ? <p>Loading trends…</p> : <KPITrends history={historyRows} stores={trendStores}/>) : dashboardMode === 'plans' ? <KPIRegionalPlans profile={profile} weekEnd={weekEnd} groups={access.supervisorGroups} onDirtyChange={setReportDirty}/> : <>
       {levelControls}
       {viewLevel === "supervisor" && access.canViewAll && (
         <section className="kpi-scope-bar"><label>Supervisor group<select disabled={profile.role === "supervisor"} value={selectedGroup?.id ?? ""} onChange={(event) => setSelectedSupervisor(event.target.value)}>{(profile.role === "supervisor" ? access.supervisorGroups.filter((group) => group.id === profile.id) : access.supervisorGroups).map((group) => <option value={group.id} key={group.id}>{group.name} · {group.stores.length} stores</option>)}</select></label><p>Showing {selectedGroup?.stores.map(storeLabel).join(", ") || "no assigned stores"}</p></section>
@@ -845,9 +859,9 @@ export default function KPITracker({ profile }: { profile: Profile }) {
             </section>
           ) : selected && (
             <div className="kpi-layout">
-              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">{storeLabel(selected.store)}</p><h2>Monday performance plan</h2><p>Close the loop on {formatWeekRange(addIsoDays(weekEnd, -6), weekEnd)}, then set the commitment for {formatWeekRange(addIsoDays(weekEnd, 1), addIsoDays(weekEnd, 7))}.</p>{selected.uses_automatic_previous_goals && <span className="kpi-auto-commitment">Previous-week gaps filled with automatic suggested commitments</span>}</div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="kpi-performance-legend"><span className="hit">Hit</span><span className="close">Close</span><span className="miss">Missed</span></div><div className="responsive-table kpi-sticky-table kpi-metric-sticky"><table><thead><tr><th>Metric</th><th>Previous commitment</th><th>Actual result</th><th>Result</th><th>Trajectory</th><th>Suggested</th><th>New commitment</th></tr></thead><tbody>{metrics.map(({ name, trajectory, suggested, finalGoal, previousGoal, previousSource, actual, status, overridden }) => <tr className={`kpi-performance-row ${statusClass(status)}`} key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, previousGoal ?? "", "Not set")}{previousSource === "automatic" && <small className="kpi-auto-goal-note">Auto suggested</small>}</td><td><strong>{displayCommitmentValue(name, actual, "Pending")}</strong></td><td><span className={`kpi-status ${statusClass(status)}`}>{status || "Pending"}</span></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong><small className={`kpi-goal-source ${overridden ? "supervisor" : "suggested"}`}>{overridden ? "Supervisor override" : "Suggested default"}</small></td></tr>)}</tbody></table></div></section>
+              <section className="panel table-panel kpi-results"><div className="table-toolbar"><div><p className="eyebrow">{storeLabel(selected.store)}</p><h2>Monday performance plan</h2><p>Close the loop on {formatWeekRange(addIsoDays(weekEnd, -6), weekEnd)}, then set the commitment for {formatWeekRange(addIsoDays(weekEnd, 1), addIsoDays(weekEnd, 7))}.</p>{selected.uses_automatic_previous_goals && <span className="kpi-auto-commitment">Automatic comparisons are saved. Older gaps use estimates from earlier results.</span>}</div><span className={`kpi-overall ${selected.overall_status.toLowerCase().replaceAll(" ", "-")}`}>{selected.overall_status}</span></div><div className="kpi-performance-legend"><span className="hit">Hit</span><span className="close">Close</span><span className="miss">Missed</span></div><div className="responsive-table kpi-sticky-table kpi-metric-sticky"><table><thead><tr><th>Metric</th><th>Previous commitment</th><th>Actual result</th><th>Result</th><th>Trajectory</th><th>Suggested</th><th>New commitment</th></tr></thead><tbody>{metrics.map(({ name, trajectory, suggested, finalGoal, previousGoal, previousSource, actual, status, overridden }) => <tr className={`kpi-performance-row ${statusClass(status)}`} key={name}><td><strong>{name}</strong></td><td>{displayCommitmentValue(name, previousGoal ?? "", "Not set")}{previousSource === "automatic" && <small className="kpi-auto-goal-note">Auto suggested</small>}</td><td><strong>{displayCommitmentValue(name, actual, "Pending")}</strong></td><td><span className={`kpi-status ${statusClass(status)}`}>{status || "Pending"}</span></td><td>{displayCommitmentValue(name, trajectory, "—")}</td><td>{displayCommitmentValue(name, suggested, "—")}</td><td><strong>{displayCommitmentValue(name, finalGoal, "—")}</strong><small className={`kpi-goal-source ${overridden ? "supervisor" : "suggested"}`}>{overridden ? "Supervisor override" : "Suggested default"}</small></td></tr>)}</tbody></table></div></section>
               <form className="panel kpi-editor" onSubmit={save}>
-                <div className="panel-heading"><div><p className="eyebrow">Supervisor commitment</p><h2>Set the weekly plan</h2></div><Target size={23} /></div>
+                <div className="panel-heading"><div><p className="eyebrow">Supervisor commitment</p><h2>Set the weekly plan</h2><p>Applies to {formatWeekRange(addIsoDays(weekEnd,1),addIsoDays(weekEnd,7))}. Past results stay locked.</p></div><Target size={23} /></div>
                 <div className="kpi-goal-grid">
                   <label>Sales goal<div className="kpi-input-affix prefix"><span>$</span><input type="number" step="1" value={draft.supervisor_sales_goal} placeholder={selected.sales.recommended_goal} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_sales_goal: event.target.value })} /></div><small>Blank uses the suggested goal.</small></label>
                   <label>Labor goal<div className="kpi-input-affix suffix"><input type="number" step="0.1" value={draft.supervisor_labor_goal} placeholder={formatPercent(numericValue(selected.labor.suggested_goal)).replace("%", "")} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, supervisor_labor_goal: event.target.value })} /><span>%</span></div><small>Blank uses the suggested goal.</small></label>
@@ -859,12 +873,13 @@ export default function KPITracker({ profile }: { profile: Profile }) {
                 <label>Focus area<select value={draft.focus_area} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, focus_area: event.target.value })}><option value="">Select a focus</option>{focusAreas.map((area) => <option key={area}>{area}</option>)}</select></label>
                 <label>Owner<input value={draft.owner} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, owner: event.target.value })} placeholder="Person accountable for the plan" /></label>
                 <label>Action plan<textarea rows={5} value={draft.action_plan} disabled={!canEditSelected} onChange={(event) => setDraft({ ...draft, action_plan: event.target.value })} placeholder="What will the store do differently this week?" /></label>
-                {canEditSelected ? <button className="button primary full" disabled={saving}><Save size={17} />{saving ? "Saving commitment…" : "Save commitment"}</button> : <p className="security-note">You can compare this store, but only administrators or the assigned supervisor can edit its goals.</p>}
+                {canEditSelected ? <button className="button primary full" disabled={saving}><Save size={17} />{saving ? "Saving commitment…" : "Save commitment"}</button> : <p className="security-note">Completed weeks are read-only. Select the latest completed results week to set current-week goals; only admins and the assigned supervisor may edit.</p>}
               </form>
             </div>
           )}
         </>
       )}
+      </>}
     </div>
   );
 }
