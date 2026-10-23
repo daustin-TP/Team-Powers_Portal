@@ -59,7 +59,7 @@ type IntervalProjection = {
   required_insiders: number;
   required_drivers: number;
   oven_outlier_candidate: boolean;
-  oven_outlier_status: "none" | "unreviewed" | "timed_order_week" | "timed_order_recurring" | "keep_full";
+  oven_outlier_status: "none" | "unreviewed" | "timed_order_week" | "timed_order_recurring" | "ignored_week" | "ignored_recurring" | "keep_full";
   oven_outlier_original: number | null;
   oven_outlier_baseline: number | null;
   oven_prep_minutes: number | null;
@@ -69,7 +69,7 @@ type IntervalAdjustment = {
   week_start: string | null;
   day_of_week: number;
   interval_start: string;
-  handling: "timed_order" | "keep_full";
+  handling: "timed_order" | "ignore_staffing" | "keep_full";
   prep_minutes: number;
 };
 type ForecastSettings = Record<string, unknown>;
@@ -143,6 +143,29 @@ const businessMinute = (time: string, openMinute: number) => {
   const minute = timeMinutes(time);
   return minute < openMinute ? minute + 1440 : minute;
 };
+
+export function resolveOvenOutlierDecision(
+  handling: IntervalAdjustment["handling"],
+  scope: IntervalAdjustment["scope"],
+  original: number,
+  localBaseline: number,
+  recipientCount: number,
+) {
+  if (handling === "keep_full") return { status: "keep_full" as const, adjustedOven: original, distributedPerRecipient: 0 };
+  if (handling === "ignore_staffing") {
+    return {
+      status: scope === "week" ? "ignored_week" as const : "ignored_recurring" as const,
+      adjustedOven: localBaseline,
+      distributedPerRecipient: 0,
+    };
+  }
+  if (recipientCount < 1) return { status: "unreviewed" as const, adjustedOven: original, distributedPerRecipient: 0 };
+  return {
+    status: scope === "week" ? "timed_order_week" as const : "timed_order_recurring" as const,
+    adjustedOven: localBaseline,
+    distributedPerRecipient: Math.max(0, original - localBaseline) / recipientCount,
+  };
+}
 
 export function requiredInsidersForOvenDemand(
   projectedOvenItems: number,
@@ -780,6 +803,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   };
   let outlierCandidates = 0;
   let timedOrdersApplied = 0;
+  let ignoredOutliersApplied = 0;
   for (let day = 0; day < 7; day += 1) {
     const dayOpenMinute = timeMinutes(hours.get(day)?.open ?? "10:00");
     const dayRows = rawIntervals.filter((row) => row.day_of_week === day).sort((left, right) => businessMinute(left.interval_start, dayOpenMinute) - businessMinute(right.interval_start, dayOpenMinute));
@@ -803,19 +827,20 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
         .filter((adjustment) => adjustment.day_of_week === day && adjustment.interval_start.slice(0, 5) === row.interval_start.slice(0, 5))
         .sort((left, right) => (left.scope === "week" ? -1 : 1) - (right.scope === "week" ? -1 : 1))[0];
       if (!matching) { row.oven_outlier_status = "unreviewed"; return; }
-      if (matching.handling === "keep_full") { row.oven_outlier_status = "keep_full"; return; }
 
       const prepMinutes = Math.max(15, Number(matching.prep_minutes) || 90);
       const prepIntervals = Math.max(1, Math.round(prepMinutes / 15));
       const recipients = dayRows.slice(Math.max(0, index - prepIntervals), index);
-      if (!recipients.length) { row.oven_outlier_status = "keep_full"; return; }
-      const excess = Math.max(0, original - localBaseline);
-      row.projected_oven_items = localBaseline;
-      const distributed = excess / recipients.length;
-      recipients.forEach((recipient) => { recipient.projected_oven_items += distributed; });
-      row.oven_prep_minutes = prepMinutes;
-      row.oven_outlier_status = matching.scope === "week" ? "timed_order_week" : "timed_order_recurring";
-      timedOrdersApplied += 1;
+      const decision = resolveOvenOutlierDecision(matching.handling, matching.scope, original, localBaseline, recipients.length);
+      row.oven_outlier_status = decision.status;
+      row.projected_oven_items = decision.adjustedOven;
+      if (decision.status.startsWith("timed_order")) {
+        recipients.forEach((recipient) => { recipient.projected_oven_items += decision.distributedPerRecipient; });
+        row.oven_prep_minutes = prepMinutes;
+        timedOrdersApplied += 1;
+      } else if (decision.status.startsWith("ignored")) {
+        ignoredOutliersApplied += 1;
+      }
     });
   }
 
@@ -865,7 +890,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     `Momentum adjustment is ${momentum >= 0 ? "+" : ""}${round(momentum * 100, 1)}% after the 25% factor and ±10% cap`,
     events.length ? `${events.length} event adjustment${events.length === 1 ? "" : "s"} reviewed` : "No special events overlap this week",
     `Driver coverage carries delivery demand forward for the store's ${averageRunTimeMinutes}-minute average run time`,
-    outlierCandidates ? `${outlierCandidates} isolated oven spike${outlierCandidates === 1 ? "" : "s"} detected; ${timedOrdersApplied} handled as advance-prep timed orders` : "No isolated oven-item spikes detected",
+    outlierCandidates ? `${outlierCandidates} isolated oven spike${outlierCandidates === 1 ? "" : "s"} detected; ${timedOrdersApplied} handled as advance-prep timed orders and ${ignoredOutliersApplied} ignored for staffing` : "No isolated oven-item spikes detected",
   ];
   if (learningEvents) reasons.push(`${learningEvents} event${learningEvents === 1 ? " has" : "s have"} no learned lift yet`);
   if (manualWeeklySales) reasons.push("Manager-entered weekly sales target anchored the sales forecast");
@@ -982,7 +1007,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v8", manual_weekly_sales: manualWeeklySales, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v9", manual_weekly_sales: manualWeeklySales, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied, ignored_outliers_applied: ignoredOutliersApplied },
   });
 
   return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved };

@@ -68,7 +68,7 @@ type DemandInterval = {
   required_insiders: number;
   required_drivers: number;
   oven_outlier_candidate: boolean;
-  oven_outlier_status: "none" | "unreviewed" | "timed_order_week" | "timed_order_recurring" | "keep_full";
+  oven_outlier_status: "none" | "unreviewed" | "timed_order_week" | "timed_order_recurring" | "ignored_week" | "ignored_recurring" | "keep_full";
   oven_outlier_original: number | null;
   oven_outlier_baseline: number | null;
   oven_prep_minutes: number | null;
@@ -600,7 +600,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     setMessage(result.published_plan_preserved ? "Forecast generated. The already-published schedule was preserved." : result.edited_plan_preserved ? "Forecast updated. Manager-edited required shifts were preserved with their change history." : "All seven days of minimum required shifts were generated automatically from historical demand, recent trends, store settings, and scheduled events.");
     setGeneratingForecast(false);
   };
-  const saveOutlierDecision = async (row: DemandInterval, scope: "week" | "recurring", handling: "timed_order" | "keep_full") => {
+  const saveOutlierDecision = async (row: DemandInterval, scope: "week" | "recurring", handling: "timed_order" | "ignore_staffing" | "keep_full") => {
     if (!supabase) { setMessage("Timed-order choice saved for this demo session."); return; }
     const key = `${row.day_of_week}-${row.interval_start}-${scope}-${handling}`;
     setSavingOutlier(key); setError(""); setMessage("");
@@ -617,7 +617,9 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     await generateForecast();
     setMessage(handling === "timed_order"
       ? `Timed order saved ${scope === "recurring" ? "as a recurring pattern" : "for this week"}. Excess production was moved into the prior 90-minute prep window and required shifts were rebuilt.`
-      : "Full staffing was retained for this demand spike and the decision was recorded.");
+      : handling === "ignore_staffing"
+        ? `The isolated spike is now ignored for staffing ${scope === "recurring" ? "as a recurring pattern" : "for this week"}. Nearby demand remains in the forecast and required shifts were rebuilt.`
+        : "Full staffing was retained for this demand spike and the decision was recorded.");
     setSavingOutlier("");
   };
   const editEvent = (event: SchedulingEvent) => {
@@ -782,6 +784,29 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     }
   };
 
+  const outlierDecisionKey = (row: DemandInterval, scope: "week" | "recurring", handling: "timed_order" | "ignore_staffing" | "keep_full") => `${row.day_of_week}-${row.interval_start}-${scope}-${handling}`;
+  const outlierDecisionActions = (row: DemandInterval) => (
+    <div className="outlier-choice-grid">
+      <button disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", "timed_order")}>{savingOutlier === outlierDecisionKey(row, "week", "timed_order") ? "Saving…" : "Prep early · this week"}</button>
+      <button disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "recurring", "timed_order")}>{savingOutlier === outlierDecisionKey(row, "recurring", "timed_order") ? "Saving…" : "Prep early · recurring"}</button>
+      <button className="ignore-staffing" disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", "ignore_staffing")}>{savingOutlier === outlierDecisionKey(row, "week", "ignore_staffing") ? "Saving…" : "Ignore for staffing · this week"}</button>
+      <button className="ignore-staffing" disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "recurring", "ignore_staffing")}>{savingOutlier === outlierDecisionKey(row, "recurring", "ignore_staffing") ? "Saving…" : "Ignore for staffing · recurring"}</button>
+      <button className="keep-full" disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", "keep_full")}>{savingOutlier === outlierDecisionKey(row, "week", "keep_full") ? "Saving…" : "Keep full staffing"}</button>
+    </div>
+  );
+  const outlierReview = (row: DemandInterval) => {
+    if (!row.oven_outlier_candidate) return <span className="outlier-none">—</span>;
+    if (row.oven_outlier_status === "unreviewed") return <div className="outlier-actions"><strong>⚠ Likely timed order</strong><small>{Number(row.oven_outlier_original).toFixed(1)} items versus about {Number(row.oven_outlier_baseline).toFixed(1)} nearby</small>{outlierDecisionActions(row)}</div>;
+    const ignored = row.oven_outlier_status.startsWith("ignored");
+    const recurring = row.oven_outlier_status.endsWith("recurring");
+    return <div className={`outlier-decision ${row.oven_outlier_status}`}>
+      <strong>{row.oven_outlier_status === "keep_full" ? "Full staffing retained" : ignored ? `✓ Ignored for staffing${recurring ? " · recurring" : " · this week"}` : `✓ Timed order${recurring ? " · recurring" : " · this week"}`}</strong>
+      {row.oven_outlier_status.startsWith("timed_order") && <small>Prepared across the prior {row.oven_prep_minutes || 90} minutes</small>}
+      {ignored && <small>The isolated excess is excluded; nearby demand still determines staffing.</small>}
+      <details className="outlier-change"><summary>Change decision</summary>{outlierDecisionActions(row)}</details>
+    </div>;
+  };
+
   return (
     <div className="page labor-page">
       <section className="page-heading heading-with-action labor-heading">
@@ -818,8 +843,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
             <summary><div><p className="eyebrow">Optional diagnostic</p><h2>Advanced 15-minute coverage details</h2><small>Open only when you want to inspect how {days[selectedDay]} shifts match the projected demand.</small></div><div className="coverage-summary">{unreviewedOutliers.length > 0 && <span className="review">⚠ {unreviewedOutliers.length} needs review</span>}<span className={coverageGapIntervals ? "gap" : "covered"}>{coverageGapIntervals ? `${coverageGapIntervals} intervals with gaps` : "✓ Every interval covered"}</span><small>{coverageExactIntervals} exact-fit intervals</small></div></summary>
             {coverageRows.length === 0 ? <div className="activity-empty">Generate the forecast to create the interval staffing requirements.</div> : <><div className="coverage-table-guide"><strong>Timed Order review stays pinned on the right.</strong><span>Scroll sideways to inspect the remaining 15-minute demand details.</span></div><div className="responsive-table coverage-table-wrap"><table className="coverage-table"><thead><tr><th>Time</th><th>Sales</th><th>Oven</th><th>Deliveries</th><th>Managers<br /><small>Need / Scheduled</small></th><th>Insiders<br /><small>Need / Scheduled</small></th><th>Drivers<br /><small>Need / Scheduled</small></th><th>Result</th><th>Timed Order review</th></tr></thead><tbody>{coverageRows.map((row) => {
               const coverageCell = (role: LaborRole) => { const difference = row.scheduled[role] - row.required[role]; return <span className={difference < 0 ? "coverage-gap" : difference > 0 ? "coverage-extra" : "coverage-fit"}>{row.required[role]} / {row.scheduled[role]}</span>; };
-              const decisionKey = (scope: "week" | "recurring", handling: "timed_order" | "keep_full") => `${row.day_of_week}-${row.interval_start}-${scope}-${handling}`;
-              return <tr key={`${row.day_of_week}-${row.interval_start}`} className={`${row.gaps ? "has-gap" : row.excess ? "has-extra" : "is-covered"} ${row.oven_outlier_candidate ? "oven-outlier" : ""}`}><td><strong>{displayTime(row.interval_start)}</strong></td><td>${Number(row.projected_sales).toFixed(0)}</td><td>{Number(row.projected_oven_items).toFixed(1)}{row.oven_outlier_original !== null && row.oven_outlier_status.startsWith("timed_order") && <small className="oven-original">was {Number(row.oven_outlier_original).toFixed(1)}</small>}</td><td>{Number(row.projected_deliveries).toFixed(1)}</td><td>{coverageCell("manager")}</td><td>{coverageCell("insider")}</td><td>{coverageCell("driver")}</td><td>{row.gaps ? <span className="coverage-result gap">Short {row.gaps}</span> : row.excess ? <span className="coverage-result extra">+{row.excess} above minimum</span> : <span className="coverage-result covered">Exact</span>}</td><td>{!row.oven_outlier_candidate ? <span className="outlier-none">—</span> : row.oven_outlier_status === "unreviewed" ? <div className="outlier-actions"><strong>⚠ Likely timed order</strong><small>{Number(row.oven_outlier_original).toFixed(1)} items versus about {Number(row.oven_outlier_baseline).toFixed(1)} nearby</small><button disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", "timed_order")}>{savingOutlier === decisionKey("week", "timed_order") ? "Saving…" : "Prep early · this week"}</button><button disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "recurring", "timed_order")}>{savingOutlier === decisionKey("recurring", "timed_order") ? "Saving…" : "Prep early · recurring"}</button><button className="keep-full" disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", "keep_full")}>{savingOutlier === decisionKey("week", "keep_full") ? "Saving…" : "Keep full staffing"}</button></div> : <div className={`outlier-decision ${row.oven_outlier_status}`}><strong>{row.oven_outlier_status === "keep_full" ? "Full staffing retained" : row.oven_outlier_status === "timed_order_recurring" ? "✓ Recurring timed order" : "✓ Timed order this week"}</strong>{row.oven_outlier_status.startsWith("timed_order") && <small>Prepared across the prior {row.oven_prep_minutes || 90} minutes</small>}<button className="keep-full" disabled={Boolean(savingOutlier)} onClick={() => void saveOutlierDecision(row, "week", row.oven_outlier_status === "keep_full" ? "timed_order" : "keep_full")}>Change decision</button></div>}</td></tr>;
+              return <tr key={`${row.day_of_week}-${row.interval_start}`} className={`${row.gaps ? "has-gap" : row.excess ? "has-extra" : "is-covered"} ${row.oven_outlier_candidate ? "oven-outlier" : ""}`}><td><strong>{displayTime(row.interval_start)}</strong></td><td>${Number(row.projected_sales).toFixed(0)}</td><td>{Number(row.projected_oven_items).toFixed(1)}{row.oven_outlier_original !== null && (row.oven_outlier_status.startsWith("timed_order") || row.oven_outlier_status.startsWith("ignored")) && <small className="oven-original">was {Number(row.oven_outlier_original).toFixed(1)}</small>}</td><td>{Number(row.projected_deliveries).toFixed(1)}</td><td>{coverageCell("manager")}</td><td>{coverageCell("insider")}</td><td>{coverageCell("driver")}</td><td>{row.gaps ? <span className="coverage-result gap">Short {row.gaps}</span> : row.excess ? <span className="coverage-result extra">+{row.excess} above minimum</span> : <span className="coverage-result covered">Exact</span>}</td><td>{outlierReview(row)}</td></tr>;
             })}</tbody></table></div></>}
           </details>
           <section className="panel labor-week-glance">
