@@ -40,6 +40,18 @@ async function sha256(file: File) {
   return Array.from(new Uint8Array(hash)).map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+async function refreshForecast(storeId: string, weekStart: string) {
+  if (!supabase) return { data: null, error: new Error("Supabase is not connected.") };
+  let lastResult = await supabase.functions.invoke("forecast-engine", { body: { action: "generate", store_id: storeId, week_start: weekStart } });
+  for (let attempt = 1; attempt <= 2 && lastResult.error; attempt += 1) {
+    const status = Number((lastResult.error as { context?: { status?: number } }).context?.status || 0);
+    if (status >= 400 && status < 500) break;
+    await new Promise((resolve) => window.setTimeout(resolve, attempt * 750));
+    lastResult = await supabase.functions.invoke("forecast-engine", { body: { action: "generate", store_id: storeId, week_start: weekStart } });
+  }
+  return lastResult;
+}
+
 export default function ReportImportCenter({ profile }: { profile: Profile }) {
   const [stores, setStores] = useState<Store[]>([]);
   const [storeId, setStoreId] = useState("");
@@ -132,8 +144,7 @@ export default function ReportImportCenter({ profile }: { profile: Profile }) {
         { storeId: store.id, weekStart: addIsoDays(periodEnd, 8) },
       ]);
       for (let index = 0; index < storeWeeks.length; index += 3) {
-        const group = await Promise.all(storeWeeks.slice(index, index + 3).map(({ storeId, weekStart }) =>
-          supabase!.functions.invoke("forecast-engine", { body: { action: "generate", store_id: storeId, week_start: weekStart } })));
+        const group = await Promise.all(storeWeeks.slice(index, index + 3).map(({ storeId, weekStart }) => refreshForecast(storeId, weekStart)));
         forecastsReady += group.filter((result) => !result.error && result.data?.ok).length;
         forecastsFailed += group.filter((result) => result.error || !result.data?.ok).length;
       }
