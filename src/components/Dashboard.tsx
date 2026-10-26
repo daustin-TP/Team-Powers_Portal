@@ -1,9 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
+  CalendarDays,
   ClipboardCheck,
+  ClipboardList,
+  CreditCard,
+  FileUp,
   Package,
   Receipt,
+  Settings,
+  ShieldAlert,
+  ShoppingBag,
+  Users,
   Wrench,
   MonitorCog,
   CalendarClock,
@@ -14,6 +22,31 @@ import type { ActivityItem, PortalSection, Profile } from "../types";
 import { supabase } from "../lib/supabase";
 
 type LiveActivity = ActivityItem & { section: PortalSection; timestamp: string };
+
+const actionCatalog: {
+  title: string;
+  detail: string;
+  icon: typeof Package;
+  section: PortalSection;
+  tone: "blue" | "red" | "silver";
+}[] = [
+  { title: "Build a schedule", detail: "Create the minimum data-guided staffing plan and assign the team.", icon: CalendarClock, section: "labor", tone: "blue" },
+  { title: "Review weekly KPIs", detail: "Compare results, commitments, trajectories, and store goals.", icon: Gauge, section: "kpi", tone: "red" },
+  { title: "Team calendar", detail: "Review company events, meetings, training, and supervisor visits.", icon: CalendarDays, section: "calendar", tone: "blue" },
+  { title: "Payroll", detail: "Complete payroll changes, reimbursements, and time-off requests.", icon: CreditCard, section: "payroll", tone: "silver" },
+  { title: "Supervisor visit log", detail: "Start or review a structured store-visit record.", icon: ClipboardList, section: "visit-log", tone: "red" },
+  { title: "Human Resources", detail: "Create and securely review disciplinary documentation.", icon: ShieldAlert, section: "hr", tone: "red" },
+  { title: "Weekly data imports", detail: "Upload Wizardline reports for KPI and labor intelligence.", icon: FileUp, section: "imports", tone: "blue" },
+  { title: "Order store uniforms", detail: "Restock approved uniforms for the store’s on-hand inventory.", icon: Package, section: "uniforms", tone: "silver" },
+  { title: "Order smallwares", detail: "Request approved tools, supplies, and store equipment.", icon: ShoppingBag, section: "smallwares", tone: "silver" },
+  { title: "Maintenance request", detail: "Report a store repair and track its progress.", icon: Wrench, section: "maintenance", tone: "red" },
+  { title: "Technology request", detail: "Report a system or equipment issue.", icon: MonitorCog, section: "technology", tone: "blue" },
+  { title: "Submit a receipt", detail: "Upload and categorize a corporate-card purchase.", icon: Receipt, section: "receipts", tone: "blue" },
+  { title: "Review approvals", detail: "See requests waiting for your attention.", icon: ClipboardCheck, section: "approvals", tone: "red" },
+  { title: "Reconciliation", detail: "Review and reconcile company purchasing records.", icon: CreditCard, section: "reconciliation", tone: "silver" },
+  { title: "Team access", detail: "Manage portal users, roles, names, and store assignments.", icon: Users, section: "team", tone: "blue" },
+  { title: "Catalog management", detail: "Maintain approved uniform and smallware catalogs.", icon: Settings, section: "catalog", tone: "silver" },
+];
 
 function activityStatus(status: string): ActivityItem["status"] {
   const normalized = status.toLowerCase();
@@ -34,9 +67,13 @@ function relativeDate(timestamp: string) {
 export default function Dashboard({
   profile,
   onNavigate,
+  availableSections,
+  recentSections,
 }: {
   profile: Profile;
   onNavigate: (section: PortalSection) => void;
+  availableSections: PortalSection[];
+  recentSections: PortalSection[];
 }) {
   const [activity, setActivity] = useState<LiveActivity[]>([]);
   const [activityLoading, setActivityLoading] = useState(Boolean(supabase));
@@ -98,72 +135,27 @@ export default function Dashboard({
       void client.removeChannel(activityChannel);
     };
   }, [profile.id]);
-  const actions: {
-    title: string;
-    detail: string;
-    icon: typeof Package;
-    section: PortalSection;
-    tone: string;
-  }[] = [
-    {
-      title: "Build a schedule",
-      detail: "Turn current sales and order trends into a staffed weekly plan.",
-      icon: CalendarClock,
-      section: "labor",
-      tone: "blue",
-    },
-    {
-      title: "Review weekly KPIs",
-      detail: "Compare results, goals, trends, and store commitments.",
-      icon: Gauge,
-      section: "kpi",
-      tone: "green",
-    },
-    {
-      title: "Order store uniforms",
-      detail: "Restock approved uniforms for the store’s on-hand inventory.",
-      icon: Package,
-      section: "uniforms",
-      tone: "green",
-    },
-    {
-      title: "Order smallwares",
-      detail: "Request approved tools, supplies, and store equipment.",
-      icon: Package,
-      section: "smallwares",
-      tone: "gold",
-    },
-    {
-      title: "Maintenance request",
-      detail: "Report a store repair and track its progress.",
-      icon: Wrench,
-      section: "maintenance",
-      tone: "gold",
-    },
-    {title:"Technology request",detail:"Report a system or equipment issue.",icon:MonitorCog,section:"technology",tone:"blue"},
-    {
-      title: "Submit a receipt",
-      detail: "Upload and categorize a corporate-card purchase.",
-      icon: Receipt,
-      section: "receipts",
-      tone: "blue",
-    },
-    {
-      title: "Review approvals",
-      detail: "See requests waiting for your attention.",
-      icon: ClipboardCheck,
-      section: "approvals",
-      tone: "plum",
-    },
-  ];
+  const actions = useMemo(() => {
+    const allowed = new Set(availableSections);
+    const recentRank = new Map(recentSections.map((item, index) => [item, index]));
+    return actionCatalog
+      .filter((action) => allowed.has(action.section))
+      .sort((left, right) => {
+        const leftRank = recentRank.get(left.section);
+        const rightRank = recentRank.get(right.section);
+        if (leftRank !== undefined || rightRank !== undefined) return (leftRank ?? 999) - (rightRank ?? 999);
+        return actionCatalog.indexOf(left) - actionCatalog.indexOf(right);
+      });
+  }, [availableSections, recentSections]);
 
   return (
     <div className="page dashboard">
       <section className="welcome">
-        <div>
-          <p className="eyebrow">Employee portal</p>
+        <div className="welcome-copy">
+          <img className="welcome-logo" src="/dash-sos-logo.png" alt="DASH-OS" />
+          <p className="eyebrow">Smart operations workspace</p>
           <h1>Good to see you, {firstName}.</h1>
-          <p>What would you like to take care of today?</p>
+          <p>Your tools, priorities, and recent work—ready from one place.</p>
         </div>
         <div
           className="welcome-date"
@@ -179,7 +171,8 @@ export default function Dashboard({
         <div className="section-heading">
           <div>
             <p className="eyebrow">Quick actions</p>
-            <h2>Start a request</h2>
+            <h2>Your available tools</h2>
+            <p>Recently used applications appear first.</p>
           </div>
         </div>
         <div className="action-grid">
@@ -195,6 +188,7 @@ export default function Dashboard({
                     <Icon size={23} />
                   </span>
                   <span>
+                    {recentSections.includes(action.section) && <em>Recently used</em>}
                     <strong>{action.title}</strong>
                     <small>{action.detail}</small>
                   </span>

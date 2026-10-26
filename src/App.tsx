@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
   CheckCircle2,
@@ -117,6 +117,8 @@ export default function App() {
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [section, setSection] = useState<PortalSection>("home");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [recentSections, setRecentSections] = useState<PortalSection[]>([]);
+  const restoredProfileId = useRef<string | null>(null);
 
   useEffect(() => {
     if (!supabase) return;
@@ -169,8 +171,28 @@ export default function App() {
     [profile],
   );
 
+  useEffect(() => {
+    if (!profile || restoredProfileId.current === profile.id) return;
+    restoredProfileId.current = profile.id;
+    const recentKey = `dashos:recent-sections:${profile.id}`;
+    const lastKey = `dashos:last-section:${profile.id}`;
+    try {
+      const storedRecent = JSON.parse(window.localStorage.getItem(recentKey) ?? "[]") as PortalSection[];
+      const allowed = new Set(visibleNavigation.map((item) => item.id));
+      setRecentSections(storedRecent.filter((item) => item !== "home" && allowed.has(item)).slice(0, 8));
+      const storedLast = window.localStorage.getItem(lastKey) as PortalSection | null;
+      setSection(storedLast && storedLast !== "home" && allowed.has(storedLast) ? storedLast : "home");
+    } catch {
+      setRecentSections([]);
+      setSection("home");
+    }
+  }, [profile, visibleNavigation]);
+
   const signOut = async () => {
     if (supabase) await supabase.auth.signOut();
+    restoredProfileId.current = null;
+    setSection("home");
+    setRecentSections([]);
     setProfile(null);
     setSession(null);
   };
@@ -209,10 +231,20 @@ export default function App() {
   const selectSection = (next: PortalSection) => {
     setSection(next);
     setMenuOpen(false);
+    if (next !== "home") {
+      const recentKey = `dashos:recent-sections:${profile.id}`;
+      const lastKey = `dashos:last-section:${profile.id}`;
+      window.localStorage.setItem(lastKey, next);
+      setRecentSections((current) => {
+        const updated = [next, ...current.filter((item) => item !== next)].slice(0, 8);
+        window.localStorage.setItem(recentKey, JSON.stringify(updated));
+        return updated;
+      });
+    }
   };
 
   const content = {
-    home: <Dashboard profile={profile} onNavigate={selectSection} />,
+    home: <Dashboard profile={profile} onNavigate={selectSection} availableSections={visibleNavigation.map((item) => item.id)} recentSections={recentSections} />,
     payroll: <PayrollCenter profile={profile} />,
     kpi: <KPITracker profile={profile} />,
     labor: <LaborManagement profile={profile} />,
@@ -232,14 +264,12 @@ export default function App() {
   }[section];
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${menuOpen ? "nav-expanded" : "nav-collapsed"}`}>
       <aside className={`sidebar ${menuOpen ? "open" : ""}`}>
         <div className="sidebar-brand">
-          <img
-            className="brand-logo"
-            src="/dash-sos-logo.png"
-            alt="Dash-OS"
-          />
+          <button className="sidebar-logo-button" aria-label={menuOpen ? "Collapse navigation" : "Expand navigation"} title={menuOpen ? "Collapse navigation" : "Open navigation"} onClick={() => setMenuOpen((current) => !current)}>
+            <img src="/dash-sos-logo.png" alt="Dash-OS navigation" />
+          </button>
           <button
             className="icon-button mobile-close"
             aria-label="Close navigation"
