@@ -83,6 +83,7 @@ type SuggestedShift = {
   source: "suggested";
   notes: string;
 };
+type FixedShiftCoverage = Pick<SuggestedShift, "day_of_week" | "role" | "start_time" | "end_time">;
 
 const round = (value: number, decimals = 2) => {
   const scale = 10 ** decimals;
@@ -265,6 +266,30 @@ function buildCoverageShifts(
       source: "suggested",
       notes: note,
     }));
+}
+
+function remainingCoverageNeed(
+  points: Array<{ minute: number; need: number }>,
+  fixedShifts: FixedShiftCoverage[],
+  openMinute: number,
+) {
+  if (!fixedShifts.length) return points;
+  const shiftMinute = (value: string) => {
+    const raw = timeMinutes(value);
+    // A time shortly before opening belongs to the same business day (manager
+    // prep); a much earlier clock time is an after-midnight close.
+    return raw < openMinute && openMinute - raw > 360 ? raw + 1440 : raw;
+  };
+  const fixedWindows = fixedShifts.map((shift) => {
+    const start = shiftMinute(shift.start_time);
+    let end = shiftMinute(shift.end_time);
+    if (end <= start) end += 1440;
+    return { start, end };
+  });
+  return points.map((point) => ({
+    ...point,
+    need: Math.max(0, point.need - fixedWindows.filter((shift) => point.minute >= shift.start && point.minute < shift.end).length),
+  }));
 }
 
 function optimizeDriverShifts(
@@ -523,7 +548,13 @@ function buildManagerShifts(planId: string, day: number, openMinute: number, clo
   return buildCoverageShifts(planId, day, "manager", points, start, end, minimum, maximum, "Required management coverage");
 }
 
-export function buildSuggestedShifts(planId: string, intervals: IntervalProjection[], hours: Map<number, { open: string; close: string }>, settings: ForecastSettings) {
+export function buildSuggestedShifts(
+  planId: string,
+  intervals: IntervalProjection[],
+  hours: Map<number, { open: string; close: string }>,
+  settings: ForecastSettings,
+  fixedShifts: FixedShiftCoverage[] = [],
+) {
   const minimum = Math.max(180, (Number(settings.minimum_shift_hours) || 3) * 60);
   const maximum = Math.max(minimum, (Number(settings.max_shift_hours) || 9) * 60);
   const shifts: SuggestedShift[] = [];
@@ -533,7 +564,16 @@ export function buildSuggestedShifts(planId: string, intervals: IntervalProjecti
     const openMinute = timeMinutes(storeHours.open);
     let closeMinute = businessMinute(storeHours.close, openMinute);
     if (closeMinute === openMinute) closeMinute += 1440;
-    shifts.push(...buildManagerShifts(planId, day, openMinute, closeMinute, settings));
+    const fixedManagers = fixedShifts.filter((shift) => shift.day_of_week === day && shift.role === "manager");
+    if (!fixedManagers.length) {
+      shifts.push(...buildManagerShifts(planId, day, openMinute, closeMinute, settings));
+    } else {
+      const managerStart = openMinute - (Number(settings.manager_preopen_minutes) || 60);
+      const managerEnd = closeMinute + (Number(settings.manager_postclose_minutes) || 60);
+      const managerPoints = Array.from({ length: Math.ceil((managerEnd - managerStart) / 15) }, (_, index) => ({ minute: managerStart + index * 15, need: 1 }));
+      const residualManagers = remainingCoverageNeed(managerPoints, fixedManagers, openMinute);
+      shifts.push(...buildCoverageShifts(planId, day, "manager", residualManagers, managerStart, managerEnd, minimum, maximum, "Management coverage around preserved shifts"));
+    }
 
     const rows = intervals.filter((row) => row.day_of_week === day && isWithinBusinessHours(row.interval_start, storeHours.open, storeHours.close));
     for (const role of ["insider", "driver"] as const) {
@@ -555,6 +595,8 @@ export function buildSuggestedShifts(planId: string, intervals: IntervalProjecti
         }
         points.sort((left, right) => left.minute - right.minute);
       }
+      const fixedRoleShifts = fixedShifts.filter((shift) => shift.day_of_week === day && shift.role === role);
+      points = remainingCoverageNeed(points, fixedRoleShifts, openMinute);
       const roleMaximum = role === "driver" && !settings.opening_driver_through_rush ? Math.min(maximum, 360) : maximum;
       let roleShifts = buildCoverageShifts(planId, day, role, points, windowStart, windowEnd, minimum, roleMaximum, role === "insider" ? "Oven demand coverage · rounded down except near-threshold mornings" : "Delivery demand coverage");
       if (role === "insider" && roleShifts.length) roleShifts = optimizeInsiderClosingShifts(roleShifts, points, openMinute, windowStart, minimum, maximum);
@@ -921,7 +963,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("demand_forecast_runs").update({ is_current: false, status: "superseded", updated_at: new Date().toISOString() }).eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true);
   const { data: run, error: runError } = await admin.from("demand_forecast_runs").insert({
-    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v9",
+    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v10",
     confidence_score: score, confidence_level: confidenceLevel(score), confidence_reasons: reasons,
     input_summary: {
       baseline_sets: baselineSets.length, baseline_weeks: baselineWeeks, recent_kpi_weeks: kpiRows.length,
@@ -950,9 +992,10 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   const { data: existingPlan } = await admin.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle();
   let planId: string | null = existingPlan?.id ?? null;
   let editedPlanPreserved = false;
+  let rebuildSummary = { preserved_shifts: 0, replaced_system_shifts: 0, added_system_shifts: 0, deletion_protected_groups: 0 };
   if (!existingPlan || existingPlan.status !== "published") {
     const { data: plan, error: planError } = await admin.from("labor_week_plans").upsert({
-      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v9", forecast_run_id: run.id,
+      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v10", forecast_run_id: run.id,
       created_by: userId, updated_at: new Date().toISOString(),
     }, { onConflict: "store_id,week_start" }).select("id").single();
     if (planError || !plan) throw planError ?? new Error("The labor week plan could not be prepared.");
@@ -973,31 +1016,43 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     if (planDailyError || planIntervalError) throw planDailyError ?? planIntervalError;
 
     const [{ data: existingShifts, error: existingShiftError }, { data: structuralChanges, error: structuralChangeError }] = await Promise.all([
-      admin.from("labor_shifts").select("id,day_of_week,role,source,assigned_member_id").eq("week_plan_id", plan.id),
-      admin.from("labor_shift_changes").select("id,shift_id,day_of_week,role").eq("week_plan_id", plan.id),
+      admin.from("labor_shifts").select("id,day_of_week,role,start_time,end_time,source,assigned_member_id").eq("week_plan_id", plan.id),
+      admin.from("labor_shift_changes").select("id,shift_id,day_of_week,role,change_type,before_state").eq("week_plan_id", plan.id),
     ]);
     if (existingShiftError || structuralChangeError) throw existingShiftError ?? structuralChangeError;
     const groupKey = (day: number, role: string) => `${day}|${role}`;
-    const protectedGroups = new Set<string>();
-    for (const shift of existingShifts ?? []) {
-      if (shift.source !== "suggested" || shift.assigned_member_id) protectedGroups.add(groupKey(shift.day_of_week, shift.role));
-    }
-    for (const change of structuralChanges ?? []) protectedGroups.add(groupKey(change.day_of_week, change.role));
-    editedPlanPreserved = protectedGroups.size > 0;
+    const changedShiftIds = new Set((structuralChanges ?? []).map((change) => change.shift_id).filter(Boolean));
+    const fixedShifts = (existingShifts ?? []).filter((shift) => shift.source !== "suggested" || shift.assigned_member_id || changedShiftIds.has(shift.id));
+    const deletionProtectedGroups = new Set((structuralChanges ?? []).filter((change) => change.change_type === "removed").map((change) => groupKey(change.day_of_week, change.role)));
+    editedPlanPreserved = fixedShifts.length > 0 || deletionProtectedGroups.size > 0;
 
-    const suggestedShifts = buildSuggestedShifts(plan.id, rawIntervals, hours, settings);
+    const suggestedShifts = buildSuggestedShifts(plan.id, rawIntervals, hours, settings, fixedShifts);
+    let replacedSystemShifts = 0;
+    let addedSystemShifts = 0;
     for (let day = 0; day < 7; day += 1) {
       for (const role of ["manager", "insider", "driver"] as const) {
-        if (protectedGroups.has(groupKey(day, role))) continue;
-        const { error: deleteShiftError } = await admin.from("labor_shifts").delete().eq("week_plan_id", plan.id).eq("day_of_week", day).eq("role", role);
-        if (deleteShiftError) throw deleteShiftError;
+        if (deletionProtectedGroups.has(groupKey(day, role))) continue;
+        const fixedIds = new Set(fixedShifts.filter((shift) => shift.day_of_week === day && shift.role === role).map((shift) => shift.id));
+        const replaceableIds = (existingShifts ?? []).filter((shift) => shift.day_of_week === day && shift.role === role && !fixedIds.has(shift.id)).map((shift) => shift.id);
+        if (replaceableIds.length) {
+          const { error: deleteShiftError } = await admin.from("labor_shifts").delete().in("id", replaceableIds);
+          if (deleteShiftError) throw deleteShiftError;
+          replacedSystemShifts += replaceableIds.length;
+        }
         const replacements = suggestedShifts.filter((shift) => shift.day_of_week === day && shift.role === role);
         if (replacements.length) {
           const { error: insertShiftError } = await admin.from("labor_shifts").insert(replacements);
           if (insertShiftError) throw insertShiftError;
+          addedSystemShifts += replacements.length;
         }
       }
     }
+    rebuildSummary = {
+      preserved_shifts: fixedShifts.length,
+      replaced_system_shifts: replacedSystemShifts,
+      added_system_shifts: addedSystemShifts,
+      deletion_protected_groups: deletionProtectedGroups.size,
+    };
   }
 
   const { data: savedShifts, error: savedShiftError } = planId
@@ -1007,10 +1062,10 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v9", manual_weekly_sales: manualWeeklySales, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied, ignored_outliers_applied: ignoredOutliersApplied },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v10", manual_weekly_sales: manualWeeklySales, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied, ignored_outliers_applied: ignoredOutliersApplied },
   });
 
-  return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved };
+  return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved, rebuild_summary: rebuildSummary };
 }
 
 class HttpError extends Error {
