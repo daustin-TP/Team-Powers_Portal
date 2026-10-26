@@ -246,6 +246,13 @@ function addIsoDays(value: string, daysToAdd: number) {
   date.setDate(date.getDate() + daysToAdd);
   return date.toISOString().slice(0, 10);
 }
+function localTodayIso() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 function formatScheduleDate(weekStart: string, dayIndex: number, compact = false) {
   const date = new Date(`${addIsoDays(weekStart, dayIndex)}T12:00:00`);
   return new Intl.DateTimeFormat(undefined, compact ? { month: "numeric", day: "numeric" } : { month: "short", day: "numeric" }).format(date);
@@ -292,6 +299,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [exportingPdf, setExportingPdf] = useState(false);
   const [builderZoom, setBuilderZoom] = useState<65 | 80 | 100>(100);
   const [savingOutlier, setSavingOutlier] = useState("");
+  const [showHistoricalEvents, setShowHistoricalEvents] = useState(false);
   const schedulePrintRef = useRef<HTMLDivElement>(null);
 
   const selectedStore = stores.find((store) => store.id === storeId);
@@ -304,6 +312,9 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const weeklySplh = totalHours ? weeklySales / totalHours : 0;
   const weekEnd = addIsoDays(weekStart, 6);
   const weekEvents = events.filter((event) => event.status !== "cancelled" && event.start_date <= weekEnd && event.end_date >= weekStart && (event.scope === "company" || event.store_id === storeId));
+  const todayIso = localTodayIso();
+  const historicalEvents = events.filter((event) => event.end_date < todayIso);
+  const visibleEvents = showHistoricalEvents ? events : events.filter((event) => event.end_date >= todayIso);
   const selectedDayOpen = storeHours.find((hours) => hours.day_of_week === selectedDay)?.open_time ?? "10:00";
   const coverageRows = useMemo(() => demandIntervals
     .filter((interval) => interval.day_of_week === selectedDay)
@@ -920,8 +931,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
               <div className="button-row"><button className="button primary" onClick={saveEvent}><Save size={17} />{eventForm.id ? "Update event" : "Save event"}</button>{eventForm.id && <button className="button secondary" onClick={() => setEventForm(emptyEvent(weekStart, storeId, canCreateCompanyEvent))}>Cancel</button>}</div>
             </div>
           </section>
-          <section className="panel labor-event-list"><div className="panel-heading"><div><p className="eyebrow">Shared calendar</p><h2>Upcoming and recent events</h2><p>Company events appear for every store. Local events appear only for their store.</p></div></div>
-            {events.length === 0 ? <div className="activity-empty">No scheduling events have been added yet.</div> : <div className="event-card-list">{events.map((event) => <article key={event.id} className={`event-card ${event.status}`}><div className="event-date"><strong>{new Date(`${event.start_date}T12:00:00`).toLocaleDateString(undefined, { month: "short" })}</strong><span>{new Date(`${event.start_date}T12:00:00`).getDate()}</span></div><div className="event-copy"><div className="event-tags"><span>{event.scope === "company" ? "Company-wide" : stores.find((store) => store.id === event.store_id)?.name || "Store"}</span><span>{event.category.replace("_", " ")}</span><span>{event.impact_mode === "learning" ? "Learning" : "Expected lift"}</span></div><h3>{event.name}</h3><p>{event.start_date === event.end_date ? formatWeek(event.start_date) : `${formatWeek(event.start_date)} – ${formatWeek(event.end_date)}`}{event.recurrence === "annual" ? " · repeats annually" : ""}</p>{event.notes && <small>{event.notes}</small>}<div className="event-lifts">{event.sales_lift_percent !== null && <span>Sales {event.sales_lift_percent > 0 ? "+" : ""}{event.sales_lift_percent}%</span>}{event.order_count_lift_percent !== null && <span>Orders {event.order_count_lift_percent > 0 ? "+" : ""}{event.order_count_lift_percent}%</span>}{event.oven_items_lift_percent !== null && <span>Oven {event.oven_items_lift_percent > 0 ? "+" : ""}{event.oven_items_lift_percent}%</span>}{event.delivery_lift_percent !== null && <span>Delivery {event.delivery_lift_percent > 0 ? "+" : ""}{event.delivery_lift_percent}%</span>}</div></div>{canEditEvent(event) && <div className="event-actions"><button className="icon-button" aria-label={`Edit ${event.name}`} onClick={() => editEvent(event)}><Settings2 size={17} /></button><button className="icon-button danger" aria-label={`Delete ${event.name}`} onClick={() => void deleteEvent(event)}><Trash2 size={17} /></button></div>}</article>)}</div>}
+          <section className="panel labor-event-list"><div className="panel-heading"><div><p className="eyebrow">Shared calendar</p><h2>Current and upcoming events</h2><p>Company events appear for every store. Local events appear only for their store. Past events remain saved for forecasting and review.</p></div>{historicalEvents.length > 0 && <button type="button" className="button secondary" onClick={() => setShowHistoricalEvents((current) => !current)}><History size={17} />{showHistoricalEvents ? "Hide history" : `Show history (${historicalEvents.length})`}</button>}</div>
+            {visibleEvents.length === 0 ? <div className="activity-empty">{events.length === 0 ? "No scheduling events have been added yet." : "No current or upcoming events. Use Show history to review past events."}</div> : <div className="event-card-list">{visibleEvents.map((event) => <article key={event.id} className={`event-card ${event.status}`}><div className="event-date"><strong>{new Date(`${event.start_date}T12:00:00`).toLocaleDateString(undefined, { month: "short" })}</strong><span>{new Date(`${event.start_date}T12:00:00`).getDate()}</span></div><div className="event-copy"><div className="event-tags"><span>{event.scope === "company" ? "Company-wide" : stores.find((store) => store.id === event.store_id)?.name || "Store"}</span><span>{event.category.replace("_", " ")}</span><span>{event.impact_mode === "learning" ? "Learning" : "Expected lift"}</span></div><h3>{event.name}</h3><p>{event.start_date === event.end_date ? formatWeek(event.start_date) : `${formatWeek(event.start_date)} – ${formatWeek(event.end_date)}`}{event.recurrence === "annual" ? " · repeats annually" : ""}</p>{event.notes && <small>{event.notes}</small>}<div className="event-lifts">{event.sales_lift_percent !== null && <span>Sales {event.sales_lift_percent > 0 ? "+" : ""}{event.sales_lift_percent}%</span>}{event.order_count_lift_percent !== null && <span>Orders {event.order_count_lift_percent > 0 ? "+" : ""}{event.order_count_lift_percent}%</span>}{event.oven_items_lift_percent !== null && <span>Oven {event.oven_items_lift_percent > 0 ? "+" : ""}{event.oven_items_lift_percent}%</span>}{event.delivery_lift_percent !== null && <span>Delivery {event.delivery_lift_percent > 0 ? "+" : ""}{event.delivery_lift_percent}%</span>}</div></div>{canEditEvent(event) && <div className="event-actions"><button className="icon-button" aria-label={`Edit ${event.name}`} onClick={() => editEvent(event)}><Settings2 size={17} /></button><button className="icon-button danger" aria-label={`Delete ${event.name}`} onClick={() => void deleteEvent(event)}><Trash2 size={17} /></button></div>}</article>)}</div>}
           </section>
         </div>
       ) : view === "settings" ? (
