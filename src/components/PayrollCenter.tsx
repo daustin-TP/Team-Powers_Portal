@@ -7,14 +7,16 @@ type Store={id:string;name:string};
 type Submission={id:string;store_id:string;store_name:string;entries:Entry[];confirmed_sections:string[];status:string;review_note:string;submitted_at:string|null};
 type TimeOff={id:string;requester_id:string;requester_name:string;requester_role:string;store_id:string|null;kind:string;start_date:string;end_date:string;hours:number;status:string;review_note:string;note:string};
 type Data={cycle:{status:string};stores:Store[];submissions:Submission[];requests:TimeOff[];emails:{id:string;kind:string;recipient:string;status:string;last_error:string|null}[];email_ready:boolean;preview:string};
-const blank=(section:string):Entry=>({section,type:sections.find(s=>s.key===section)!.types[0],employee:"",employee_id:"",effective_date:"",amount:"",hours:"",details:""});
+const blank=(section:string,_due=""):Entry=>({section,type:sections.find(s=>s.key===section)!.types[0],employee:"",employee_id:"",effective_date:"",end_date:"",day_portion:"Full day",position:"",new_position:"",new_name:"",new_address:"",amount:"",hours:"",acknowledged:false,details:"",attachment_path:"",attachment_name:"",attachment_type:""});
 export default function PayrollCenter({profile}:{profile:Profile}){
   const [due,setDue]=useState(currentCycle),[store,setStore]=useState(""),[data,setData]=useState<Data|null>(null);
   const [entries,setEntries]=useState<Entry[]>([]),[confirmed,setConfirmed]=useState<string[]>([]),[dirty,setDirty]=useState(false);
   const [tab,setTab]=useState("submission"),[busy,setBusy]=useState(false),[loading,setLoading]=useState(false),[message,setMessage]=useState(""),[review,setReview]=useState("");
   const [leave,setLeave]=useState({kind:"PTO",start_date:"",end_date:"",hours:"",note:""});
   const seq=useRef(0);
-  const admin=profile.role==="admin";
+  const admin=profile.role==="admin",leadership=["supervisor","admin"].includes(profile.role);
+  const visibleSections=sections.filter(section=>section.key!=="recognition"||leadership);
+  const requiredSectionKeys=visibleSections.map(section=>section.key);
   const selected=data?.submissions.find(s=>s.store_id===store);
   const locked=data?.cycle.status==="approved" || ["submitted","approved"].includes(selected?.status??"");
   async function call(body:Record<string,unknown>){
@@ -39,7 +41,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
     finally{if(seq.current===request)setLoading(false);}
   }
   useEffect(()=>{void load();return()=>{seq.current++;};},[due,profile.id]);
-  useEffect(()=>{setEntries(selected?.entries??[]);setConfirmed(selected?.confirmed_sections??[]);setReview(selected?.review_note??"");setDirty(false);},[store,data]);
+  useEffect(()=>{setEntries((selected?.entries??[]).map(entry=>({...blank(entry.section,due),...entry,acknowledged:Boolean(entry.acknowledged)})));setConfirmed(selected?.confirmed_sections??[]);setReview(selected?.review_note??"");setDirty(false);},[store,data,due]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue="";}};window.addEventListener("beforeunload",warn);return()=>window.removeEventListener("beforeunload",warn);},[dirty]);
   const leaveDraft=()=>!dirty || window.confirm("Discard your unsaved payroll edits?");
   async function mutate(payload:Record<string,unknown>,success:string){
@@ -48,7 +50,47 @@ export default function PayrollCenter({profile}:{profile:Profile}){
     catch(e){setMessage((e as Error).message);}
     finally{setBusy(false);}
   }
-  function update(index:number,key:keyof Entry,value:string){setEntries(es=>es.map((e,i)=>i===index?{...e,[key]:value}:e));setDirty(true);}
+  function update<K extends keyof Entry>(index:number,key:K,value:Entry[K]){setEntries(es=>es.map((e,i)=>i===index?{...e,[key]:value}:e));setDirty(true);}
+  function changeType(index:number,type:string){setEntries(es=>es.map((entry,i)=>i!==index?entry:{...blank(entry.section,due),type,employee:entry.employee,employee_id:entry.employee_id,effective_date:type==="Pay Rate Change"?due:""}));setDirty(true);}
+  async function uploadAttachment(index:number,file:File){
+    if(!supabase||!store)return;
+    if(file.size>10*1024*1024){setMessage("Attachments must be 10 MB or smaller.");return;}
+    setBusy(true);setMessage("");
+    try{
+      const signed=await call({action:"attachment_upload",store_id:store,file_name:file.name,mime_type:file.type});
+      const uploaded=await supabase.storage.from("payroll-attachments").uploadToSignedUrl(signed.path,signed.token,file,{contentType:file.type||undefined});
+      if(uploaded.error)throw uploaded.error;
+      update(index,"attachment_path",signed.path);update(index,"attachment_name",file.name);update(index,"attachment_type",file.type);
+      setMessage("Deduction form attached securely.");
+    }catch(e){setMessage((e as Error).message);}finally{setBusy(false);}
+  }
+  async function openAttachment(entry:Entry){
+    try{const result=await call({action:"attachment_download",store_id:store,path:entry.attachment_path});const link=document.createElement("a");link.href=result.signed_url;link.target="_blank";link.rel="noopener";link.click();}
+    catch(e){setMessage((e as Error).message);}
+  }
+  function entryFields(entry:Entry,index:number){
+    const notesRequired=["Additional Hours","Shift Coverage Bonus"].includes(entry.type);
+    return <>
+      <div className="payroll-fields">
+        <label>Update type<select value={entry.type} onChange={e=>changeType(index,e.target.value)}>{sections.find(s=>s.key===entry.section)!.types.map(t=><option key={t}>{t}</option>)}</select></label>
+        <label>Team member name <small>Exactly as shown in payroll</small><input value={entry.employee} onChange={e=>update(index,"employee",e.target.value)}/></label>
+        {entry.type==="PTO / Vacation"&&<><label>First day taken off<input type="date" value={entry.effective_date} onChange={e=>update(index,"effective_date",e.target.value)}/></label><label>Last day taken off<input type="date" min={entry.effective_date} value={entry.end_date} onChange={e=>update(index,"end_date",e.target.value)}/></label><label>Time used<select value={entry.day_portion} onChange={e=>update(index,"day_portion",e.target.value)}><option>Full day</option><option>Half day</option></select></label></>}
+        {entry.type==="Position Change / Promotion"&&<><label>New position<input value={entry.new_position} onChange={e=>update(index,"new_position",e.target.value)}/></label><label>Effective date<input type="date" value={entry.effective_date} onChange={e=>update(index,"effective_date",e.target.value)}/></label><label>New hourly rate ($)<input type="number" min="0" step=".01" value={entry.amount} onChange={e=>update(index,"amount",e.target.value)}/></label></>}
+        {entry.type==="Pay Rate Change"&&<><label>Position being changed<input value={entry.position} onChange={e=>update(index,"position",e.target.value)}/></label><label>Effective pay-period start<select value={entry.effective_date||due} onChange={e=>update(index,"effective_date",e.target.value)}><option value={due}>{due} (payroll Monday)</option><option value={addDays(due,-14)}>{addDays(due,-14)} (current period start)</option></select></label><label>New hourly rate ($)<input type="number" min="0" step=".01" value={entry.amount} onChange={e=>update(index,"amount",e.target.value)}/></label></>}
+        {entry.type==="Additional Hours"&&<><label>Date worked<input type="date" value={entry.effective_date} onChange={e=>update(index,"effective_date",e.target.value)}/></label><label>Hours to add <small>Decimal hours allowed, such as 2.5</small><input type="number" min=".01" step=".01" value={entry.hours} onChange={e=>update(index,"hours",e.target.value)}/></label><label>Position for the hours<input value={entry.position} onChange={e=>update(index,"position",e.target.value)}/></label></>}
+        {entry.type==="Shift Coverage Bonus"&&<><label>Date bonus applies<input type="date" value={entry.effective_date} onChange={e=>update(index,"effective_date",e.target.value)}/></label><label>Bonus amount ($)<input type="number" min="0" step=".01" value={entry.amount} onChange={e=>update(index,"amount",e.target.value)}/></label></>}
+        {entry.type==="Address Change"&&<label className="payroll-wide">New address<textarea value={entry.new_address} onChange={e=>update(index,"new_address",e.target.value)} placeholder="Street, city, state, ZIP"/></label>}
+        {entry.type==="Legal Name Change"&&<label>New legal name<input value={entry.new_name} onChange={e=>update(index,"new_name",e.target.value)}/></label>}
+        {entry.type==="Partners Foundation Payroll Deduction"&&<label>Deduction each pay period ($)<input type="number" min="0" step=".01" value={entry.amount} onChange={e=>update(index,"amount",e.target.value)}/></label>}
+        {entry.section==="recognition"&&<><label>Position<input value={entry.position} onChange={e=>update(index,"position",e.target.value)}/></label><label>Effective date<input type="date" value={entry.effective_date} onChange={e=>update(index,"effective_date",e.target.value)}/></label><label>Bonus amount ($)<input type="number" min="0" step=".01" value={entry.amount} onChange={e=>update(index,"amount",e.target.value)}/></label></>}
+      </div>
+      {entry.type==="Legal Name Change"&&<label className="check-row payroll-attestation"><input type="checkbox" checked={entry.acknowledged} onChange={e=>update(index,"acknowledged",e.target.checked)}/><span>Legal paperwork was emailed, including the new Social Security card with the updated name.</span></label>}
+      {entry.type==="Direct Deposit Update"&&<><div className="payroll-security-note"><strong>Do not enter bank account or routing information here.</strong><span>Send the new direct-deposit information through the approved secure email process.</span></div><label className="check-row payroll-attestation"><input type="checkbox" checked={entry.acknowledged} onChange={e=>update(index,"acknowledged",e.target.checked)}/><span>New direct-deposit information was emailed securely.</span></label></>}
+      {entry.type==="Partners Foundation Payroll Deduction"&&<div className="payroll-attachment"><label className="button secondary">{busy?"Uploading…":"Attach form or photo"}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" disabled={busy} onChange={e=>{const file=e.target.files?.[0];if(file)void uploadAttachment(index,file);e.currentTarget.value="";}}/></label>{entry.attachment_name&&<span><strong>{entry.attachment_name}</strong><button type="button" className="link-button" onClick={()=>void openAttachment(entry)}>View</button><button type="button" className="link-button danger-text" onClick={()=>{update(index,"attachment_path","");update(index,"attachment_name","");update(index,"attachment_type","");}}>Remove</button></span>}</div>}
+      <label>{notesRequired?"Notes / reason (required)":"Notes (optional)"}<textarea maxLength={2000} value={entry.details} onChange={e=>update(index,"details",e.target.value)} placeholder={notesRequired?"Explain why this payroll adjustment is needed.":"Add any helpful details for payroll."}/></label>
+      {entry.type==="Pay Rate Change"&&<button type="button" className="button secondary" onClick={()=>{setEntries(es=>[...es,{...entry,position:"",amount:"",details:"",attachment_path:"",attachment_name:"",attachment_type:""}]);setDirty(true);}}>Add another position for this team member</button>}
+    </>;
+  }
   const counts={submitted:data?.submissions.filter(s=>["submitted","approved"].includes(s.status)).length??0,approved:data?.submissions.filter(s=>s.status==="approved").length??0};
   return <div className="page payroll-page">
     <div className="page-heading"><p className="eyebrow">Every other Monday</p><h1>Payroll</h1><p>Submit by 4:00 p.m. Central. GMs with missing submissions receive a warning at 2:00 p.m. at their account email.</p></div>
@@ -69,24 +111,16 @@ export default function PayrollCenter({profile}:{profile:Profile}){
           {selected?.submitted_at&&<p>Submitted {new Date(selected.submitted_at).toLocaleString("en-US",{timeZone:"America/Chicago"})} Central</p>}
           {selected?.review_note&&<p className="inline-message">Review note: {selected.review_note}</p>}
           <p>Confirm every section, even when there are no changes. For direct deposit, record that the secure update was completed; do not enter bank account or routing numbers here.</p>
-          {sections.map(section=><fieldset key={section.key} disabled={locked||busy}>
+          {visibleSections.map(section=><fieldset key={section.key} disabled={locked||busy}>
             <legend>{section.title}</legend>
             {entries.map((entry,index)=>entry.section!==section.key?null:<div className="payroll-entry" key={index}>
-              <div className="payroll-fields">
-                <label>Update type<select value={entry.type} onChange={e=>update(index,"type",e.target.value)}>{section.types.map(t=><option key={t}>{t}</option>)}</select></label>
-                <label>Employee payroll name<input value={entry.employee} onChange={e=>update(index,"employee",e.target.value)}/></label>
-                <label>Employee ID (optional)<input value={entry.employee_id} onChange={e=>update(index,"employee_id",e.target.value)}/></label>
-                <label>Effective date<input type="date" value={entry.effective_date} onChange={e=>update(index,"effective_date",e.target.value)}/></label>
-                <label>Amount / hourly rate ($)<input type="number" min="0" step=".01" value={entry.amount} onChange={e=>update(index,"amount",e.target.value)}/></label>
-                <label>Hours (if applicable)<input type="number" min="0" step=".25" value={entry.hours} onChange={e=>update(index,"hours",e.target.value)}/></label>
-              </div>
-              <label>Change details<textarea maxLength={2000} value={entry.details} onChange={e=>update(index,"details",e.target.value)} placeholder={entry.type==="Direct Deposit Update"?"Confirm secure update completion; do not enter banking details.":"Include old/new position or rate, applicable dates, and explanation."}/></label>
+              {entryFields(entry,index)}
               <button type="button" className="button secondary" onClick={()=>{setEntries(es=>es.filter((_,i)=>i!==index));setDirty(true);}}>Remove entry</button>
             </div>)}
-            <button className="button secondary" onClick={()=>{setEntries(es=>[...es,blank(section.key)]);setDirty(true);}}>Add entry</button>
+            <button className="button secondary" onClick={()=>{setEntries(es=>[...es,blank(section.key,due)]);setDirty(true);}}>Add entry</button>
             <label className="check-row"><input type="checkbox" checked={confirmed.includes(section.key)} onChange={e=>{setConfirmed(c=>e.target.checked?[...c,section.key]:c.filter(k=>k!==section.key));setDirty(true);}}/><span>I reviewed this section; all changes are entered, or there are no changes.</span></label>
           </fieldset>)}
-          {!locked&&<div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:confirmed,status:"draft"},"Draft saved.")}>Save draft</button><button className="button primary" disabled={busy||confirmed.length!==4} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:confirmed,status:"submitted"},"Payroll submitted for review.")}>Submit payroll</button></div>}
+          {!locked&&<div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"draft"},"Draft saved.")}>Save draft</button><button className="button primary" disabled={busy||requiredSectionKeys.some(key=>!confirmed.includes(key))} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"submitted"},"Payroll submitted for review.")}>Submit payroll</button></div>}
           {admin&&data.cycle.status==="open"&&["submitted","approved"].includes(selected?.status??"")&&<div className="payroll-review"><label>Review / correction note<textarea value={review} onChange={e=>setReview(e.target.value)}/></label><div className="button-row"><button className="button secondary" disabled={busy||!review.trim()} onClick={()=>void mutate({action:"review",store_id:store,status:"returned",review_note:review},"Returned to the GM for correction.")}>Return for correction</button><button className="button primary" disabled={busy||selected?.status==="approved"} onClick={()=>void mutate({action:"review",store_id:store,status:"approved",review_note:review},"Store approved. The cycle email waits for final approval.")}>Approve store</button></div></div>}
         </>}
       </section>}

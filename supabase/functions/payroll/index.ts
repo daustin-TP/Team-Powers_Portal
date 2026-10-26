@@ -68,9 +68,31 @@ export async function handlePayroll(req: Request) {
       return json({ok:true,requests:(requests.data??[]).filter(canSeeRequest).map(({id,requester_name,store_id,kind,start_date,end_date,status}:any)=>({id,requester_name,store_id,kind,start_date,end_date,status}))});
     }
     if(!validCycle(body.due_date??""))return json({error:"Choose a valid payroll Monday."},400);
+    if(body.action==="attachment_upload"||body.action==="attachment_download"){
+      const storeId=String(body.store_id??"");
+      if(!/^[0-9a-f-]{36}$/i.test(storeId) || (p.role!=="admin"&&!assigned.has(storeId)))return json({error:"Store access denied"},403);
+      const store=await db.from("stores").select("id").eq("id",storeId).eq("active",true).maybeSingle();check(store);
+      if(!store.data)return json({error:"Choose an active store."},400);
+      if(body.action==="attachment_upload"){
+        const original=String(body.file_name??"").trim(),mime=String(body.mime_type??"").toLowerCase();
+        const allowed=new Set(["image/jpeg","image/png","image/webp","application/pdf"]);
+        if(!original||original.length>180||!allowed.has(mime))return json({error:"Attach a JPG, PNG, WebP, or PDF file no larger than 10 MB."},400);
+        const safe=original.replace(/[^a-z0-9._-]/gi,"-").replace(/-+/g,"-");
+        const path=`${body.due_date}/${storeId}/${p.id}/${crypto.randomUUID()}-${safe}`;
+        const signed=await db.storage.from("payroll-attachments").createSignedUploadUrl(path);check(signed);
+        return json({ok:true,path,token:signed.data.token});
+      }
+      const path=String(body.path??"");
+      if(!path.startsWith(`${body.due_date}/${storeId}/`))return json({error:"Attachment path is invalid."},400);
+      const submission=await db.from("payroll_submissions").select("entries").eq("due_date",body.due_date).eq("store_id",storeId).maybeSingle();check(submission);
+      const linked=(submission.data?.entries??[]).some((entry:any)=>entry.attachment_path===path);
+      if(!linked)return json({error:"Save this attachment with the payroll submission before opening it."},400);
+      const signed=await db.storage.from("payroll-attachments").createSignedUrl(path,900,{download:false});check(signed);
+      return json({ok:true,signed_url:signed.data.signedUrl});
+    }
     if(body.action!=="load"){
       if(!["save","review","approve_cycle","time_off","time_off_review"].includes(body.action))return json({error:"Unknown action"},400);
-      if(body.action==="save")body.entries=validateEntries(body.entries,body.status==="submitted");
+      if(body.action==="save")body.entries=validateEntries(body.entries,body.status==="submitted",body.due_date,p.role);
       if(body.action==="time_off"){
         if(!["PTO","Vacation"].includes(body.kind) || !(Number(body.hours)>0) || Number(body.hours)>999999 || !body.start_date || !body.end_date || body.end_date<body.start_date || String(body.note??"").length>2000)throw Error("Enter valid time-off dates and hours.");
       }
