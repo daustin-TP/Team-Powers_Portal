@@ -87,7 +87,8 @@ export async function refreshGmailAccessToken(config: GmailConfig, request: type
   }
   const result = await response.json().catch(() => ({}));
   if (!response.ok || typeof result.access_token !== "string") {
-    throw new GmailDeliveryError("Google rejected the Gmail authorization. Reconnect the DASH-OS mailbox.", false);
+    const reason = typeof result.error === "string" && /^[a-z_]+$/i.test(result.error) ? result.error : `HTTP ${response.status}`;
+    throw new GmailDeliveryError(`Google rejected the Gmail authorization (${reason}). Reconnect the DASH-OS mailbox.`, false);
   }
   return result.access_token as string;
 }
