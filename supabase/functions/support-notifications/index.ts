@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.110.9";
-import { gmailConfig, sendGmailMessage } from "../payroll/gmail.ts";
+import { emailConfig, sendEmailMessage } from "../payroll/email.ts";
 import { supportNotificationCopy, uniqueRecipients, type SupportArea, type SupportEvent } from "./model.ts";
 
 const headers = {
@@ -60,8 +60,8 @@ export async function handleSupportNotification(req: Request) {
     const profilesResult = await db.from("profiles").select("id,email,full_name").in("id", responderIds).eq("active", true);
     if (profilesResult.error) throw new Error("Responder email addresses could not be loaded.");
     const recipients = uniqueRecipients((profilesResult.data ?? []) as { id: string; email: string | null; full_name: string | null }[]);
-    const gmail = gmailConfig();
-    if (!gmail) return json({ error: "The DASH-OS Gmail sender is not configured." }, 503);
+    const email = emailConfig();
+    if (!email) return json({ error: "The DASH-OS email sender is not configured." }, 503);
 
     const store = Array.isArray(ticket.stores) ? ticket.stores[0] : ticket.stores;
     const submitter = Array.isArray(ticket.profiles) ? ticket.profiles[0] : ticket.profiles;
@@ -88,16 +88,17 @@ export async function handleSupportNotification(req: Request) {
       if (logResult.error?.code === "23505") continue;
       if (logResult.error || !logResult.data) throw new Error("Notification delivery could not be recorded.");
       try {
-        const providerId = await sendGmailMessage(gmail, {
+        const providerId = await sendEmailMessage(email, {
           id: logResult.data.id,
           to: recipient.email!,
           subject: copy.subject,
           text: copy.text,
+          fromName: area === "technology" ? "DASH-OS Technology" : "DASH-OS Maintenance",
         });
         await db.from("support_ticket_notifications").update({ status: "sent", sent_at: new Date().toISOString(), provider_id: providerId }).eq("id", logResult.data.id);
         sent += 1;
       } catch (error) {
-        await db.from("support_ticket_notifications").update({ status: "failed", last_error: error instanceof Error ? error.message : "Gmail delivery failed" }).eq("id", logResult.data.id);
+        await db.from("support_ticket_notifications").update({ status: "failed", last_error: error instanceof Error ? error.message : "Email delivery failed" }).eq("id", logResult.data.id);
         failed += 1;
       }
     }

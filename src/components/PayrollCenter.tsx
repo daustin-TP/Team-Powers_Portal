@@ -52,7 +52,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
   }
   async function checkEmail(){
     setBusy(true);setMessage("");
-    try{const result=await call({action:"email_health"});setMessage(`Gmail connected securely as ${result.sender}. No email was sent.`);}
+    try{const result=await call({action:"email_health"});setMessage(result.provider==="resend"?`Resend delivery is configured as ${result.sender}. Submit one test request to confirm inbox delivery.`:`Gmail connected securely as ${result.sender}. No email was sent.`);}
     catch(e){setMessage((e as Error).message);}
     finally{setBusy(false);}
   }
@@ -132,7 +132,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
       </section>}
       {tab==="review"&&<section className="panel payroll-form"><h2>Cycle {data.cycle.status}</h2><p>{counts.submitted} of {data.stores.length} stores submitted · {counts.approved} approved</p>
         {data.stores.map(s=>{const sub=data.submissions.find(x=>x.store_id===s.id);return <div className="payroll-status-row" key={s.id}><strong>{s.name}</strong><span>{sub?.status??"Not submitted"}</span><button className="button secondary" onClick={()=>{if(leaveDraft()){setStore(s.id);setTab("submission");}}}>Review</button></div>;})}
-        {admin&&<><div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void checkEmail()}>Check Gmail connection</button><span>{data.email_ready?"Gmail credentials saved":"Gmail not configured"}</span></div><details><summary>Preview combined payroll email</summary><pre className="payroll-email-preview">{data.preview}</pre></details>
+        {admin&&<><div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void checkEmail()}>Check email connection</button><span>{data.email_ready?"Email sender configured":"Email sender not configured"}</span></div><details><summary>Preview combined payroll email</summary><pre className="payroll-email-preview">{data.preview}</pre></details>
           <p>Final approval locks all store submissions and queues one email to the configured payroll recipient.</p>
           <button className="button primary" disabled={busy||data.cycle.status!=="open"||!data.stores.length||counts.approved!==data.stores.length} onClick={()=>{if(window.confirm("Approve and lock this entire payroll cycle, and queue the combined payroll email?"))void mutate({action:"approve_cycle"},"Cycle approved. See email status below.");}}>Approve entire cycle & queue email</button>
           {data.emails.map(e=><p key={e.id}>{e.kind==="payroll"?"Combined payroll":"GM reminder"} → {e.recipient}: <strong>{e.status==="sent"?"Accepted by Google Gmail":e.status}</strong>{e.last_error?` — ${e.last_error}`:""}</p>)}

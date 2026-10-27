@@ -1,6 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.110.9";
 import { emailBody, validCycle, validateEntries } from "./model.ts";
-import { GmailDeliveryError, gmailConfig, refreshGmailAccessToken, sendGmailMessage } from "./gmail.ts";
+import { checkEmailConnection, emailConfig, emailDeliveryFailure, sendEmailMessage } from "./email.ts";
 
 const headers = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods":"POST, OPTIONS", "Content-Type":"application/json" };
 const json = (data: unknown, status=200) => new Response(JSON.stringify(data), {status,headers});
@@ -14,8 +14,8 @@ export async function handlePayroll(req: Request) {
     const token=(req.headers.get("Authorization")??"").replace(/^Bearer\s+/i,"");
     if (!token) return json({error:"Sign in required"},401);
     const body=await req.json();
-    const gmail=gmailConfig();
-    const emailReady=Boolean(gmail);
+    const email=emailConfig();
+    const emailReady=Boolean(email);
     if(body.action==="deliver"){
       // Scheduled worker: only the server's service-role token can run it.
       if(token!==serviceKey) return json({error:"Not authorized"},403);
@@ -44,11 +44,12 @@ export async function handlePayroll(req: Request) {
         const text=mail.kind==="payroll" ? emailBody(mail.due_date,mail.payload.submissions) :
           `Hello ${mail.payload.name},\n\nPayroll has not been submitted for ${mail.payload.store_names}.\nPlease submit through Dash-OS by 4:00 p.m. Central today (${mail.due_date}).\n\nThis is the 2:00 p.m. payroll reminder.`;
         try{
-          const providerId=await sendGmailMessage(gmail!,{id:mail.id,to:mail.recipient,subject:mail.kind==="payroll"?`Approved payroll — ${mail.due_date}`:`Payroll due today by 4 p.m. — ${mail.due_date}`,text});
+          const providerId=await sendEmailMessage(email!,{id:mail.id,to:mail.recipient,subject:mail.kind==="payroll"?`Approved payroll — ${mail.due_date}`:`Payroll due today by 4 p.m. — ${mail.due_date}`,text,fromName:"DASH-OS Payroll"});
           check(await db.from("payroll_email_outbox").update({status:"sent",sent_at:new Date().toISOString(),provider_id:providerId,recipient:mail.recipient,last_error:null}).eq("id",mail.id));sent++;
         }catch(error){
-          const retryable=error instanceof GmailDeliveryError && error.retryable && mail.attempts<8;
-          const lastError=error instanceof GmailDeliveryError?error.message:"Gmail delivery failed. Review the message before retrying.";
+          const failure=emailDeliveryFailure(error);
+          const retryable=failure.retryable && mail.attempts<8;
+          const lastError=failure.message;
           check(await db.from("payroll_email_outbox").update({status:retryable?"queued":"failed",last_error:lastError}).eq("id",mail.id));
           break;
         }
@@ -70,10 +71,10 @@ export async function handlePayroll(req: Request) {
     }
     if(!validCycle(body.due_date??""))return json({error:"Choose a valid payroll Monday."},400);
     if(body.action==="email_health"){
-      if(p.role!=="admin")return json({error:"Only administrators can check the Gmail connection."},403);
-      if(!gmail)return json({error:"The Gmail sender secrets are incomplete."},400);
-      await refreshGmailAccessToken(gmail);
-      return json({ok:true,email_ready:true,sender:gmail.fromEmail});
+      if(p.role!=="admin")return json({error:"Only administrators can check the email connection."},403);
+      if(!email)return json({error:"The email sender secrets are incomplete."},400);
+      const connection=await checkEmailConnection(email);
+      return json({ok:true,email_ready:true,...connection});
     }
     if(body.action==="attachment_upload"||body.action==="attachment_download"){
       const storeId=String(body.store_id??"");

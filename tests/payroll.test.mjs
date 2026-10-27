@@ -53,8 +53,8 @@ function handlerFor(role,active=true){
     let rows=tables[name],single=false;
     return {select(){return this},eq(k,v){rows=rows.filter(r=>r[k]===v);return this},lte(k,v){rows=rows.filter(r=>r[k]<=v);return this},gte(k,v){rows=rows.filter(r=>r[k]>=v);return this},in(k,vs){rows=rows.filter(r=>vs.includes(r[k]));return this},maybeSingle(){single=true;return this},then(resolve){resolve({data:single?rows[0]:rows,error:null});}};
   }};
-  const gmail={gmailConfig:()=>null,GmailDeliveryError:class extends Error{},refreshGmailAccessToken:async()=>'',sendGmailMessage:async()=>''};
-  const ctx={exports:{},require:n=>n.includes('model')?m:n.includes('gmail')?gmail:{createClient:()=>client},Deno:{env:{get:()=>'test'},serve:()=>{}},Response};
+  const email={emailConfig:()=>null,checkEmailConnection:async()=>({}),emailDeliveryFailure:()=>({retryable:false,message:'failed'}),sendEmailMessage:async()=>''};
+  const ctx={exports:{},require:n=>n.includes('model')?m:n.includes('email')?email:{createClient:()=>client},Deno:{env:{get:()=>'test'},serve:()=>{}},Response};
   vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../supabase/functions/payroll/index.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,ctx);
   return ctx.exports.handlePayroll;
 }
