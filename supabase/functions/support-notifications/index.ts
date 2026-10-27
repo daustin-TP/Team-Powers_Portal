@@ -19,6 +19,8 @@ function base64(bytes: Uint8Array) {
 }
 
 async function ticketAttachments(db: any, ticket: any, event: SupportEvent) {
+  const maxIndividualBytes = 5 * 1024 * 1024;
+  const maxCombinedBytes = 12 * 1024 * 1024;
   const updates = Array.isArray(ticket.support_ticket_updates) ? ticket.support_ticket_updates : [];
   const completionImages = updates
     .filter((update: any) => event === "completed" && update.image_path)
@@ -26,20 +28,27 @@ async function ticketAttachments(db: any, ticket: any, event: SupportEvent) {
     .map((update: any) => String(update.image_path));
   const paths = [...new Set([String(ticket.image_path ?? ""), ...completionImages].filter(Boolean))].slice(0, 3);
   const attachments: { filename: string; content: string }[] = [];
+  let attachedBytes = 0;
   for (const [index, path] of paths.entries()) {
     try {
       const downloaded = await db.storage.from("ticket-images").download(path);
-      if (downloaded.error || !downloaded.data || downloaded.data.size > 10 * 1024 * 1024) continue;
+      if (
+        downloaded.error ||
+        !downloaded.data ||
+        downloaded.data.size > maxIndividualBytes ||
+        attachedBytes + downloaded.data.size > maxCombinedBytes
+      ) continue;
       const extension = path.split(".").pop()?.replace(/[^a-z0-9]/gi, "").slice(0, 8) || "jpg";
       attachments.push({
         filename: `${ticket.area}-request-photo-${index + 1}.${extension}`,
         content: base64(new Uint8Array(await downloaded.data.arrayBuffer())),
       });
+      attachedBytes += downloaded.data.size;
     } catch {
       // A missing image should not prevent the operational alert from sending.
     }
   }
-  return attachments;
+  return { attachments, storedPhotoCount: paths.length };
 }
 
 export async function handleSupportNotification(req: Request) {
@@ -97,7 +106,8 @@ export async function handleSupportNotification(req: Request) {
 
     const store = Array.isArray(ticket.stores) ? ticket.stores[0] : ticket.stores;
     const submitter = Array.isArray(ticket.profiles) ? ticket.profiles[0] : ticket.profiles;
-    const attachments = await ticketAttachments(db, ticket, event);
+    const photoDelivery = await ticketAttachments(db, ticket, event);
+    const attachments = photoDelivery.attachments;
     const copy = supportNotificationCopy({
       event,
       area,
@@ -110,6 +120,7 @@ export async function handleSupportNotification(req: Request) {
       externalTicketNumber: ticket.external_ticket_number ?? "",
       createdAt: ticket.created_at,
       photoAttached: attachments.length > 0,
+      photoAvailableInDash: photoDelivery.storedPhotoCount > attachments.length,
       portalUrl: Deno.env.get("DASH_OS_URL")?.trim() || "https://team-powers-portal.daustin-15d.workers.dev/",
     });
 

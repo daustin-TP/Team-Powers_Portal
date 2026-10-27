@@ -21,6 +21,7 @@ function brandedEmail(input: {
   externalTicketNumber?: string;
   createdAt?: string;
   photoAttached?: boolean;
+  photoAvailableInDash?: boolean;
   portalUrl: string;
 }) {
   const severityColors: Record<string, { background: string; color: string }> = {
@@ -50,6 +51,7 @@ ${detail("Store", input.storeName)}${detail("Activity", input.actionLine)}${crea
 <div style="padding:16px;background:#f8fbfe;border-left:4px solid #168fff;border-radius:4px;color:#10233d;font-size:15px;line-height:1.55;white-space:pre-wrap">${escapeHtml(input.description)}</div>
 ${input.stepsTaken ? `<div style="font-size:12px;color:#64748b;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin:20px 0 7px">Steps already taken</div><div style="color:#334e68;font-size:14px;line-height:1.55;white-space:pre-wrap">${escapeHtml(input.stepsTaken)}</div>` : ""}
 ${input.photoAttached ? `<div style="margin-top:20px;padding:12px 14px;background:#eff8ff;border-radius:8px;color:#075985;font-size:13px;font-weight:700">&#128247; The submitted photo is attached to this email.</div>` : ""}
+${input.photoAvailableInDash ? `<div style="margin-top:12px;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;font-size:13px;font-weight:700">&#128247; An additional photo was too large to attach, but it was saved successfully and is available inside DASH-OS.</div>` : ""}
 <div style="margin-top:26px"><a href="${escapeHtml(input.portalUrl)}" style="display:inline-block;background:#0878c9;color:#fff;text-decoration:none;font-size:14px;font-weight:800;padding:12px 20px;border-radius:8px">Open request in DASH-OS</a></div>
 </td></tr>
 <tr><td style="background:#f7fafc;border-top:1px solid #e3eaf2;padding:18px 28px;color:#718096;font-size:11px;line-height:1.5">Sent securely by DASH-OS for Team Powers. Reply to your normal Team Powers contact if follow-up is needed.</td></tr>
@@ -69,6 +71,7 @@ export function supportNotificationCopy(input: {
   externalTicketNumber?: string;
   createdAt?: string;
   photoAttached?: boolean;
+  photoAvailableInDash?: boolean;
 }) {
   const areaName = input.area === "technology" ? "Technology" : "Maintenance";
   const eventName = input.event === "submitted" ? "New request" : "Request completed";
@@ -89,6 +92,7 @@ export function supportNotificationCopy(input: {
     input.description,
     ...(input.stepsTaken ? ["", "Steps already taken:", input.stepsTaken] : []),
     ...(input.photoAttached ? ["", "The submitted photo is attached to this email."] : []),
+    ...(input.photoAvailableInDash ? ["", "An additional photo was too large to attach, but it was saved successfully and is available inside DASH-OS."] : []),
     "",
     `Open DASH-OS: ${input.portalUrl}`,
   ].join("\n");
@@ -103,6 +107,7 @@ export function supportNotificationCopy(input: {
     externalTicketNumber: input.externalTicketNumber,
     createdAt: input.createdAt,
     photoAttached: input.photoAttached,
+    photoAvailableInDash: input.photoAvailableInDash,
     portalUrl: input.portalUrl,
   });
   return { subject, text, html };
