@@ -134,23 +134,39 @@ export default function App() {
 
   useEffect(() => {
     if (!supabase) return;
+    const client = supabase;
     let active = true;
-    supabase.auth.getSession().then(async ({ data }) => {
+    client.auth.getSession().then(async ({ data }) => {
       if (!active) return;
-      setSession(data.session);
       if (data.session?.user) {
+        // Browser storage can outlive a revoked server session. Verify it
+        // before rendering tools that require server-side authorization.
+        const verified = await client.auth.getUser();
+        if (verified.error || !verified.data.user) {
+          await client.auth.signOut({ scope: "local" });
+          if (!active) return;
+          setSession(null);
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+        setSession(data.session);
         setProfile(
           await loadProfile(
-            data.session.user.id,
-            data.session.user.email ?? "",
+            verified.data.user.id,
+            verified.data.user.email ?? "",
           ),
         );
+      } else {
+        setSession(null);
+        setProfile(null);
       }
       setLoading(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      async (_event, nextSession) => {
+    const { data: listener } = client.auth.onAuthStateChange(
+      async (event, nextSession) => {
+        if (event === "INITIAL_SESSION") return;
         setSession(nextSession);
         setProfile(
           nextSession?.user

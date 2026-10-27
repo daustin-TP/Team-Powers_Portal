@@ -625,7 +625,15 @@ export default function KPITracker({ profile }: { profile: Profile }) {
     const { data, error: loadError } = await supabase.functions.invoke("kpi-dashboard", { body: { week_end: weekEnd } });
     if (request !== requestId.current) return;
     if (loadError || !data?.ok) {
-      setError(data?.error || loadError?.message || "The KPI dashboard could not be loaded.");
+      let detail = data?.error;
+      if (!detail && loadError?.context instanceof Response) {
+        try { detail = (await loadError.context.clone().json()).error; } catch { /* Use the friendly fallback below. */ }
+      }
+      if (loadError?.context instanceof Response && loadError.context.status === 401) {
+        await supabase.auth.signOut({ scope: "local" });
+        detail = "Your sign-in session expired. Please sign in again.";
+      }
+      setError(detail || loadError?.message || "The KPI dashboard could not be loaded.");
       setCommitmentsLoading(false); setMetricsLoading(false); return;
     }
     applyAccess(accessFromResponse(data));
