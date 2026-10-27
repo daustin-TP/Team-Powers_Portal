@@ -21,7 +21,7 @@ test('Resend sends a stable idempotent request without exposing its key in the b
     call={url,options};
     return new Response(JSON.stringify({id:'resend-id'}),{status:200});
   };
-  const id=await resend.sendResendMessage(config,{id:'notification/123',to:'recipient@example.com',subject:'Test',text:'Body'},request);
+  const id=await resend.sendResendMessage(config,{id:'notification/123',to:'recipient@example.com',subject:'Test',text:'Body',html:'<strong>Body</strong>',attachments:[{filename:'photo.jpg',content:'YWJj'}]},request);
   assert.equal(id,'resend-id');
   assert.equal(call.url,'https://api.resend.com/emails');
   assert.equal(call.options.headers.Authorization,'Bearer re_secret');
@@ -29,6 +29,8 @@ test('Resend sends a stable idempotent request without exposing its key in the b
   const body=JSON.parse(call.options.body);
   assert.equal(body.from,'DASH-OS <noreply@powerspizza.com>');
   assert.deepEqual(body.to,['recipient@example.com']);
+  assert.equal(body.html,'<strong>Body</strong>');
+  assert.deepEqual(body.attachments,[{filename:'photo.jpg',content:'YWJj'}]);
   assert.doesNotMatch(call.options.body,/re_secret/);
 });
 

@@ -38,6 +38,13 @@ test('one email groups by section, then store, and includes no-change confirmati
   assert.match(content,/No changes reported/);
   assert.match(content,/Period Bonus — Sample/);
 });
+test('payroll email HTML uses DASH branding and escapes submitted text',()=>{
+  const html=m.emailHtml('Payroll <Review>','A & B','https://dash.example/');
+  assert.match(html,/DASH-OS/);
+  assert.match(html,/Payroll &lt;Review&gt;/);
+  assert.match(html,/A &amp; B/);
+  assert.doesNotMatch(html,/<Review>/);
+});
 function handlerFor(role,active=true){
   const profile={id:'user',role,active,store_id:'a'};
   const tables={

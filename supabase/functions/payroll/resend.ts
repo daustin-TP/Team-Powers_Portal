@@ -28,7 +28,14 @@ function safeIdempotencyKey(value: string) {
 
 export async function sendResendMessage(
   config: ResendConfig,
-  message: { id: string; to: string; subject: string; text: string },
+  message: {
+    id: string;
+    to: string;
+    subject: string;
+    text: string;
+    html?: string;
+    attachments?: { filename: string; content: string }[];
+  },
   request: typeof fetch = fetch,
 ) {
   let response: Response;
@@ -45,6 +52,8 @@ export async function sendResendMessage(
         to: [message.to],
         subject: message.subject,
         text: message.text,
+        ...(message.html ? { html: message.html } : {}),
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
       }),
     });
   } catch {

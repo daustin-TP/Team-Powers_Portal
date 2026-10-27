@@ -74,3 +74,21 @@ export function emailBody(due: string, submissions: { store_name: string; entrie
       `${store.store_name}\n` + (store.entries.filter(e=>e.section===section.key).map(entryText).join("\n\n") || "No changes reported.") + "\n"
     ).join("\n")).join("\n\n");
 }
+
+export function emailHtml(title: string, text: string, portalUrl: string) {
+  const escaped = (value: string) => value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+  const body = escaped(text).replaceAll("\n", "<br>");
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;background:#eef3f8;font-family:Arial,Helvetica,sans-serif;color:#10233d">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef3f8"><tr><td align="center" style="padding:28px 12px">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #dce5ef;box-shadow:0 8px 24px rgba(15,35,60,.08)">
+<tr><td style="background:#07111f;padding:24px 28px"><div style="font-size:27px;font-style:italic;font-weight:900;letter-spacing:-1px"><span style="color:#ff2828">DA</span><span style="color:#168fff">SH</span><span style="color:#fff">-OS</span></div><div style="color:#a9bbcf;font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;margin-top:5px">Team Powers · Payroll</div></td></tr>
+<tr><td style="padding:28px"><div style="font-size:12px;color:#0878c9;font-weight:800;letter-spacing:.12em;text-transform:uppercase">Payroll update</div><h1 style="margin:8px 0 22px;font-size:25px;line-height:1.25;color:#071a33">${escaped(title)}</h1><div style="padding:18px;background:#f8fbfe;border-left:4px solid #168fff;border-radius:4px;color:#263f5c;font-size:14px;line-height:1.6">${body}</div><div style="margin-top:26px"><a href="${escaped(portalUrl)}" style="display:inline-block;background:#0878c9;color:#fff;text-decoration:none;font-size:14px;font-weight:800;padding:12px 20px;border-radius:8px">Open Payroll in DASH-OS</a></div></td></tr>
+<tr><td style="background:#f7fafc;border-top:1px solid #e3eaf2;padding:18px 28px;color:#718096;font-size:11px;line-height:1.5">Sent securely by DASH-OS for Team Powers.</td></tr>
+</table></td></tr></table></body></html>`;
+}

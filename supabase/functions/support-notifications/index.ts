@@ -10,6 +10,38 @@ const headers = {
 };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers });
 
+function base64(bytes: Uint8Array) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+async function ticketAttachments(db: any, ticket: any, event: SupportEvent) {
+  const updates = Array.isArray(ticket.support_ticket_updates) ? ticket.support_ticket_updates : [];
+  const completionImages = updates
+    .filter((update: any) => event === "completed" && update.image_path)
+    .sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))
+    .map((update: any) => String(update.image_path));
+  const paths = [...new Set([String(ticket.image_path ?? ""), ...completionImages].filter(Boolean))].slice(0, 3);
+  const attachments: { filename: string; content: string }[] = [];
+  for (const [index, path] of paths.entries()) {
+    try {
+      const downloaded = await db.storage.from("ticket-images").download(path);
+      if (downloaded.error || !downloaded.data || downloaded.data.size > 10 * 1024 * 1024) continue;
+      const extension = path.split(".").pop()?.replace(/[^a-z0-9]/gi, "").slice(0, 8) || "jpg";
+      attachments.push({
+        filename: `${ticket.area}-request-photo-${index + 1}.${extension}`,
+        content: base64(new Uint8Array(await downloaded.data.arrayBuffer())),
+      });
+    } catch {
+      // A missing image should not prevent the operational alert from sending.
+    }
+  }
+  return attachments;
+}
+
 export async function handleSupportNotification(req: Request) {
   if (req.method === "OPTIONS") return new Response("ok", { headers });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -36,7 +68,7 @@ export async function handleSupportNotification(req: Request) {
 
     const ticketResult = await db
       .from("support_tickets")
-      .select("id,area,status,severity,description,submitted_by,stores(name),profiles!support_tickets_submitted_by_fkey(full_name)")
+      .select("id,area,status,severity,description,steps_taken,external_ticket_number,image_path,created_at,submitted_by,stores(name),profiles!support_tickets_submitted_by_fkey(full_name),support_ticket_updates(status,image_path,created_at)")
       .eq("id", body.ticket_id)
       .maybeSingle();
     if (ticketResult.error || !ticketResult.data) return json({ error: "Request not found" }, 404);
@@ -65,6 +97,7 @@ export async function handleSupportNotification(req: Request) {
 
     const store = Array.isArray(ticket.stores) ? ticket.stores[0] : ticket.stores;
     const submitter = Array.isArray(ticket.profiles) ? ticket.profiles[0] : ticket.profiles;
+    const attachments = await ticketAttachments(db, ticket, event);
     const copy = supportNotificationCopy({
       event,
       area,
@@ -73,6 +106,10 @@ export async function handleSupportNotification(req: Request) {
       description: ticket.description,
       submittedBy: submitter?.full_name ?? "Team member",
       actedBy: profileResult.data.full_name ?? "DASH-OS responder",
+      stepsTaken: ticket.steps_taken ?? "",
+      externalTicketNumber: ticket.external_ticket_number ?? "",
+      createdAt: ticket.created_at,
+      photoAttached: attachments.length > 0,
       portalUrl: Deno.env.get("DASH_OS_URL")?.trim() || "https://team-powers-portal.daustin-15d.workers.dev/",
     });
 
@@ -93,6 +130,8 @@ export async function handleSupportNotification(req: Request) {
           to: recipient.email!,
           subject: copy.subject,
           text: copy.text,
+          html: copy.html,
+          attachments,
           fromName: area === "technology" ? "DASH-OS Technology" : "DASH-OS Maintenance",
         });
         await db.from("support_ticket_notifications").update({ status: "sent", sent_at: new Date().toISOString(), provider_id: providerId }).eq("id", logResult.data.id);

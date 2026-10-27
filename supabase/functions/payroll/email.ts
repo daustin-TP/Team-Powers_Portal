@@ -25,7 +25,15 @@ export function emailConfig(): EmailConfig | null {
 
 export function sendEmailMessage(
   config: EmailConfig,
-  message: { id: string; to: string; subject: string; text: string; fromName?: string },
+  message: {
+    id: string;
+    to: string;
+    subject: string;
+    text: string;
+    html?: string;
+    attachments?: { filename: string; content: string }[];
+    fromName?: string;
+  },
 ) {
   const sender = message.fromName ? { ...config, fromName: message.fromName } : config;
   return config.provider === "resend"

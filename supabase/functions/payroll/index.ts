@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.110.9";
-import { emailBody, validCycle, validateEntries } from "./model.ts";
+import { emailBody, emailHtml, validCycle, validateEntries } from "./model.ts";
 import { checkEmailConnection, emailConfig, emailDeliveryFailure, sendEmailMessage } from "./email.ts";
 
 const headers = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods":"POST, OPTIONS", "Content-Type":"application/json" };
@@ -43,8 +43,9 @@ export async function handlePayroll(req: Request) {
         }
         const text=mail.kind==="payroll" ? emailBody(mail.due_date,mail.payload.submissions) :
           `Hello ${mail.payload.name},\n\nPayroll has not been submitted for ${mail.payload.store_names}.\nPlease submit through Dash-OS by 4:00 p.m. Central today (${mail.due_date}).\n\nThis is the 2:00 p.m. payroll reminder.`;
+        const subject=mail.kind==="payroll"?`Approved payroll — ${mail.due_date}`:`Payroll due today by 4 p.m. — ${mail.due_date}`;
         try{
-          const providerId=await sendEmailMessage(email!,{id:mail.id,to:mail.recipient,subject:mail.kind==="payroll"?`Approved payroll — ${mail.due_date}`:`Payroll due today by 4 p.m. — ${mail.due_date}`,text,fromName:"DASH-OS Payroll"});
+          const providerId=await sendEmailMessage(email!,{id:mail.id,to:mail.recipient,subject,text,html:emailHtml(subject,text,Deno.env.get("DASH_OS_URL")?.trim()||"https://team-powers-portal.daustin-15d.workers.dev/"),fromName:"DASH-OS Payroll"});
           check(await db.from("payroll_email_outbox").update({status:"sent",sent_at:new Date().toISOString(),provider_id:providerId,recipient:mail.recipient,last_error:null}).eq("id",mail.id));sent++;
         }catch(error){
           const failure=emailDeliveryFailure(error);
