@@ -9,11 +9,13 @@ import {
   CalendarClock,
   CalendarDays,
   ClipboardList,
+  ExternalLink,
   UploadCloud,
   Home,
   LogOut,
   Menu,
   Package,
+  PartyPopper,
   Settings,
   ShoppingBag,
   Wrench,
@@ -21,6 +23,7 @@ import {
   Receipt,
   ShieldAlert,
   ShieldCheck,
+  Shirt,
   Users,
   X,
 } from "lucide-react";
@@ -79,6 +82,14 @@ const navigation: {
   { id: "catalog", label: "Catalog Management", icon: Settings, roles: ["admin"] },
 ];
 
+const externalSites = [
+  { label: "Celebrations", href: "https://celebrations.powerspizza.com", icon: PartyPopper },
+  { label: "Individual Uniforms", href: "https://uniforms.powerspizza.com", icon: Shirt },
+];
+
+type RequestBadgeSection = "technology" | "maintenance" | "smallwares" | "uniforms";
+type RequestBadges = Partial<Record<RequestBadgeSection, number>>;
+
 async function loadProfile(userId: string, email: string): Promise<Profile | null> {
   if (!supabase) return demoProfile;
   const { data, error } = await supabase
@@ -118,6 +129,7 @@ export default function App() {
   const [section, setSection] = useState<PortalSection>("home");
   const [menuOpen, setMenuOpen] = useState(false);
   const [recentSections, setRecentSections] = useState<PortalSection[]>([]);
+  const [requestBadges, setRequestBadges] = useState<RequestBadges>({});
   const restoredProfileId = useRef<string | null>(null);
 
   useEffect(() => {
@@ -170,6 +182,67 @@ export default function App() {
       }),
     [profile],
   );
+
+  useEffect(() => {
+    if (!supabase || !profile) {
+      setRequestBadges({});
+      return;
+    }
+
+    const client = supabase;
+    let active = true;
+    const loadRequestBadges = async () => {
+      const capabilities = await client
+        .from("profile_capabilities")
+        .select("capability")
+        .eq("profile_id", profile.id);
+      const assigned = new Set((capabilities.data ?? []).map((item: { capability: string }) => item.capability));
+      const canRespondTechnology = profile.role === "admin" || assigned.has("technology");
+      const canRespondMaintenance = profile.role === "admin" || assigned.has("maintenance");
+      const canReviewOrders = ["supervisor", "accounting", "admin"].includes(profile.role);
+
+      const [technology, maintenance, smallwares, uniforms] = await Promise.all([
+        canRespondTechnology
+          ? client.from("support_tickets").select("id", { count: "exact", head: true }).eq("area", "technology").neq("status", "completed")
+          : Promise.resolve({ count: null }),
+        canRespondMaintenance
+          ? client.from("support_tickets").select("id", { count: "exact", head: true }).eq("area", "maintenance").neq("status", "completed")
+          : Promise.resolve({ count: null }),
+        canReviewOrders
+          ? client.from("portal_orders").select("id", { count: "exact", head: true }).eq("category", "smallware").eq("status", "submitted")
+          : Promise.resolve({ count: null }),
+        canReviewOrders
+          ? client.from("portal_orders").select("id", { count: "exact", head: true }).eq("category", "uniform").eq("status", "submitted")
+          : Promise.resolve({ count: null }),
+      ]);
+
+      if (!active) return;
+      setRequestBadges({
+        ...(canRespondTechnology ? { technology: technology.count ?? 0 } : {}),
+        ...(canRespondMaintenance ? { maintenance: maintenance.count ?? 0 } : {}),
+        ...(canReviewOrders ? { smallwares: smallwares.count ?? 0, uniforms: uniforms.count ?? 0 } : {}),
+      });
+    };
+
+    const refresh = () => void loadRequestBadges();
+    void loadRequestBadges();
+    window.addEventListener("dashos:requests-changed", refresh);
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 60_000);
+    const channel = client
+      .channel(`request-badges-${profile.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "support_tickets" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "portal_orders" }, refresh)
+      .subscribe();
+
+    return () => {
+      active = false;
+      window.removeEventListener("dashos:requests-changed", refresh);
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+      void client.removeChannel(channel);
+    };
+  }, [profile]);
 
   useEffect(() => {
     if (!profile || restoredProfileId.current === profile.id) return;
@@ -282,6 +355,7 @@ export default function App() {
         <nav aria-label="Portal navigation">
           {visibleNavigation.map((item) => {
             const Icon = item.icon;
+            const badge = requestBadges[item.id as RequestBadgeSection];
             return (
               <button
                 key={item.id}
@@ -290,11 +364,24 @@ export default function App() {
               >
                 <Icon size={19} />
                 <span>{item.label}</span>
+                {typeof badge === "number" && badge > 0 && (
+                  <span className={`nav-request-badge badge-${item.id}`} aria-label={`${badge} open requests`}>
+                    {badge > 99 ? "99+" : badge}
+                  </span>
+                )}
                 <ChevronRight className="nav-arrow" size={16} />
               </button>
             );
           })}
         </nav>
+
+        <div className="sidebar-external-sites" aria-label="Team Powers websites">
+          <small>Team Powers sites</small>
+          {externalSites.map((site) => {
+            const Icon = site.icon;
+            return <a key={site.href} href={site.href} target="_blank" rel="noreferrer"><Icon size={17}/><span>{site.label}</span><ExternalLink size={14}/></a>;
+          })}
+        </div>
 
         <a className="sidebar-support" href="mailto:daustin@powerspizza.com?subject=Dash-OS%20support">
           <span>Support or suggestions</span>
