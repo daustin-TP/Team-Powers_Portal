@@ -660,7 +660,7 @@ Deno.serve(async (request) => {
     const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
     const { data: profile, error: profileError } = await admin.from("profiles").select("id,role,active,store_id").eq("id", user.id).maybeSingle();
     if (profileError || !profile?.active) throw new HttpError(403, "Forecast access is not active for this account.");
-    if (!["manager", "supervisor", "admin"].includes(profile.role)) throw new HttpError(403, "Forecasts require manager, supervisor, or administrator access.");
+    if (!["manager", "supervisor", "admin"].includes(profile.role)) throw new HttpError(403, "Forecasts require manager, District Manager, or administrator access.");
 
     const body = await request.json() as ForecastRequest;
     const action = body.action ?? "generate";

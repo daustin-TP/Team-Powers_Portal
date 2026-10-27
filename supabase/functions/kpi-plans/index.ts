@@ -27,11 +27,11 @@ export async function handlePlans(req:Request) {
    const week=body.week_end;
    if(typeof week!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(week)||!Number.isFinite(Date.parse(week))||new Date(week).toISOString().slice(0,10)!==week||new Date(week).getUTCDay()!==0||week>=planningWeek()) return json({error:'Choose a completed Sunday.'},400);
    const supervisor=await db.from('profiles').select('id,full_name,store_id').eq('id',body.supervisor_id).eq('role','supervisor').eq('active',true).single();
-   if(supervisor.error||!supervisor.data) return json({error:'Select an active supervisor.'},400);
+   if(supervisor.error||!supervisor.data) return json({error:'Select an active District Manager.'},400);
    const assignments=await db.from('profile_store_assignments').select('store_id').eq('profile_id',body.supervisor_id);
    if(assignments.error) throw assignments.error;
    const ids=[...new Set([supervisor.data.store_id,...(assignments.data??[]).map(a=>a.store_id)].filter(Boolean))];
-   if(!ids.length) return json({error:'Assign stores to this supervisor first.'},400);
+   if(!ids.length) return json({error:'Assign stores to this District Manager first.'},400);
    const responses=await Promise.all([
     db.from('stores').select('id,name,store_number').in('id',ids).eq('active',true),
     db.from('kpi_weekly_results').select('store_id,week_end,metrics').in('store_id',ids).gte('week_end',addDays(week,-77)).lte('week_end',week),

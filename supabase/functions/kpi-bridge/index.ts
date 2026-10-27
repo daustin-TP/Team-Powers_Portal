@@ -110,7 +110,7 @@ Deno.serve(async (request) => {
       const store = String(body.store ?? "").trim();
       if (!store) throw new HttpError(400, "A store is required.");
       if (!isAdmin && !assignedStores.includes(store)) {
-        throw new HttpError(403, "You can compare that store, but only its assigned supervisor or an administrator can edit its goals.");
+        throw new HttpError(403, "You can compare that store, but only its assigned District Manager or an administrator can edit its goals.");
       }
       if (!body.changes || typeof body.changes !== "object" || Array.isArray(body.changes)) {
         throw new HttpError(400, "A changes object is required.");
@@ -226,7 +226,7 @@ async function loadSupervisorGroups(admin: ReturnType<typeof createClient>) {
     const stores = assignments.get(profile.id) ?? new Set<string>();
     const primaryName = profile.store_id ? storeNames.get(profile.store_id) : undefined;
     if (primaryName) stores.add(primaryName);
-    return { id: profile.id, name: profile.full_name || "Unnamed supervisor", stores: Array.from(stores).sort() };
+    return { id: profile.id, name: profile.full_name || "Unnamed District Manager", stores: Array.from(stores).sort() };
   }).filter((group) => group.stores.length > 0).sort((a, b) => a.name.localeCompare(b.name));
 }
 

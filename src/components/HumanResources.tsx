@@ -262,11 +262,11 @@ export default function HumanResources({ profile }: { profile: Profile }) {
 
   return <div className="page hr-page">
     <section className="page-header hr-header">
-      <div><p className="eyebrow">Confidential employee records</p><h1>Human Resources</h1><p>Document disciplinary action securely and preserve a permanent record for each store.</p></div>
+      <div><p className="eyebrow">Confidential employee records</p><h1>HR Action Logs</h1><p>Document disciplinary action securely and preserve a permanent record for each store.</p></div>
       <button className="button primary" onClick={openNew}><Plus size={18} />New disciplinary action</button>
     </section>
 
-    <div className="hr-security-banner"><LockKeyhole size={22} /><div><strong>Restricted and permanent</strong><span>Managers see only records they submitted. Supervisors and administrators have oversight and are the only roles permitted to edit. Records cannot be deleted.</span></div></div>
+    <div className="hr-security-banner"><LockKeyhole size={22} /><div><strong>Restricted and permanent</strong><span>Managers see only records they submitted. District Managers and administrators have oversight and are the only roles permitted to edit. Records cannot be deleted.</span></div></div>
     {message && <div className="form-message" role="status">{message}</div>}
 
     <section className="panel hr-records-panel">
@@ -282,7 +282,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     </section>}
 
     {showForm && <section className="panel hr-form-panel">
-      <div className="panel-heading"><div><p className="eyebrow">{selected ? "Supervisor edit" : "Permanent submission"}</p><h2>{selected ? `Update ${selected.employee_name}` : "Document disciplinary action"}</h2><p>{selected ? "Saving creates an immutable revision. Store and submitter ownership cannot be changed." : "Review carefully before submitting. Managers cannot edit a record after it is saved."}</p></div><AlertTriangle size={28} /></div>
+      <div className="panel-heading"><div><p className="eyebrow">{selected ? "District Manager edit" : "Permanent submission"}</p><h2>{selected ? `Update ${selected.employee_name}` : "Document disciplinary action"}</h2><p>{selected ? "Saving creates an immutable revision. Store and submitter ownership cannot be changed." : "Review carefully before submitting. Managers cannot edit a record after it is saved."}</p></div><AlertTriangle size={28} /></div>
       <div className="hr-form-grid">
         <label>Store<select value={form.store_id} disabled={Boolean(selected)} onChange={(event) => field("store_id", event.target.value)}><option value="">Select store</option>{stores.map((store) => <option key={store.id} value={store.id}>{storeName(store.id)}</option>)}</select></label>
         <label>Employee name<input value={form.employee_name} onChange={(event) => field("employee_name", event.target.value)} /></label>
@@ -297,7 +297,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         <label>Witnesses <small>Optional</small><input value={form.witnesses} onChange={(event) => field("witnesses", event.target.value)} /></label>
         <label>Acknowledgment<select value={form.acknowledgment_status} onChange={(event) => field("acknowledgment_status", event.target.value as Acknowledgment)}><option value="pending">Pending</option><option value="acknowledged">Acknowledged</option><option value="declined">Employee declined</option><option value="not_required">Not required</option></select></label>
         <label>Record status<select value={form.status} onChange={(event) => field("status", event.target.value as HrStatus)}><option value="open">Open</option><option value="monitoring">Monitoring</option><option value="completed">Completed</option></select></label>
-        <label className="wide">Confidential supervisor notes <small>Optional</small><textarea rows={3} value={form.confidential_notes} onChange={(event) => field("confidential_notes", event.target.value)} /></label>
+        <label className="wide">Confidential District Manager notes <small>Optional</small><textarea rows={3} value={form.confidential_notes} onChange={(event) => field("confidential_notes", event.target.value)} /></label>
       </div>
       <div className="hr-form-actions"><button className="button secondary" onClick={() => setShowForm(false)}>Cancel</button><button className="button primary" disabled={saving} onClick={() => void (selected ? saveEdit() : submit())}><Save size={17} />{saving ? "Saving securely…" : selected ? "Save revision" : "Submit permanent record"}</button></div>
     </section>}

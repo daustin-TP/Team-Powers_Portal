@@ -99,7 +99,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
   }
   const counts={submitted:data?.submissions.filter(s=>["submitted","approved"].includes(s.status)).length??0,approved:data?.submissions.filter(s=>s.status==="approved").length??0};
   return <div className="page payroll-page">
-    <div className="page-heading"><p className="eyebrow">Every other Monday</p><h1>Payroll</h1><p>Submit by 4:00 p.m. Central. GMs with missing submissions receive a warning at 2:00 p.m. at their account email.</p></div>
+    <div className="page-heading"><p className="eyebrow">Every other Monday</p><h1>Payroll Submission</h1><p>Submit by 4:00 p.m. Central. GMs with missing submissions receive a warning at 2:00 p.m. at their account email.</p></div>
     <section className="panel payroll-toolbar">
       <button className="button secondary" disabled={busy||loading} onClick={()=>{if(leaveDraft())setDue(addDays(due,-14));}}>Previous cycle</button>
       <div><strong>Due {due} · 4 p.m. Central</strong><p>Work dates: {addDays(due,-14)} – {addDays(due,-1)}</p></div>

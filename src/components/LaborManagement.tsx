@@ -655,7 +655,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (!eventForm.name.trim()) { setError("Enter an event name."); return; }
     if (eventForm.end_date < eventForm.start_date) { setError("The event end date cannot be before its start date."); return; }
     if (eventForm.scope === "store" && !eventForm.store_id) { setError("Choose the store affected by this event."); return; }
-    if (eventForm.scope === "company" && !canCreateCompanyEvent) { setError("Only supervisors and administrators can create company-wide events."); return; }
+    if (eventForm.scope === "company" && !canCreateCompanyEvent) { setError("Only District Managers and administrators can create company-wide events."); return; }
     const lift = (value: string) => value.trim() === "" ? null : Number(value);
     const payload = {
       scope: eventForm.scope,
@@ -826,7 +826,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   return (
     <div className="page labor-page">
       <section className="page-heading heading-with-action labor-heading">
-        <div><p className="eyebrow">Data-guided staffing</p><h1>Labor & Scheduling</h1><p>Build the minimum schedule from current sales, oven-item, and delivery trends—then apply manager judgment before publishing.</p></div>
+        <div><p className="eyebrow">Data-guided staffing</p><h1>Smart Scheduler</h1><p>Build the minimum schedule from current sales, oven-item, and delivery trends—then apply manager judgment before publishing.</p></div>
         <div className="labor-plan-controls"><label>Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)}>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><label>Week of<input type="date" value={weekStart} onChange={(event) => setWeekStart(event.target.value)} /></label></div>
       </section>
       {error && <p className="inline-message labor-error"><AlertTriangle size={18} />{error}</p>}

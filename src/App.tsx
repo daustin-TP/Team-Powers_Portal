@@ -51,18 +51,19 @@ const navigation: {
   roles?: Role[];
 }[] = [
   { id: "home", label: "Home", icon: Home },
-  { id: "payroll", label: "Payroll", icon: CreditCard, roles: ["manager", "supervisor", "admin"] },
-  { id: "kpi", label: "KPI dashboard", icon: Gauge },
-  { id: "labor", label: "Labor & scheduling", icon: CalendarClock, roles: ["manager", "supervisor", "admin"] },
-  { id: "calendar", label: "Team calendar", icon: CalendarDays },
-  { id: "visit-log", label: "Supervisor Visit Log", icon: ClipboardList, roles: ["supervisor", "admin"] },
-  { id: "hr", label: "Human Resources", icon: ShieldAlert, roles: ["manager", "supervisor", "admin"] },
-  { id: "imports", label: "Weekly data imports", icon: UploadCloud, roles: ["supervisor", "admin"] },
-  { id: "uniforms", label: "Store uniforms", icon: Package },
-  { id: "smallwares", label: "Smallwares", icon: ShoppingBag },
-  { id: "maintenance", label: "Maintenance", icon: Wrench },
-  { id: "technology", label: "Technology", icon: MonitorCog },
-  { id: "receipts", label: "Card receipts", icon: Receipt },
+  { id: "kpi", label: "KPI Dashboard", icon: Gauge },
+  { id: "labor", label: "Smart Scheduler", icon: CalendarClock, roles: ["manager", "supervisor", "admin"] },
+  { id: "calendar", label: "Team Calendar", icon: CalendarDays },
+  { id: "visit-log", label: "DM Visit Logs", icon: ClipboardList, roles: ["supervisor", "admin"] },
+  { id: "receipts", label: "DM Card Receipts", icon: Receipt },
+  { id: "hr", label: "HR Action Logs", icon: ShieldAlert, roles: ["manager", "supervisor", "admin"] },
+  { id: "payroll", label: "Payroll Submission", icon: CreditCard, roles: ["manager", "supervisor", "admin"] },
+  { id: "technology", label: "Technology Requests", icon: MonitorCog },
+  { id: "maintenance", label: "Maintenance Requests", icon: Wrench },
+  { id: "smallwares", label: "Smallwares Requests", icon: ShoppingBag },
+  { id: "uniforms", label: "Store Uniform Requests", icon: Package },
+  { id: "imports", label: "Weekly Data Imports", icon: UploadCloud, roles: ["supervisor", "admin"] },
+  { id: "team", label: "Team Access", icon: Users, roles: ["admin"] },
   {
     id: "approvals",
     label: "Approvals",
@@ -75,8 +76,7 @@ const navigation: {
     icon: CreditCard,
     roles: ["accounting", "admin"],
   },
-  { id: "team", label: "Team access", icon: Users, roles: ["admin"] },
-  { id: "catalog", label: "Catalog management", icon: Settings, roles: ["admin"] },
+  { id: "catalog", label: "Catalog Management", icon: Settings, roles: ["admin"] },
 ];
 
 async function loadProfile(userId: string, email: string): Promise<Profile | null> {
@@ -305,7 +305,7 @@ export default function App() {
           <div className="avatar">{profile.fullName.slice(0, 1)}</div>
           <div>
             <strong>{profile.fullName}</strong>
-            <span>{profile.role} · {profile.location}</span>
+            <span>{profile.role === "supervisor" ? "District Manager" : profile.role === "admin" ? "Administrator" : profile.role.charAt(0).toUpperCase() + profile.role.slice(1)} · {profile.location}</span>
           </div>
           <button className="icon-button" aria-label="Sign out" onClick={signOut}>
             <LogOut size={18} />

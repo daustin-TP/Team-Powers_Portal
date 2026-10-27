@@ -331,7 +331,7 @@ Deno.serve(async (request) => {
     if (!user) return new Response(JSON.stringify({ error: "Invalid session." }), { status: 401, headers });
     const admin = createClient(url, service);
     const { data: profile } = await admin.from("profiles").select("role,active").eq("id", user.id).maybeSingle();
-    if (!profile?.active || !["supervisor", "admin"].includes(profile.role)) return new Response(JSON.stringify({ error: "Weekly imports require supervisor or administrator access." }), { status: 403, headers });
+    if (!profile?.active || !["supervisor", "admin"].includes(profile.role)) return new Response(JSON.stringify({ error: "Weekly imports require District Manager or administrator access." }), { status: 403, headers });
     const { batch_id } = await request.json();
     batchId = batch_id;
     const { data: batch, error: batchError } = await admin.from("report_import_batches").select("id,store_id,report_family,period_end,storage_path").eq("id", batch_id).single();

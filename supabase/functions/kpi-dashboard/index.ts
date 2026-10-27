@@ -47,7 +47,7 @@ export async function handleDashboard(request: Request) {
       const ids = new Set((assignmentsResult.data ?? []).filter((a) => a.profile_id === supervisor.id).map((a) => a.store_id));
       if (supervisor.store_id) ids.add(supervisor.store_id);
       const groupStores = stores.filter((store) => ids.has(store.id));
-      return { id: supervisor.id, name: supervisor.full_name || 'Unnamed supervisor', stores: groupStores.map((store) => label(store.id)), store_ids: groupStores.map((store) => store.id), summary: summarizeGroup(results.filter((row) => ids.has(row.store_id))) };
+      return { id: supervisor.id, name: supervisor.full_name || 'Unnamed District Manager', stores: groupStores.map((store) => label(store.id)), store_ids: groupStores.map((store) => store.id), summary: summarizeGroup(results.filter((row) => ids.has(row.store_id))) };
     });
     const ids = [...visibleIds];
     const [goalsResult, historyResult, forecastResult] = ids.length ? await Promise.all([

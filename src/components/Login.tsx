@@ -15,7 +15,7 @@ export default function Login() {
       options: { redirectTo: window.location.origin },
     });
     if (error) {
-      setMessage("Google sign-in could not start. Please try again or contact your supervisor.");
+      setMessage("Google sign-in could not start. Please try again or contact your District Manager.");
       setSubmitting(false);
     }
   };

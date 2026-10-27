@@ -30,7 +30,7 @@ export function validateEntries(entries: unknown, complete = true, due = "", rol
     const entry = raw as Record<string, unknown>;
     const section = sections.find(s => s.key === entry.section);
     if (!section || !(section.types as readonly string[]).includes(String(entry.type ?? ""))) throw Error("Choose a valid payroll section and update type.");
-    if (section.key === "recognition" && !["supervisor","admin"].includes(role)) throw Error("Leadership bonuses are available only to supervisors and administrators.");
+    if (section.key === "recognition" && !["supervisor","admin"].includes(role)) throw Error("Leadership bonuses are available only to District Managers and administrators.");
     const clean = Object.fromEntries(textKeys.map(key => [key, String(entry[key] ?? "").trim()])) as unknown as Entry;
     clean.acknowledged = entry.acknowledged === true;
     if (Object.values(clean).some(v => typeof v === "string" && v.length > 2000)) throw Error(`Entry ${index + 1} is too long.`);

@@ -53,7 +53,7 @@ export default function Receipts({ profile }: { profile: Profile }) {
     <div className="page narrow-page">
       <div className="page-heading">
         <p className="eyebrow">Corporate card</p>
-        <h1>Submit a receipt.</h1>
+        <h1>DM Card Receipts</h1>
         <p>Upload a clear image and tell accounting what the purchase was for.</p>
       </div>
       {submitted ? (

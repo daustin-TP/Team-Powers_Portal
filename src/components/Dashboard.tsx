@@ -30,22 +30,22 @@ const actionCatalog: {
   section: PortalSection;
   tone: "blue" | "red" | "silver";
 }[] = [
-  { title: "Build a schedule", detail: "Create the minimum data-guided staffing plan and assign the team.", icon: CalendarClock, section: "labor", tone: "blue" },
-  { title: "Review weekly KPIs", detail: "Compare results, commitments, trajectories, and store goals.", icon: Gauge, section: "kpi", tone: "red" },
-  { title: "Team calendar", detail: "Review company events, meetings, training, and supervisor visits.", icon: CalendarDays, section: "calendar", tone: "blue" },
-  { title: "Payroll", detail: "Complete payroll changes, reimbursements, and time-off requests.", icon: CreditCard, section: "payroll", tone: "silver" },
-  { title: "Supervisor visit log", detail: "Start or review a structured store-visit record.", icon: ClipboardList, section: "visit-log", tone: "red" },
-  { title: "Human Resources", detail: "Create and securely review disciplinary documentation.", icon: ShieldAlert, section: "hr", tone: "red" },
-  { title: "Weekly data imports", detail: "Upload Wizardline reports for KPI and labor intelligence.", icon: FileUp, section: "imports", tone: "blue" },
-  { title: "Order store uniforms", detail: "Restock approved uniforms for the store’s on-hand inventory.", icon: Package, section: "uniforms", tone: "silver" },
-  { title: "Order smallwares", detail: "Request approved tools, supplies, and store equipment.", icon: ShoppingBag, section: "smallwares", tone: "silver" },
-  { title: "Maintenance request", detail: "Report a store repair and track its progress.", icon: Wrench, section: "maintenance", tone: "red" },
-  { title: "Technology request", detail: "Report a system or equipment issue.", icon: MonitorCog, section: "technology", tone: "blue" },
-  { title: "Submit a receipt", detail: "Upload and categorize a corporate-card purchase.", icon: Receipt, section: "receipts", tone: "blue" },
+  { title: "Smart Scheduler", detail: "Create the minimum data-guided staffing plan and assign the team.", icon: CalendarClock, section: "labor", tone: "blue" },
+  { title: "KPI Dashboard", detail: "Compare results, commitments, trajectories, and store goals.", icon: Gauge, section: "kpi", tone: "red" },
+  { title: "Team Calendar", detail: "Review company events, meetings, training, and District Manager visits.", icon: CalendarDays, section: "calendar", tone: "blue" },
+  { title: "Payroll Submission", detail: "Complete payroll changes, reimbursements, and time-off requests.", icon: CreditCard, section: "payroll", tone: "silver" },
+  { title: "DM Visit Logs", detail: "Start or review a structured store-visit record.", icon: ClipboardList, section: "visit-log", tone: "red" },
+  { title: "HR Action Logs", detail: "Create and securely review disciplinary documentation.", icon: ShieldAlert, section: "hr", tone: "red" },
+  { title: "Weekly Data Imports", detail: "Upload Wizardline reports for KPI and labor intelligence.", icon: FileUp, section: "imports", tone: "blue" },
+  { title: "Store Uniform Requests", detail: "Restock approved uniforms for the store’s on-hand inventory.", icon: Package, section: "uniforms", tone: "silver" },
+  { title: "Smallwares Requests", detail: "Request approved tools, supplies, and store equipment.", icon: ShoppingBag, section: "smallwares", tone: "silver" },
+  { title: "Maintenance Requests", detail: "Report a store repair and track its progress.", icon: Wrench, section: "maintenance", tone: "red" },
+  { title: "Technology Requests", detail: "Report a system or equipment issue.", icon: MonitorCog, section: "technology", tone: "blue" },
+  { title: "DM Card Receipts", detail: "Upload and categorize a corporate-card purchase.", icon: Receipt, section: "receipts", tone: "blue" },
   { title: "Review approvals", detail: "See requests waiting for your attention.", icon: ClipboardCheck, section: "approvals", tone: "red" },
   { title: "Reconciliation", detail: "Review and reconcile company purchasing records.", icon: CreditCard, section: "reconciliation", tone: "silver" },
-  { title: "Team access", detail: "Manage portal users, roles, names, and store assignments.", icon: Users, section: "team", tone: "blue" },
-  { title: "Catalog management", detail: "Maintain approved uniform and smallware catalogs.", icon: Settings, section: "catalog", tone: "silver" },
+  { title: "Team Access", detail: "Manage portal users, roles, names, and store assignments.", icon: Users, section: "team", tone: "blue" },
+  { title: "Catalog Management", detail: "Maintain approved uniform and smallware catalogs.", icon: Settings, section: "catalog", tone: "silver" },
 ];
 
 function activityStatus(status: string): ActivityItem["status"] {
