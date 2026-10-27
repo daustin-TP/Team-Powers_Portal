@@ -87,7 +87,7 @@ const externalSites = [
   { label: "Individual Uniforms", href: "https://uniforms.powerspizza.com", icon: Shirt },
 ];
 
-type RequestBadgeSection = "technology" | "maintenance" | "smallwares" | "uniforms";
+type RequestBadgeSection = "technology" | "maintenance" | "approvals";
 type RequestBadges = Partial<Record<RequestBadgeSection, number>>;
 
 async function loadProfile(userId: string, email: string): Promise<Profile | null> {
@@ -217,7 +217,7 @@ export default function App() {
       const canRespondMaintenance = profile.role === "admin" || assigned.has("maintenance");
       const canReviewOrders = ["supervisor", "accounting", "admin"].includes(profile.role);
 
-      const [technology, maintenance, smallwares, uniforms] = await Promise.all([
+      const [technology, maintenance, approvals] = await Promise.all([
         canRespondTechnology
           ? client.from("support_tickets").select("id", { count: "exact", head: true }).eq("area", "technology").neq("status", "completed")
           : Promise.resolve({ count: null }),
@@ -225,10 +225,7 @@ export default function App() {
           ? client.from("support_tickets").select("id", { count: "exact", head: true }).eq("area", "maintenance").neq("status", "completed")
           : Promise.resolve({ count: null }),
         canReviewOrders
-          ? client.from("portal_orders").select("id", { count: "exact", head: true }).eq("category", "smallware").eq("status", "submitted")
-          : Promise.resolve({ count: null }),
-        canReviewOrders
-          ? client.from("portal_orders").select("id", { count: "exact", head: true }).eq("category", "uniform").eq("status", "submitted")
+          ? client.from("portal_orders").select("id", { count: "exact", head: true }).in("category", ["smallware", "uniform"]).eq("status", "submitted")
           : Promise.resolve({ count: null }),
       ]);
 
@@ -236,7 +233,7 @@ export default function App() {
       setRequestBadges({
         ...(canRespondTechnology ? { technology: technology.count ?? 0 } : {}),
         ...(canRespondMaintenance ? { maintenance: maintenance.count ?? 0 } : {}),
-        ...(canReviewOrders ? { smallwares: smallwares.count ?? 0, uniforms: uniforms.count ?? 0 } : {}),
+        ...(canReviewOrders ? { approvals: approvals.count ?? 0 } : {}),
       });
     };
 
