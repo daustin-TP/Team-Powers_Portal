@@ -795,17 +795,10 @@ export default function KPITracker({ profile }: { profile: Profile }) {
       {viewLevel === "store" && storeTabs.length > 0 && (
         <div className="kpi-store-tabs" role="tablist" aria-label="Store selection">{storeTabs.map((item) => <button role="tab" aria-selected={selectedStore === item.store} className={selectedStore === item.store ? "active" : ""} key={item.store} onClick={() => setSelectedStore(item.store)}>{storeLabel(item.store)}<span>{item.status}</span></button>)}</div>
       )}
-      {!currentLoading && companyRankings.length > 0 && <section className="panel kpi-company-ranks">
-        <div className="table-toolbar"><div><p className="eyebrow">Company comparison · {companyStoreCount} active stores</p><h2>Six KPI rankings</h2><p>Sales has two independent ranks: weekly dollars and PCYA growth. #1 is best. Ties share a rank; N/A is excluded from that metric.</p></div></div>
-        <div className="responsive-table kpi-sticky-table kpi-store-sticky"><table><thead><tr><th>Store</th>{rankingMetrics.map((metric) => <th key={metric.key}>{metric.label}<small className="kpi-score-detail">{metric.lower ? "Lower is better" : "Higher is better"}</small></th>)}</tr></thead><tbody>
-          {companyRankings.filter((row) => viewLevel === "company" || (viewLevel === "store" ? row.store === selectedStore : selectedGroup?.stores.includes(row.store))).map((row) => <tr key={row.store_id}><th scope="row">{row.name}<small className="kpi-score-detail">{row.store}</small></th>{rankingMetrics.map((metric) => { const entry = row.metrics[metric.key]; return <td key={metric.key}><strong>{entry.rank === null ? "N/A" : (entry.tied ? "T" : "") + entry.rank + " of " + entry.eligible}</strong><small className="kpi-score-detail">{entry.value === null ? metric.key === "pcya" ? "No comparable prior-year sales" : "No result" : metric.format === "percent" ? (entry.value * 100).toFixed(2) + "%" : metric.format === "currency" ? formatCurrency(entry.value, 2) : entry.value.toFixed(2) + " min"}</small></td>; })}</tr>)}
-        </tbody></table></div>
-        <p className="security-note">Ranks use the selected week's actual results across the company, regardless of this view's filter. PCYA compares only stores with positive prior-year sales. Food variance uses the reported signed variance.</p>
-      </section>}
+      {scopedNextForecasts.length > 0 && <section className="kpi-forward-forecast"><div><span>Following-week outlook</span><strong>{formatCurrency(nextProjectedSalesTotal, 2)}</strong><small>{scopedNextForecasts.length} store{scopedNextForecasts.length === 1 ? "" : "s"} · {nextAverageConfidence.toFixed(0)}% average confidence</small></div><p>Use this early view to start staffing and sales planning before the week becomes current.</p></section>}
       {viewLevel === "supervisor" && !currentLoading && <section className="panel kpi-group-performance"><h2>{selectedGroup?.name || "Supervisor group"} performance</h2>
         {!selectedGroup?.stores.length ? <p>No stores assigned. An administrator can set this up in Team access → Supervisor store groups.</p> : <><p>{selectedGroup.stores.length} assigned stores · Results week ending {weekEnd}</p><div className="kpi-group-metrics">{rankingMetrics.map((metric) => { const value = selectedGroup.summary?.values[metric.key] ?? null; return <article key={metric.key}><span>{metric.label}</span><strong>{value === null ? "N/A" : metric.format === "percent" ? (value * 100).toFixed(2) + "%" : metric.format === "currency" ? formatCurrency(value, 2) : value.toFixed(2) + " min"}</strong><small>{metric.key === "sales" ? "Group total" : metric.key === "pcya" ? "Comparable-store sales growth" : "Store average"} · {selectedGroup.summary?.counts[metric.key] ?? 0} reporting</small></article>; })}</div></>}
       </section>}
-      {scopedNextForecasts.length > 0 && <section className="kpi-forward-forecast"><div><span>Following-week outlook</span><strong>{formatCurrency(nextProjectedSalesTotal, 2)}</strong><small>{scopedNextForecasts.length} store{scopedNextForecasts.length === 1 ? "" : "s"} · {nextAverageConfidence.toFixed(0)}% average confidence</small></div><p>Use this early view to start staffing and sales planning before the week becomes current.</p></section>}
 
       {currentLoading ? (
         <div className="empty-card"><RefreshCw className="spin" /><h2>{dashboardMode === "details" ? "Loading weekly KPI results…" : "Loading KPI commitments…"}</h2></div>
@@ -879,6 +872,13 @@ export default function KPITracker({ profile }: { profile: Profile }) {
           )}
         </>
       )}
+      {!currentLoading && companyRankings.length > 0 && <section className="panel kpi-company-ranks">
+        <div className="table-toolbar"><div><p className="eyebrow">Company comparison · {companyStoreCount} active stores</p><h2>Six KPI rankings</h2><p>Sales has two independent ranks: weekly dollars and PCYA growth. #1 is best. Ties share a rank; N/A is excluded from that metric.</p></div></div>
+        <div className="responsive-table kpi-sticky-table kpi-store-sticky"><table><thead><tr><th>Store</th>{rankingMetrics.map((metric) => <th key={metric.key}>{metric.label}<small className="kpi-score-detail">{metric.lower ? "Lower is better" : "Higher is better"}</small></th>)}</tr></thead><tbody>
+          {companyRankings.filter((row) => viewLevel === "company" || (viewLevel === "store" ? row.store === selectedStore : selectedGroup?.stores.includes(row.store))).map((row) => <tr key={row.store_id}><th scope="row">{row.name}<small className="kpi-score-detail">{row.store}</small></th>{rankingMetrics.map((metric) => { const entry = row.metrics[metric.key]; return <td key={metric.key}><strong>{entry.rank === null ? "N/A" : (entry.tied ? "T" : "") + entry.rank + " of " + entry.eligible}</strong><small className="kpi-score-detail">{entry.value === null ? metric.key === "pcya" ? "No comparable prior-year sales" : "No result" : metric.format === "percent" ? (entry.value * 100).toFixed(2) + "%" : metric.format === "currency" ? formatCurrency(entry.value, 2) : entry.value.toFixed(2) + " min"}</small></td>; })}</tr>)}
+        </tbody></table></div>
+        <p className="security-note">Ranks use the selected week's actual results across the company, regardless of this view's filter. PCYA compares only stores with positive prior-year sales. Food variance uses the reported signed variance.</p>
+      </section>}
       </>}
     </div>
   );
