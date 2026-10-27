@@ -10,9 +10,10 @@ const resend=context.exports;
 const config={apiKey:'re_secret',fromEmail:'noreply@powerspizza.com',fromName:'DASH-OS'};
 
 test('Resend configuration requires an API key and verified sender',()=>{
-  const values={RESEND_API_KEY:'re_secret',PAYROLL_FROM_EMAIL:'noreply@powerspizza.com',RESEND_FROM_NAME:'DASH-OS'};
-  assert.equal(resend.resendConfig(key=>values[key]).fromEmail,'noreply@powerspizza.com');
-  assert.equal(resend.resendConfig(key=>key==='RESEND_API_KEY'?'re_secret':undefined),null);
+  const values={RESEND_API_KEY:'re_secret',DASH_FROM_EMAIL:'custom@noreply.powerspizza.com',RESEND_FROM_NAME:'DASH-OS'};
+  assert.equal(resend.resendConfig(key=>values[key]).fromEmail,'custom@noreply.powerspizza.com');
+  assert.equal(resend.resendConfig(key=>key==='RESEND_API_KEY'?'re_secret':undefined).fromEmail,'notifications@noreply.powerspizza.com');
+  assert.equal(resend.resendConfig(()=>undefined),null);
 });
 
 test('Resend sends a stable idempotent request without exposing its key in the body',async()=>{

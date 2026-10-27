@@ -16,10 +16,10 @@ export class ResendDeliveryError extends Error {
 export function resendConfig(get = (key: string) => Deno.env.get(key)): ResendConfig | null {
   const config = {
     apiKey: get("RESEND_API_KEY")?.trim() ?? "",
-    fromEmail: get("PAYROLL_FROM_EMAIL")?.trim() || get("RESEND_FROM_EMAIL")?.trim() || "",
+    fromEmail: get("DASH_FROM_EMAIL")?.trim() || "notifications@noreply.powerspizza.com",
     fromName: get("RESEND_FROM_NAME")?.trim() || get("GOOGLE_GMAIL_FROM_NAME")?.trim() || "DASH-OS",
   };
-  return config.apiKey && config.fromEmail ? config : null;
+  return config.apiKey ? config : null;
 }
 
 function safeIdempotencyKey(value: string) {
