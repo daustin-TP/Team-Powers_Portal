@@ -55,7 +55,7 @@ export async function handleSupportNotification(req: Request) {
     const responderRows = await db.from("profile_capabilities").select("profile_id").eq("capability", area);
     if (responderRows.error) throw new Error("Responder list could not be loaded.");
     const responderIds = (responderRows.data ?? []).map((row: { profile_id: string }) => row.profile_id);
-    if (!responderIds.length) return json({ ok: true, sent: 0, warning: `No ${area} responders are assigned.` });
+    if (!responderIds.length) return json({ ok: false, sent: 0, failed: 0, error: `No ${area} responders are assigned.` });
 
     const profilesResult = await db.from("profiles").select("id,email,full_name").in("id", responderIds).eq("active", true);
     if (profilesResult.error) throw new Error("Responder email addresses could not be loaded.");
@@ -76,7 +76,7 @@ export async function handleSupportNotification(req: Request) {
       portalUrl: Deno.env.get("DASH_OS_URL")?.trim() || "https://team-powers-portal.daustin-15d.workers.dev/",
     });
 
-    let sent = 0;
+    let sent = 0, failed = 0;
     for (const recipient of recipients) {
       const logResult = await db.from("support_ticket_notifications").insert({
         ticket_id: ticket.id,
@@ -98,9 +98,15 @@ export async function handleSupportNotification(req: Request) {
         sent += 1;
       } catch (error) {
         await db.from("support_ticket_notifications").update({ status: "failed", last_error: error instanceof Error ? error.message : "Gmail delivery failed" }).eq("id", logResult.data.id);
+        failed += 1;
       }
     }
-    return json({ ok: true, sent });
+    return json({
+      ok: failed === 0 && sent === recipients.length,
+      sent,
+      failed,
+      ...(failed ? { error: "The request was saved, but responder email delivery failed." } : {}),
+    });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "Notification failed" }, 400);
   }

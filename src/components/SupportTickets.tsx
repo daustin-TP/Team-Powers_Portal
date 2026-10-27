@@ -40,7 +40,7 @@ export default function SupportTickets({ profile, area }: { profile: Profile; ar
   const upload = async (uploadFile: File) => { const path = `${profile.id}/${crypto.randomUUID()}-${uploadFile.name.replace(/[^a-z0-9.]/gi, "-")}`; const { error } = await supabase!.storage.from("ticket-images").upload(path, uploadFile); if (error) throw error; return path; };
   const notifyResponders = async (ticketId: string, event: "submitted" | "completed") => {
     const result = await supabase!.functions.invoke("support-notifications", { body: { ticket_id: ticketId, event } });
-    return result.error ? false : true;
+    return !result.error && result.data?.ok === true;
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
