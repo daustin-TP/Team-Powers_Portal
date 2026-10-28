@@ -52,7 +52,7 @@ export async function handleDashboard(request: Request) {
     const ids = [...visibleIds];
     const [goalsResult, historyResult, forecastResult] = ids.length ? await Promise.all([
       admin.from('kpi_goal_commitments').select('store_id,week_end,goals,focus_area,action_plan,owner').in('store_id', ids).in('week_end', [weekEnd, addDays(weekEnd, 7)]),
-      admin.from('kpi_weekly_results').select('store_id,week_end,metrics').in('store_id', ids).gte('week_end', addDays(weekEnd, -77)).lte('week_end', weekEnd).order('week_end'),
+      admin.from('kpi_weekly_results').select('store_id,week_end,metrics').in('store_id', ids).gte('week_end', addDays(weekEnd, -371)).lte('week_end', weekEnd).order('week_end'),
       admin.from('demand_forecast_runs').select('store_id,week_start,confidence_score,confidence_level,weekly_projection').in('store_id', ids).in('week_start', [addDays(weekEnd, 1), addDays(weekEnd, 8)]).eq('is_current', true),
     ]) : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
     for (const result of [goalsResult, historyResult, forecastResult]) if (result.error) throw result.error;
