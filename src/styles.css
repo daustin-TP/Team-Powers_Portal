@@ -56,7 +56,7 @@ textarea { resize: vertical; }
 .icon-button:hover { background: rgba(0,0,0,.06); }
 .brand-logo { width: 218px; height: 72px; object-fit: contain; flex: 0 0 auto; border-radius: 5px; background: var(--dash-black); }
 .brand-logo.compact { width: 280px; height: 94px; margin: auto; box-shadow: 0 18px 45px rgba(0,0,0,.18); }
-.login-logo { width: 230px; height: 76px; }
+.login-logo { width: clamp(280px, 26vw, 390px); height: clamp(92px, 9vw, 128px); }
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 94px minmax(0,1fr); transition:grid-template-columns .22s ease; }
 .app-shell.nav-expanded { grid-template-columns: 274px minmax(0,1fr); }
 .sidebar { position: sticky; top: 0; height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; background: linear-gradient(165deg,#030507,#0b111a 72%,#07111d); color: white; padding: .75rem .35rem; display: flex; flex-direction: column; z-index: 20; border-right:1px solid rgba(7,135,245,.28); transition:padding .22s ease; }
@@ -207,9 +207,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .person-cell > span:last-child { display: grid; gap: .15rem; }
 .role-pill { text-transform: capitalize; background: #e5ece8; color: var(--green-800); }
 .login-page { min-height: 100vh; display: grid; grid-template-columns: minmax(420px, 56%) 1fr; }
-.login-panel { padding: clamp(1.5rem, 5vw, 5rem); display: flex; flex-direction: column; background: var(--paper); }
-.login-brand { display: flex; align-items: center; gap: .8rem; }
-.login-brand > div:last-child { display: grid; }.login-brand span { color: var(--muted); font-size: .78rem; }
+.login-panel { padding: clamp(1.5rem, 4.5vw, 4.5rem); display: flex; flex-direction: column; background: radial-gradient(circle at 10% 10%,rgba(8,135,245,.06),transparent 34%),var(--paper); }
+.login-brand { display: grid; justify-items:start; gap:.7rem; width:max-content; max-width:100%; }
+.login-brand p { margin:0; color:#36506a; font-size:.78rem; font-weight:850; letter-spacing:.08em; text-transform:uppercase; }
 .login-content { width: min(510px, 100%); margin: auto; padding: 3rem 0; }
 .login-content h1 { font-size: clamp(2.7rem, 5vw, 4.4rem); }
 .login-content > p:not(.eyebrow) { font-size: 1.02rem; }
@@ -221,10 +221,13 @@ tbody tr:last-child td { border-bottom: 0; }
 .login-divider { display: flex; align-items: center; gap: .8rem; margin: 1.35rem 0 -.3rem; color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .07em; }
 .login-divider::before, .login-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
 .login-security { display: flex; gap: .55rem; align-items: center; margin-top: 1.2rem; color: var(--muted); font-size: .78rem; }
-.login-aside { background: linear-gradient(155deg,var(--dash-black),#111b28 60%,#06152a); color: white; display: flex; flex-direction: column; justify-content: flex-end; padding: clamp(2rem, 5vw, 5rem); position: relative; overflow: hidden; }
+.login-aside { background: linear-gradient(155deg,var(--dash-black),#111b28 60%,#06152a); color: white; display: flex; flex-direction: column; justify-content:center; align-items:center; gap:clamp(1.5rem,4vw,3.2rem); padding: clamp(2rem, 5vw, 5rem); position: relative; overflow: hidden; text-align:center; }
 .login-aside::before { content:""; position: absolute; width: 500px; height: 500px; border: 1px solid rgba(255,255,255,.08); border-radius: 50%; top: -190px; right: -290px; box-shadow: 0 0 0 60px rgba(255,255,255,.025), 0 0 0 120px rgba(255,255,255,.018); }
-.login-aside blockquote { font-family: "Newsreader", Georgia, serif; font-size: clamp(2rem, 4vw, 3.7rem); line-height: 1.05; margin: 0; position: relative; }
-.login-aside p { color: #afc6bc; position: relative; }
+.login-aside::after { content:""; position:absolute; inset:auto 0 0; height:6px; background:linear-gradient(90deg,var(--dash-red) 0 48%,var(--dash-blue) 52% 100%); }
+.login-team-powers-logo { position:relative; z-index:1; width:min(76%,360px); max-height:360px; object-fit:contain; filter:drop-shadow(0 18px 28px rgba(0,0,0,.32)); }
+.login-aside-copy { position:relative; z-index:1; display:grid; gap:.55rem; }
+.login-aside-copy p { margin:0; color:#8fcfff; font-size:.72rem; font-weight:900; letter-spacing:.16em; text-transform:uppercase; }
+.login-aside-copy h2 { margin:0; color:#fff; font-size:clamp(1.9rem,3.2vw,3.25rem); line-height:1.04; letter-spacing:-.035em; }
 .quote-mark { font-family: Georgia, serif; color: var(--gold); font-size: 6rem; height: 4rem; position: relative; }
 .success-icon { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; background: #dcece4; color: #2f7055; margin-bottom: 1.4rem; }
 .text-button { border: 0; background: transparent; color: var(--green-800); padding: 0; font-weight: 700; }

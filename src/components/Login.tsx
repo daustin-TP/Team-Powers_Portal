@@ -27,12 +27,9 @@ export default function Login() {
           <img
             className="brand-logo login-logo"
             src="/dash-sos-logo.png"
-            alt="Dash-OS"
+            alt="DASHos"
           />
-          <div>
-            <strong>Dash-OS</strong>
-            <span>Team Powers Smart Operations System</span>
-          </div>
+          <p>DASHos: Team Powers Operations System</p>
         </div>
 
         <div className="login-content">
@@ -59,11 +56,11 @@ export default function Login() {
       </section>
 
       <aside className="login-aside">
-        <div className="quote-mark">“</div>
-        <blockquote>
-          Clear requests, quick approvals, and fewer loose ends.
-        </blockquote>
-        <p>Team Powers Smart Operations System</p>
+        <img className="login-team-powers-logo" src="/team-powers-crest.png" alt="Team Powers" />
+        <div className="login-aside-copy">
+          <p>Built for Team Powers</p>
+          <h2>One team.<br/>One operating system.</h2>
+        </div>
       </aside>
     </main>
   );
