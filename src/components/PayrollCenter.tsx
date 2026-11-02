@@ -11,6 +11,7 @@ const blank=(section:string,_due=""):Entry=>({section,type:sections.find(s=>s.ke
 export default function PayrollCenter({profile}:{profile:Profile}){
   const [due,setDue]=useState(currentCycle),[store,setStore]=useState(""),[data,setData]=useState<Data|null>(null);
   const [entries,setEntries]=useState<Entry[]>([]),[confirmed,setConfirmed]=useState<string[]>([]),[dirty,setDirty]=useState(false);
+  const [noChanges,setNoChanges]=useState(false);
   const [tab,setTab]=useState("submission"),[busy,setBusy]=useState(false),[loading,setLoading]=useState(false),[message,setMessage]=useState(""),[review,setReview]=useState("");
   const [leave,setLeave]=useState({kind:"PTO",start_date:"",end_date:"",hours:"",note:""});
   const seq=useRef(0);
@@ -41,7 +42,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
     finally{if(seq.current===request)setLoading(false);}
   }
   useEffect(()=>{void load();return()=>{seq.current++;};},[due,profile.id]);
-  useEffect(()=>{setEntries((selected?.entries??[]).map(entry=>({...blank(entry.section,due),...entry,acknowledged:Boolean(entry.acknowledged)})));setConfirmed(selected?.confirmed_sections??[]);setReview(selected?.review_note??"");setDirty(false);},[store,data,due]);
+  useEffect(()=>{const savedEntries=selected?.entries??[];const savedConfirmed=selected?.confirmed_sections??[];setEntries(savedEntries.map(entry=>({...blank(entry.section,due),...entry,acknowledged:Boolean(entry.acknowledged)})));setConfirmed(savedConfirmed);setNoChanges(Boolean(selected&&savedEntries.length===0&&requiredSectionKeys.every(key=>savedConfirmed.includes(key))));setReview(selected?.review_note??"");setDirty(false);},[store,data,due]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue="";}};window.addEventListener("beforeunload",warn);return()=>window.removeEventListener("beforeunload",warn);},[dirty]);
   const leaveDraft=()=>!dirty || window.confirm("Discard your unsaved payroll edits?");
   async function mutate(payload:Record<string,unknown>,success:string){
@@ -97,6 +98,21 @@ export default function PayrollCenter({profile}:{profile:Profile}){
       {entry.type==="Pay Rate Change"&&<button type="button" className="button secondary" onClick={()=>{setEntries(es=>[...es,{...entry,position:"",amount:"",details:"",attachment_path:"",attachment_name:"",attachment_type:""}]);setDirty(true);}}>Add another position for this team member</button>}
     </>;
   }
+  function toggleNoChanges(checked:boolean){
+    if(checked&&entries.length){setMessage("Remove the payroll entries before reporting no changes for this period.");return;}
+    setNoChanges(checked);
+    if(checked)setConfirmed(requiredSectionKeys);
+    setDirty(true);
+    setMessage("");
+  }
+  function submitPayroll(){
+    if(noChanges){
+      const storeName=data?.stores.find(item=>item.id===store)?.name??"this store";
+      const confirmedNoChanges=window.confirm(`Please confirm one more time:\n\n${storeName} has NO payroll changes for ${addDays(due,-14)} through ${addDays(due,-1)}.\n\nSubmit this no-change payroll?`);
+      if(!confirmedNoChanges)return;
+    }
+    void mutate({action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"submitted"},noChanges?"No payroll changes submitted for review.":"Payroll submitted for review.");
+  }
   const counts={submitted:data?.submissions.filter(s=>["submitted","approved"].includes(s.status)).length??0,approved:data?.submissions.filter(s=>s.status==="approved").length??0};
   return <div className="page payroll-page">
     <div className="page-heading"><p className="eyebrow">Every other Monday</p><h1>Payroll Submission</h1><p>Submit by 4:00 p.m. Central. GMs with missing submissions receive a warning at 2:00 p.m. at their account email.</p></div>
@@ -123,10 +139,10 @@ export default function PayrollCenter({profile}:{profile:Profile}){
               {entryFields(entry,index)}
               <button type="button" className="button secondary" onClick={()=>{setEntries(es=>es.filter((_,i)=>i!==index));setDirty(true);}}>Remove entry</button>
             </div>)}
-            <button className="button secondary" onClick={()=>{setEntries(es=>[...es,blank(section.key,due)]);setDirty(true);}}>Add entry</button>
+            <button className="button secondary" onClick={()=>{setNoChanges(false);setEntries(es=>[...es,blank(section.key,due)]);setDirty(true);}}>Add entry</button>
             <label className="check-row"><input type="checkbox" checked={confirmed.includes(section.key)} onChange={e=>{setConfirmed(c=>e.target.checked?[...c,section.key]:c.filter(k=>k!==section.key));setDirty(true);}}/><span>I reviewed this section; all changes are entered, or there are no changes.</span></label>
           </fieldset>)}
-          {!locked&&<div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"draft"},"Draft saved.")}>Save draft</button><button className="button primary" disabled={busy||requiredSectionKeys.some(key=>!confirmed.includes(key))} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"submitted"},"Payroll submitted for review.")}>Submit payroll</button></div>}
+          {!locked&&<div className="payroll-submit-row"><label className={`check-row payroll-no-changes ${noChanges?"selected":""}`}><input type="checkbox" checked={noChanges} disabled={busy||entries.length>0} onChange={e=>toggleNoChanges(e.target.checked)}/><span><strong>No Payroll Changes this Period.</strong><small>{entries.length?"Remove all entries to use this option.":"Checking this confirms every payroll section has been reviewed."}</small></span></label><div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"draft"},"Draft saved.")}>Save draft</button><button className="button primary" disabled={busy||requiredSectionKeys.some(key=>!confirmed.includes(key))||(entries.length===0&&!noChanges)} onClick={submitPayroll}>Submit payroll</button></div></div>}
           {admin&&data.cycle.status==="open"&&["submitted","approved"].includes(selected?.status??"")&&<div className="payroll-review"><label>Review / correction note<textarea value={review} onChange={e=>setReview(e.target.value)}/></label><div className="button-row"><button className="button secondary" disabled={busy||!review.trim()} onClick={()=>void mutate({action:"review",store_id:store,status:"returned",review_note:review},"Returned to the GM for correction.")}>Return for correction</button><button className="button primary" disabled={busy||selected?.status==="approved"} onClick={()=>void mutate({action:"review",store_id:store,status:"approved",review_note:review},"Store approved. The cycle email waits for final approval.")}>Approve store</button></div></div>}
         </>}
       </section>}
