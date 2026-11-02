@@ -23,9 +23,9 @@ begin
       begin perform public.payroll_action(m,'review',jsonb_build_object('due_date',d,'store_id',s,'status','approved')); exception when others then rejected:=true; end;
       if not rejected then raise exception 'GM approved payroll'; end if;
     end if;
-    perform public.payroll_action(a,'review',jsonb_build_object('due_date',d,'store_id',s,'status','approved'));
   end loop;
   perform public.payroll_action(a,'approve_cycle',jsonb_build_object('due_date',d));
+  if exists(select 1 from public.payroll_submissions where due_date=d and status<>'approved') then raise exception 'Final approval did not approve every submitted store'; end if;
   if (select count(*) from public.payroll_email_outbox where due_date=d and kind='payroll')<>1 then raise exception 'Expected exactly one cycle email'; end if;
   rejected:=false;
   begin perform public.payroll_action(a,'approve_cycle',jsonb_build_object('due_date',d)); exception when others then rejected:=true; end;
