@@ -7,6 +7,7 @@
     "test": "node --test tests/*.test.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "deploy": "pnpm run build && wrangler deploy",
     "preview": "vite preview",
     "lint": "eslint ."
   },
@@ -29,6 +30,7 @@
     "globals": "^15.14.0",
     "typescript": "~5.7.2",
     "typescript-eslint": "^8.18.2",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "wrangler": "^4.156.0"
   }
 }
