@@ -103,6 +103,7 @@ const emptyForm = (storeId = ""): FormState => ({
 
 const formatDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 const formatTimestamp = (value: string) => new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+const PrintChoice = ({ checked, label }: { checked: boolean; label: string }) => <span className="hr-print-choice"><span className={`hr-print-box ${checked ? "checked" : ""}`} />{label}</span>;
 
 export default function HumanResources({ profile }: { profile: Profile }) {
   const canEdit = profile.role === "supervisor" || profile.role === "admin";
@@ -272,6 +273,19 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     field("policy_categories", nextCategories.length > 0 ? nextCategories : ["other"]);
   };
 
+  const printRecord = () => {
+    if (!selected) return;
+    const originalTitle = document.title;
+    const cleanup = () => {
+      document.body.classList.remove("hr-record-printing");
+      document.title = originalTitle;
+    };
+    document.body.classList.add("hr-record-printing");
+    document.title = `${selected.employee_name} - Corrective Action Record`;
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+  };
+
   return <div className="page hr-page">
     <section className="page-header hr-header">
       <div><p className="eyebrow">Confidential employee records</p><h1>HR Action Logs</h1><p>Document disciplinary action securely and preserve a permanent record for each store.</p></div>
@@ -290,7 +304,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     </section>
 
     {selected && !showForm && <section className="panel hr-detail-panel">
-      <div className="panel-heading"><div><p className="eyebrow">Permanent record</p><h2>{selected.employee_name}</h2><p>{storeName(selected.store_id)} · Incident {formatDate(selected.incident_date)}</p></div>{canEdit && <button className="button secondary" onClick={beginEdit}><FilePenLine size={17} />Edit record</button>}</div>
+      <div className="panel-heading"><div><p className="eyebrow">Permanent record</p><h2>{selected.employee_name}</h2><p>{storeName(selected.store_id)} · Incident {formatDate(selected.incident_date)}</p></div><div className="button-row"><button className="button secondary" onClick={printRecord}><Printer size={17} />Print record</button>{canEdit && <button className="button secondary" onClick={beginEdit}><FilePenLine size={17} />Edit record</button>}</div></div>
       <div className="hr-record-meta"><span className={`hr-action-pill ${selected.action_type}`}>{actionLabels[selected.action_type]}</span><span className={`status-pill ${selected.status}`}>{selected.status}</span><span>{selected.policy_categories.map((category) => categoryLabels[category] ?? category).join(" · ")}</span><span>Acknowledgment: {selected.acknowledgment_status.replace("_", " ")}</span></div>
       <div className="hr-detail-grid"><article><h3>Incident summary</h3><p>{selected.incident_summary}</p></article><article><h3>Action taken</h3><p>{selected.action_taken}</p></article><article><h3>Expectations</h3><p>{selected.expectations || "—"}</p></article><article><h3>Witnesses</h3><p>{selected.witnesses || "—"}</p></article>{selected.confidential_notes && <article className="wide"><h3>Confidential notes</h3><p>{selected.confidential_notes}</p></article>}</div>
       <div className="hr-audit"><History size={19} /><div><strong>Record history</strong><span>Submitted by {selected.submitted_by_name} on {formatTimestamp(selected.created_at)}.</span>{revisions.length === 0 ? <small>No edits have been made.</small> : revisions.map((revision) => <small key={revision.id}>Edited by {revision.changed_by_name} · {formatTimestamp(revision.created_at)}</small>)}</div></div>
@@ -316,5 +330,33 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       </div>
       <div className="hr-form-actions"><button className="button secondary" onClick={() => setShowForm(false)}>Cancel</button><button className="button primary" disabled={saving} onClick={() => void (selected ? saveEdit() : submit())}><Save size={17} />{saving ? "Saving securely…" : selected ? "Save revision" : "Submit permanent record"}</button></div>
     </section>}
+
+    {selected && <div className="hr-print-record" aria-hidden="true">
+      <section className="hr-print-page">
+        <header className="hr-print-header"><img src="/team-powers-crest.png" alt="" /><div><h1>Employee Corrective Action Record</h1><p>Complete the employee discussion and signatures before distributing copies.</p></div><img className="dash-logo" src="/dash-sos-logo.png" alt="" /></header>
+        <div className="hr-print-accent"><span /><span /></div>
+        <div className="hr-print-identity">
+          <div><b>Employee name</b><span>{selected.employee_name}</span></div><div><b>Employee ID</b><span>{selected.employee_identifier || "—"}</span></div>
+          <div><b>Store</b><span>{storeName(selected.store_id)}</span></div><div><b>Incident date</b><span>{formatDate(selected.incident_date)}</span></div>
+          <div><b>Prepared by</b><span>{selected.submitted_by_name}</span></div><div><b>Record status</b><span>{selected.status}</span></div>
+        </div>
+        <section className="hr-print-options"><h2>Action level</h2><div>{Object.entries(actionLabels).map(([value, label]) => <PrintChoice key={value} checked={selected.action_type === value} label={label} />)}</div></section>
+        <section className="hr-print-options"><h2>Policy categories</h2><div>{Object.entries(categoryLabels).map(([value, label]) => <PrintChoice key={value} checked={selected.policy_categories.includes(value)} label={label} />)}</div></section>
+        <section className="hr-print-text"><h2>Incident summary</h2><p>{selected.incident_summary}</p></section>
+        <section className="hr-print-text"><h2>Action taken</h2><p>{selected.action_taken}</p></section>
+        <section className="hr-print-text"><h2>Expected correction</h2><p>{selected.expectations || "No additional expectations documented."}</p></section>
+        <div className="hr-print-inline"><div><b>Follow-up date</b><span>{selected.follow_up_date ? formatDate(selected.follow_up_date) : "—"}</span></div><div><b>Witnesses</b><span>{selected.witnesses || "—"}</span></div></div>
+        <footer>Team Powers | Employee copy · Record {selected.id.slice(0, 8).toUpperCase()}<span>Page 1 of 2</span></footer>
+      </section>
+      <section className="hr-print-page">
+        <header className="hr-print-subheader"><h1>Employee Response and Acknowledgment</h1><p>{selected.employee_name} · {storeName(selected.store_id)} · {formatDate(selected.incident_date)}</p></header>
+        <section className="hr-print-text hr-print-comments"><h2>Employee comments</h2><p className="hr-print-writing-lines">The employee may explain their perspective, provide context, or note disagreement.</p></section>
+        <section className="hr-print-acknowledgment"><h2>Employee acknowledgment</h2><p>My signature confirms that I received and discussed this corrective action. It does not necessarily mean that I agree.</p><div><PrintChoice checked={selected.acknowledgment_status === "acknowledged"} label="Acknowledged" /><PrintChoice checked={selected.acknowledgment_status === "declined"} label="Employee declined to sign" /><PrintChoice checked={selected.acknowledgment_status === "not_required"} label="Not required" /></div></section>
+        <section className="hr-print-signatures"><h2>Signatures</h2><div><b>Employee signature</b><span /><b>Date</b><span /></div><div><b>Manager signature</b><span /><b>Date</b><span /></div><div><b>Witness / District Manager</b><span /><b>Date</b><span /></div></section>
+        <section className="hr-print-text hr-print-followup"><h2>Management follow-up</h2><p className="hr-print-writing-lines">Document progress, additional coaching, or completion of the corrective action.</p></section>
+        <section className="hr-print-options hr-print-status"><h2>Record status</h2><div><PrintChoice checked={selected.status === "open"} label="Open" /><PrintChoice checked={selected.status === "monitoring"} label="Monitoring" /><PrintChoice checked={selected.status === "completed"} label="Completed" /></div></section>
+        <footer>Team Powers | Confidential employee record · Record {selected.id.slice(0, 8).toUpperCase()}<span>Page 2 of 2</span></footer>
+      </section>
+    </div>}
   </div>;
 }
