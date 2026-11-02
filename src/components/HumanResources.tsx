@@ -15,7 +15,7 @@ type DisciplinaryAction = {
   employee_identifier: string | null;
   incident_date: string;
   action_type: ActionType;
-  policy_category: string;
+  policy_categories: string[];
   incident_summary: string;
   action_taken: string;
   expectations: string;
@@ -45,7 +45,7 @@ type FormState = {
   employee_identifier: string;
   incident_date: string;
   action_type: ActionType;
-  policy_category: string;
+  policy_categories: string[];
   incident_summary: string;
   action_taken: string;
   expectations: string;
@@ -90,7 +90,7 @@ const emptyForm = (storeId = ""): FormState => ({
   employee_identifier: "",
   incident_date: today(),
   action_type: "coaching",
-  policy_category: "other",
+  policy_categories: ["other"],
   incident_summary: "",
   action_taken: "",
   expectations: "",
@@ -218,7 +218,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       employee_identifier: selected.employee_identifier ?? "",
       incident_date: selected.incident_date,
       action_type: selected.action_type,
-      policy_category: selected.policy_category,
+      policy_categories: selected.policy_categories,
       incident_summary: selected.incident_summary,
       action_taken: selected.action_taken,
       expectations: selected.expectations,
@@ -240,7 +240,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       employee_identifier: form.employee_identifier.trim() || null,
       incident_date: form.incident_date,
       action_type: form.action_type,
-      policy_category: form.policy_category,
+      policy_categories: form.policy_categories,
       incident_summary: form.incident_summary.trim(),
       action_taken: form.action_taken.trim(),
       expectations: form.expectations.trim(),
@@ -259,6 +259,18 @@ export default function HumanResources({ profile }: { profile: Profile }) {
   };
 
   const field = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((current) => ({ ...current, [key]: value }));
+
+  const togglePolicyCategory = (category: string) => {
+    if (category === "other") {
+      field("policy_categories", ["other"]);
+      return;
+    }
+    const selectedCategories = form.policy_categories.filter((value) => value !== "other");
+    const nextCategories = selectedCategories.includes(category)
+      ? selectedCategories.filter((value) => value !== category)
+      : [...selectedCategories, category];
+    field("policy_categories", nextCategories.length > 0 ? nextCategories : ["other"]);
+  };
 
   return <div className="page hr-page">
     <section className="page-header hr-header">
@@ -279,7 +291,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
 
     {selected && !showForm && <section className="panel hr-detail-panel">
       <div className="panel-heading"><div><p className="eyebrow">Permanent record</p><h2>{selected.employee_name}</h2><p>{storeName(selected.store_id)} · Incident {formatDate(selected.incident_date)}</p></div>{canEdit && <button className="button secondary" onClick={beginEdit}><FilePenLine size={17} />Edit record</button>}</div>
-      <div className="hr-record-meta"><span className={`hr-action-pill ${selected.action_type}`}>{actionLabels[selected.action_type]}</span><span className={`status-pill ${selected.status}`}>{selected.status}</span><span>{categoryLabels[selected.policy_category]}</span><span>Acknowledgment: {selected.acknowledgment_status.replace("_", " ")}</span></div>
+      <div className="hr-record-meta"><span className={`hr-action-pill ${selected.action_type}`}>{actionLabels[selected.action_type]}</span><span className={`status-pill ${selected.status}`}>{selected.status}</span><span>{selected.policy_categories.map((category) => categoryLabels[category] ?? category).join(" · ")}</span><span>Acknowledgment: {selected.acknowledgment_status.replace("_", " ")}</span></div>
       <div className="hr-detail-grid"><article><h3>Incident summary</h3><p>{selected.incident_summary}</p></article><article><h3>Action taken</h3><p>{selected.action_taken}</p></article><article><h3>Expectations</h3><p>{selected.expectations || "—"}</p></article><article><h3>Witnesses</h3><p>{selected.witnesses || "—"}</p></article>{selected.confidential_notes && <article className="wide"><h3>Confidential notes</h3><p>{selected.confidential_notes}</p></article>}</div>
       <div className="hr-audit"><History size={19} /><div><strong>Record history</strong><span>Submitted by {selected.submitted_by_name} on {formatTimestamp(selected.created_at)}.</span>{revisions.length === 0 ? <small>No edits have been made.</small> : revisions.map((revision) => <small key={revision.id}>Edited by {revision.changed_by_name} · {formatTimestamp(revision.created_at)}</small>)}</div></div>
     </section>}
@@ -292,7 +304,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         <label>Employee ID <small>Optional</small><input value={form.employee_identifier} onChange={(event) => field("employee_identifier", event.target.value)} /></label>
         <label>Incident date<input type="date" value={form.incident_date} onChange={(event) => field("incident_date", event.target.value)} /></label>
         <label>Action type<select value={form.action_type} onChange={(event) => field("action_type", event.target.value as ActionType)}>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label>Policy category<select value={form.policy_category} onChange={(event) => field("policy_category", event.target.value)}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <fieldset className="wide hr-category-selector"><legend>Policy categories <small>Select all that apply</small></legend><div>{Object.entries(categoryLabels).map(([value, label]) => <label key={value} className={form.policy_categories.includes(value) ? "selected" : ""}><input type="checkbox" checked={form.policy_categories.includes(value)} onChange={() => togglePolicyCategory(value)} /><span>{label}</span></label>)}</div></fieldset>
         <label className="wide">Incident summary<textarea rows={5} value={form.incident_summary} onChange={(event) => field("incident_summary", event.target.value)} placeholder="State the facts, dates, and observed behavior. Avoid assumptions." /></label>
         <label className="wide">Action taken<textarea rows={4} value={form.action_taken} onChange={(event) => field("action_taken", event.target.value)} placeholder="Describe the conversation and disciplinary action issued." /></label>
         <label className="wide">Expected correction<textarea rows={3} value={form.expectations} onChange={(event) => field("expectations", event.target.value)} placeholder="What must change, by when, and how success will be measured." /></label>
