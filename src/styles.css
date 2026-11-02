@@ -28,6 +28,10 @@
   --dash-silver: #dce2e9;
 }
 
+/* Optional roster dates never block scheduling. */
+.roster-date-reminder{border-radius:999px;background:#fff4cf;color:#8a5b0d;padding:.42rem .7rem;font-size:.67rem;font-weight:900;white-space:nowrap}
+@media(min-width:901px){.evaluation-summary-grid{grid-template-columns:repeat(5,minmax(0,1fr))}}
+
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: linear-gradient(145deg,#f8fafc 0%,var(--cream) 55%,#edf3f8 100%); }
 button, input, textarea, select { font: inherit; }
