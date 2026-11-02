@@ -46,6 +46,7 @@ import HumanResources from "./components/HumanResources";
 import PayrollCenter from "./components/PayrollCenter";
 import OperationsCalendar from "./components/OperationsCalendar";
 import SupervisorVisitLog from "./components/SupervisorVisitLog";
+import TeamEvaluations from "./components/TeamEvaluations";
 
 const navigation: {
   id: PortalSection;
@@ -60,6 +61,7 @@ const navigation: {
   { id: "visit-log", label: "DM Visit Logs", icon: ClipboardList, roles: ["supervisor", "admin"] },
   { id: "receipts", label: "DM Card Receipts", icon: Receipt },
   { id: "hr", label: "HR Action Logs", icon: ShieldAlert, roles: ["manager", "supervisor", "admin"] },
+  { id: "evaluations", label: "Team Evaluations", icon: ClipboardCheck, roles: ["manager", "supervisor", "admin"] },
   { id: "payroll", label: "Payroll Submission", icon: CreditCard, roles: ["manager", "supervisor", "admin"] },
   { id: "technology", label: "Technology Requests", icon: MonitorCog },
   { id: "maintenance", label: "Maintenance Requests", icon: Wrench },
@@ -337,6 +339,7 @@ export default function App() {
     calendar: <OperationsCalendar profile={profile} />,
     "visit-log": <SupervisorVisitLog profile={profile} />,
     hr: <HumanResources profile={profile} />,
+    evaluations: <TeamEvaluations profile={profile} />,
     imports: <ReportImportCenter profile={profile} />,
     uniforms: <Uniforms profile={profile} />,
     smallwares: <Uniforms profile={profile} category="smallware" />,

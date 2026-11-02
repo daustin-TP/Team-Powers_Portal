@@ -31,6 +31,23 @@ type TeamMember = {
   is_minor: boolean;
   active: boolean;
 };
+type TeamMemberPrivateDetails = {
+  member_id: string;
+  store_id: string;
+  hire_date: string | null;
+  rehire_date: string | null;
+  evaluation_anniversary: string | null;
+  birth_date: string | null;
+};
+type TeamMemberPosition = {
+  id: string;
+  member_id: string;
+  store_id: string;
+  position_name: string;
+  hourly_rate: number | null;
+  effective_date: string;
+  active: boolean;
+};
 type Shift = {
   id: string;
   week_plan_id: string;
@@ -274,6 +291,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [planId, setPlanId] = useState("");
   const [planStatus, setPlanStatus] = useState("draft");
   const [members, setMembers] = useState<TeamMember[]>([]);
+  const [memberDetails, setMemberDetails] = useState<TeamMemberPrivateDetails[]>([]);
+  const [memberPositions, setMemberPositions] = useState<TeamMemberPosition[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [shiftChanges, setShiftChanges] = useState<ShiftChange[]>([]);
   const [projections, setProjections] = useState<DayProjection[]>([]);
@@ -289,7 +308,9 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [eventForm, setEventForm] = useState<EventForm>(() => emptyEvent(mondayOfNextPlanningWeek(), "", canCreateCompanyEvent));
   const [selectedDay, setSelectedDay] = useState(0);
   const [newShift, setNewShift] = useState<{ role: LaborRole; start_time: string; end_time: string }>({ role: "insider", start_time: "16:00", end_time: "20:00" });
-  const [newMember, setNewMember] = useState<{ display_name: string; qualified_roles: LaborRole[]; is_minor: boolean }>({ display_name: "", qualified_roles: ["insider"], is_minor: false });
+  const [newMember, setNewMember] = useState<{ display_name: string; qualified_roles: LaborRole[]; is_minor: boolean; hire_date: string; birth_date: string }>({ display_name: "", qualified_roles: ["insider"], is_minor: false, hire_date: "", birth_date: "" });
+  const [positionMemberId, setPositionMemberId] = useState("");
+  const [positionDraft, setPositionDraft] = useState({ position_name: "", hourly_rate: "", effective_date: localTodayIso() });
   const [availabilityForm, setAvailabilityForm] = useState<{ member_id: string; kind: "standard" | "rto"; day_of_week: number; standard_status: "available" | "unavailable" | "limited"; all_day: boolean; start_time: string; end_time: string; reason: string }>({ member_id: "", kind: "standard", day_of_week: 0, standard_status: "available", all_day: true, start_time: "10:00", end_time: "23:00", reason: "" });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -354,12 +375,14 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     const loadWeek = async () => {
       setLoading(true); setError(""); setMessage("");
       if (!isSupabaseConfigured || !supabase) {
-        setPlanId("demo-plan"); setPlanStatus("draft"); setMembers(demoMembers); setShifts(demoShifts()); setShiftChanges([]); setAvailability(demoAvailability); setAvailabilityForm((current) => ({ ...current, member_id: current.member_id || demoMembers[0].id })); setDemandIntervals([]);
+        setPlanId("demo-plan"); setPlanStatus("draft"); setMembers(demoMembers); setMemberDetails([]); setMemberPositions([]); setShifts(demoShifts()); setShiftChanges([]); setAvailability(demoAvailability); setAvailabilityForm((current) => ({ ...current, member_id: current.member_id || demoMembers[0].id })); setDemandIntervals([]);
         setProjections(days.map((_, day_of_week) => ({ day_of_week, projected_sales: day_of_week >= 4 ? 5200 : 3600 })));
         setSettings(defaultSettings); setStoreHours(defaultStoreHours()); setLoading(false); return;
       }
-      const [memberResult, settingResult, hoursResult, planResult, standardResult, rtoResult, eventResult, forecastResult] = await Promise.all([
+      const [memberResult, detailResult, positionResult, settingResult, hoursResult, planResult, standardResult, rtoResult, eventResult, forecastResult] = await Promise.all([
         supabase.from("labor_team_members").select("id,store_id,display_name,qualified_roles,is_minor,active").eq("store_id", storeId).eq("active", true).order("display_name"),
+        supabase.from("team_member_private_details").select("member_id,store_id,hire_date,rehire_date,evaluation_anniversary,birth_date").eq("store_id", storeId),
+        supabase.from("team_member_positions").select("id,member_id,store_id,position_name,hourly_rate,effective_date,active").eq("store_id", storeId).eq("active", true).order("position_name"),
         supabase.from("labor_store_settings").select("*").eq("store_id", storeId).maybeSingle(),
         supabase.from("labor_store_hours").select("day_of_week,open_time,close_time").eq("store_id", storeId).order("day_of_week"),
         supabase.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle(),
@@ -368,9 +391,11 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         supabase.from("labor_scheduling_events").select("*").lte("start_date", addIsoDays(weekStart, 90)).gte("end_date", addIsoDays(weekStart, -35)).order("start_date"),
         supabase.from("demand_forecast_runs").select("id,confidence_score,confidence_level,confidence_reasons,weekly_projection,method_version,created_at").eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true).maybeSingle(),
       ]);
-      const firstError = memberResult.error || settingResult.error || hoursResult.error || planResult.error || standardResult.error || rtoResult.error || eventResult.error || forecastResult.error;
+      const firstError = memberResult.error || detailResult.error || positionResult.error || settingResult.error || hoursResult.error || planResult.error || standardResult.error || rtoResult.error || eventResult.error || forecastResult.error;
       if (firstError) { setError(`${firstError.message} Apply the Labor Management migration in Supabase, then refresh.`); setLoading(false); return; }
       setMembers((memberResult.data ?? []) as TeamMember[]);
+      setMemberDetails((detailResult.data ?? []) as TeamMemberPrivateDetails[]);
+      setMemberPositions((positionResult.data ?? []) as TeamMemberPosition[]);
       setAvailabilityForm((current) => ({ ...current, member_id: (memberResult.data ?? []).some((member) => member.id === current.member_id) ? current.member_id : memberResult.data?.[0]?.id || "" }));
       if (settingResult.data) setSettings({ ...defaultSettings, ...settingResult.data }); else setSettings(defaultSettings);
       const loadedHours = (hoursResult.data ?? []).map((item) => ({ ...item, open_time: item.open_time.slice(0, 5), close_time: item.close_time.slice(0, 5) })) as StoreHour[];
@@ -501,13 +526,21 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (newMember.qualified_roles.length === 0) { setError("Select at least one qualified role."); return; }
     setError("");
     const draft: TeamMember = { id: `member-${Date.now()}`, store_id: storeId, display_name: displayName, qualified_roles: newMember.qualified_roles, is_minor: newMember.is_minor, active: true };
+    let savedMember = draft;
     if (!supabase || storeId === demoStore.id) setMembers((current) => [...current, draft].sort((left, right) => left.display_name.localeCompare(right.display_name)));
     else {
       const { data, error: insertError } = await supabase.from("labor_team_members").insert({ store_id: storeId, display_name: displayName, qualified_roles: newMember.qualified_roles, is_minor: newMember.is_minor, active: true }).select("id,store_id,display_name,qualified_roles,is_minor,active").single();
       if (insertError) { setError(insertError.message); return; }
-      setMembers((current) => [...current, data as TeamMember].sort((left, right) => left.display_name.localeCompare(right.display_name)));
+      savedMember = data as TeamMember;
+      setMembers((current) => [...current, savedMember].sort((left, right) => left.display_name.localeCompare(right.display_name)));
+      if (newMember.hire_date || newMember.birth_date) {
+        const details = { member_id: savedMember.id, store_id: storeId, hire_date: newMember.hire_date || null, birth_date: newMember.birth_date || null, created_by: profile.id, updated_by: profile.id, updated_at: new Date().toISOString() };
+        const { data: savedDetails, error: detailsError } = await supabase.from("team_member_private_details").upsert(details).select("member_id,store_id,hire_date,rehire_date,evaluation_anniversary,birth_date").single();
+        if (detailsError) { setError(`${displayName} was added, but employment details could not be saved: ${detailsError.message}`); return; }
+        setMemberDetails((current) => [...current.filter((item) => item.member_id !== savedMember.id), savedDetails as TeamMemberPrivateDetails]);
+      }
     }
-    setNewMember({ display_name: "", qualified_roles: ["insider"], is_minor: false }); setMessage(`${displayName} added to the scheduling roster.`);
+    setNewMember({ display_name: "", qualified_roles: ["insider"], is_minor: false, hire_date: "", birth_date: "" }); setMessage(`${displayName} added to the scheduling roster.`);
   };
   const updateTeamMember = async (member: TeamMember, changes: Partial<Pick<TeamMember, "display_name" | "qualified_roles" | "is_minor">>) => {
     const updated = { ...member, ...changes };
@@ -519,6 +552,40 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       if (updateError) { setError(updateError.message); return; }
     }
     setMessage(`${updated.display_name}’s roster settings saved.`);
+  };
+  const updatePrivateDetails = async (member: TeamMember, changes: Partial<Pick<TeamMemberPrivateDetails, "hire_date" | "rehire_date" | "evaluation_anniversary" | "birth_date">>) => {
+    const current = memberDetails.find((item) => item.member_id === member.id);
+    const updated: TeamMemberPrivateDetails = { member_id: member.id, store_id: member.store_id, hire_date: current?.hire_date ?? null, rehire_date: current?.rehire_date ?? null, evaluation_anniversary: current?.evaluation_anniversary ?? null, birth_date: current?.birth_date ?? null, ...changes };
+    setMemberDetails((rows) => [...rows.filter((item) => item.member_id !== member.id), updated]);
+    if (supabase && member.store_id !== demoStore.id) {
+      const { error: detailsError } = await supabase.from("team_member_private_details").upsert({ ...updated, created_by: profile.id, updated_by: profile.id, updated_at: new Date().toISOString() });
+      if (detailsError) { setError(detailsError.message); return; }
+    }
+    setMessage(`${member.display_name}’s employment dates saved.`);
+  };
+  const addPosition = async () => {
+    const member = members.find((item) => item.id === positionMemberId);
+    const name = positionDraft.position_name.trim();
+    if (!member || !name) { setError("Choose an employee and enter a payroll position."); return; }
+    const parsedRate = positionDraft.hourly_rate === "" ? null : Number(positionDraft.hourly_rate);
+    if (parsedRate !== null && (!Number.isFinite(parsedRate) || parsedRate < 0)) { setError("Enter a valid hourly rate."); return; }
+    const payload = { member_id: member.id, store_id: member.store_id, position_name: name, hourly_rate: parsedRate, effective_date: positionDraft.effective_date, active: true, created_by: profile.id, updated_by: profile.id, updated_at: new Date().toISOString() };
+    if (!supabase || member.store_id === demoStore.id) {
+      setMemberPositions((current) => [...current, { ...payload, id: `position-${Date.now()}` }]);
+    } else {
+      const { data, error: positionError } = await supabase.from("team_member_positions").insert(payload).select("id,member_id,store_id,position_name,hourly_rate,effective_date,active").single();
+      if (positionError) { setError(positionError.message); return; }
+      setMemberPositions((current) => [...current, data as TeamMemberPosition]);
+    }
+    setPositionDraft({ position_name: "", hourly_rate: "", effective_date: localTodayIso() });
+    setMessage(`${name} pay assignment added for ${member.display_name}.`);
+  };
+  const deactivatePosition = async (position: TeamMemberPosition) => {
+    if (supabase && position.store_id !== demoStore.id) {
+      const { error: positionError } = await supabase.from("team_member_positions").update({ active: false, updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", position.id);
+      if (positionError) { setError(positionError.message); return; }
+    }
+    setMemberPositions((current) => current.filter((item) => item.id !== position.id));
   };
   const deactivateTeamMember = async (member: TeamMember) => {
     if (shifts.some((shift) => shift.assigned_member_id === member.id)) { setError("Remove this employee from the selected week’s shifts before deactivating them."); return; }
@@ -900,8 +967,19 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         </>
       ) : view === "employees" ? (
         <div className="roster-layout">
-          <section className="panel roster-add-panel"><div><p className="eyebrow">Scheduling roster</p><h2>Add an employee</h2><p>Only employees qualified for a shift’s role appear in that assignment dropdown.</p></div><label>Employee name<input value={newMember.display_name} onChange={(event) => setNewMember({ ...newMember, display_name: event.target.value })} placeholder="First and last name" /></label><fieldset><legend>Qualified roles</legend>{(["manager", "insider", "driver"] as LaborRole[]).map((role) => <label key={role} className="checkbox-line"><input type="checkbox" checked={newMember.qualified_roles.includes(role)} onChange={(event) => setNewMember({ ...newMember, qualified_roles: event.target.checked ? [...newMember.qualified_roles, role] : newMember.qualified_roles.filter((item) => item !== role) })} />{role[0].toUpperCase() + role.slice(1)}</label>)}</fieldset><label className="checkbox-line"><input type="checkbox" checked={newMember.is_minor} onChange={(event) => setNewMember({ ...newMember, is_minor: event.target.checked })} />Minor employee</label><button className="button primary" onClick={() => void addTeamMember()}><Plus size={17} />Add to roster</button></section>
-          <section className="panel roster-list-panel"><div className="table-toolbar"><div><p className="eyebrow">Active employees</p><h2>Roster, qualifications, and weekly hours</h2><p>Changes here immediately update the employee choices in Required Shifts.</p></div></div>{members.length === 0 ? <div className="activity-empty">No employees have been added to this store’s scheduling roster.</div> : <div className="responsive-table"><table className="roster-table"><thead><tr><th>Employee</th><th>Qualified roles</th><th>Minor</th><th>Weekly hours</th><th>Flag</th><th aria-label="Roster actions" /></tr></thead><tbody>{hoursByMember.map(({ member, hours }) => <tr key={member.id}><td><input className="roster-name-input" value={member.display_name} onChange={(event) => setMembers((current) => current.map((item) => item.id === member.id ? { ...item, display_name: event.target.value } : item))} onBlur={(event) => void updateTeamMember(member, { display_name: event.target.value.trim() })} /></td><td><div className="roster-role-checks">{(["manager", "insider", "driver"] as LaborRole[]).map((role) => <label key={role}><input type="checkbox" checked={member.qualified_roles.includes(role)} onChange={(event) => void updateTeamMember(member, { qualified_roles: event.target.checked ? [...member.qualified_roles, role] : member.qualified_roles.filter((item) => item !== role) })} />{role[0].toUpperCase()}</label>)}</div></td><td><label className="roster-minor-toggle"><input type="checkbox" checked={member.is_minor} onChange={(event) => void updateTeamMember(member, { is_minor: event.target.checked })} /><span>{member.is_minor ? "◆ Minor" : "Adult"}</span></label></td><td><strong>{hours.toFixed(2)}</strong></td><td>{hours >= 40 ? <span className="availability-bad">OVERTIME</span> : hours >= 36 ? <span className="availability-warning">Close to OT</span> : <span className="availability-good">✓ OK</span>}</td><td><button className="icon-button danger" aria-label={`Remove ${member.display_name} from roster`} title="Remove from active roster" onClick={() => void deactivateTeamMember(member)}><Trash2 size={17} /></button></td></tr>)}</tbody></table></div>}</section>
+          <section className="panel roster-add-panel">
+            <div><p className="eyebrow">Scheduling roster</p><h2>Add an employee</h2><p>Hire date powers evaluation reminders. Birth year stays private and is never shown on the calendar.</p></div>
+            <label>Employee name<input value={newMember.display_name} onChange={(event) => setNewMember({ ...newMember, display_name: event.target.value })} placeholder="First and last name" /></label>
+            <div className="roster-date-fields"><label>Hire date<input type="date" value={newMember.hire_date} onChange={(event) => setNewMember({ ...newMember, hire_date: event.target.value })} /></label><label>Birthday<input type="date" value={newMember.birth_date} onChange={(event) => setNewMember({ ...newMember, birth_date: event.target.value })} /></label></div>
+            <fieldset><legend>Qualified scheduling roles</legend>{(["manager", "insider", "driver"] as LaborRole[]).map((role) => <label key={role} className="checkbox-line"><input type="checkbox" checked={newMember.qualified_roles.includes(role)} onChange={(event) => setNewMember({ ...newMember, qualified_roles: event.target.checked ? [...newMember.qualified_roles, role] : newMember.qualified_roles.filter((item) => item !== role) })} />{role[0].toUpperCase() + role.slice(1)}</label>)}</fieldset>
+            <label className="checkbox-line"><input type="checkbox" checked={newMember.is_minor} onChange={(event) => setNewMember({ ...newMember, is_minor: event.target.checked })} />Minor employee</label>
+            <button className="button primary" onClick={() => void addTeamMember()}><Plus size={17} />Add to roster</button>
+          </section>
+          <section className="panel roster-list-panel">
+            <div className="table-toolbar"><div><p className="eyebrow">Active employees</p><h2>Roster, employment dates, and position pay</h2><p>Scheduling roles and payroll positions are intentionally separate. One employee may have several active positions and rates.</p></div></div>
+            {members.length === 0 ? <div className="activity-empty">No employees have been added to this store’s scheduling roster.</div> : <div className="responsive-table"><table className="roster-table roster-employment-table"><thead><tr><th>Employee</th><th>Scheduling roles</th><th>Hire date</th><th>Birthday</th><th>Position pay</th><th>Minor</th><th>Weekly hours</th><th>Flag</th><th aria-label="Roster actions" /></tr></thead><tbody>{hoursByMember.map(({ member, hours }) => { const details = memberDetails.find((item) => item.member_id === member.id); const positions = memberPositions.filter((item) => item.member_id === member.id); return <tr key={member.id}><td><input className="roster-name-input" value={member.display_name} onChange={(event) => setMembers((current) => current.map((item) => item.id === member.id ? { ...item, display_name: event.target.value } : item))} onBlur={(event) => void updateTeamMember(member, { display_name: event.target.value.trim() })} /></td><td><div className="roster-role-checks">{(["manager", "insider", "driver"] as LaborRole[]).map((role) => <label key={role}><input type="checkbox" checked={member.qualified_roles.includes(role)} onChange={(event) => void updateTeamMember(member, { qualified_roles: event.target.checked ? [...member.qualified_roles, role] : member.qualified_roles.filter((item) => item !== role) })} />{role[0].toUpperCase()}</label>)}</div></td><td><input className="roster-date-input" type="date" value={details?.hire_date ?? ""} onChange={(event) => setMemberDetails((current) => [...current.filter((item) => item.member_id !== member.id), { member_id: member.id, store_id: member.store_id, hire_date: event.target.value || null, rehire_date: details?.rehire_date ?? null, evaluation_anniversary: details?.evaluation_anniversary ?? null, birth_date: details?.birth_date ?? null }])} onBlur={(event) => void updatePrivateDetails(member, { hire_date: event.target.value || null })} /></td><td><input className="roster-date-input" type="date" value={details?.birth_date ?? ""} onChange={(event) => setMemberDetails((current) => [...current.filter((item) => item.member_id !== member.id), { member_id: member.id, store_id: member.store_id, hire_date: details?.hire_date ?? null, rehire_date: details?.rehire_date ?? null, evaluation_anniversary: details?.evaluation_anniversary ?? null, birth_date: event.target.value || null }])} onBlur={(event) => void updatePrivateDetails(member, { birth_date: event.target.value || null })} /></td><td><div className="position-pay-list">{positions.map((position) => <span key={position.id}>{position.position_name} · {position.hourly_rate == null ? "rate not entered" : `$${Number(position.hourly_rate).toFixed(2)}`}<button type="button" aria-label={`Remove ${position.position_name}`} onClick={() => void deactivatePosition(position)}>×</button></span>)}<button type="button" className="position-add-button" onClick={() => setPositionMemberId(member.id)}>+ position</button></div></td><td><label className="roster-minor-toggle"><input type="checkbox" checked={member.is_minor} onChange={(event) => void updateTeamMember(member, { is_minor: event.target.checked })} /><span>{member.is_minor ? "◆ Minor" : "Adult"}</span></label></td><td><strong>{hours.toFixed(2)}</strong></td><td>{hours >= 40 ? <span className="availability-bad">OVERTIME</span> : hours >= 36 ? <span className="availability-warning">Close to OT</span> : <span className="availability-good">✓ OK</span>}</td><td><button className="icon-button danger" aria-label={`Remove ${member.display_name} from roster`} title="Remove from active roster" onClick={() => void deactivateTeamMember(member)}><Trash2 size={17} /></button></td></tr>; })}</tbody></table></div>}
+          </section>
+          {positionMemberId && <div className="modal-backdrop" onClick={() => setPositionMemberId("")}><section className="ticket-modal roster-position-editor" onClick={(event) => event.stopPropagation()}><button type="button" className="icon-button modal-close" onClick={() => setPositionMemberId("")}><X /></button><p className="eyebrow">Position-specific compensation</p><h2>{members.find((item) => item.id === positionMemberId)?.display_name}</h2><p>Add one entry for each payroll position. Updating an evaluation can later create a payroll change request without overwriting this history.</p><label>Payroll position<input value={positionDraft.position_name} onChange={(event) => setPositionDraft({ ...positionDraft, position_name: event.target.value })} placeholder="Assistant Manager, CSR, Driver…" /></label><div className="roster-date-fields"><label>Current hourly rate<input type="number" min="0" step="0.01" value={positionDraft.hourly_rate} onChange={(event) => setPositionDraft({ ...positionDraft, hourly_rate: event.target.value })} placeholder="Optional" /></label><label>Effective date<input type="date" value={positionDraft.effective_date} onChange={(event) => setPositionDraft({ ...positionDraft, effective_date: event.target.value })} /></label></div><div className="calendar-editor-actions"><button type="button" className="button secondary" onClick={() => setPositionMemberId("")}>Close</button><button type="button" className="button primary" onClick={() => void addPosition()}><Plus size={16}/>Add position</button></div></section></div>}
         </div>
       ) : view === "availability" ? (
         <div className="availability-layout">

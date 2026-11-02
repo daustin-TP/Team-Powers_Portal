@@ -19,6 +19,7 @@ export type PortalSection =
   | "calendar"
   | "visit-log"
   | "hr"
+  | "evaluations"
   | "imports"
   | "uniforms"
   | "smallwares"

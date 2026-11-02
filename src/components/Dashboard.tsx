@@ -36,6 +36,7 @@ const actionCatalog: {
   { title: "Payroll Submission", detail: "Complete payroll changes, reimbursements, and time-off requests.", icon: CreditCard, section: "payroll", tone: "silver" },
   { title: "DM Visit Logs", detail: "Start or review a structured store-visit record.", icon: ClipboardList, section: "visit-log", tone: "red" },
   { title: "HR Action Logs", detail: "Create and securely review disciplinary documentation.", icon: ShieldAlert, section: "hr", tone: "red" },
+  { title: "Team Evaluations", detail: "Track due reviews, complete evaluations, and print employee copies.", icon: ClipboardCheck, section: "evaluations", tone: "blue" },
   { title: "Weekly Data Imports", detail: "Upload Wizardline reports for KPI and labor intelligence.", icon: FileUp, section: "imports", tone: "blue" },
   { title: "Store Uniform Requests", detail: "Restock approved uniforms for the store’s on-hand inventory.", icon: Package, section: "uniforms", tone: "silver" },
   { title: "Smallwares Requests", detail: "Request approved tools, supplies, and store equipment.", icon: ShoppingBag, section: "smallwares", tone: "silver" },
