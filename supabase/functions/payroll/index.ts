@@ -77,6 +77,18 @@ export async function handlePayroll(req: Request) {
       const connection=await checkEmailConnection(email);
       return json({ok:true,email_ready:true,...connection});
     }
+    if(body.action==="deliver_now"){
+      if(p.role!=="admin")return json({error:"Only administrators can send queued payroll email."},403);
+      if(!email)return json({error:"The email sender secrets are incomplete."},400);
+      const delivery=await fetch(`${Deno.env.get("SUPABASE_URL")!}/functions/v1/payroll`,{
+        method:"POST",
+        headers:{"Authorization":`Bearer ${serviceKey}`,"Content-Type":"application/json"},
+        body:JSON.stringify({action:"deliver"}),
+      });
+      const result=await delivery.json().catch(()=>({error:"The payroll delivery worker returned an invalid response."}));
+      if(!delivery.ok)return json(result,delivery.status);
+      return json(result);
+    }
     if(body.action==="attachment_upload"||body.action==="attachment_download"){
       const storeId=String(body.store_id??"");
       if(!/^[0-9a-f-]{36}$/i.test(storeId) || (p.role!=="admin"&&!assigned.has(storeId)))return json({error:"Store access denied"},403);

@@ -60,8 +60,8 @@ function handlerFor(role,active=true){
     let rows=tables[name],single=false;
     return {select(){return this},eq(k,v){rows=rows.filter(r=>r[k]===v);return this},lte(k,v){rows=rows.filter(r=>r[k]<=v);return this},gte(k,v){rows=rows.filter(r=>r[k]>=v);return this},in(k,vs){rows=rows.filter(r=>vs.includes(r[k]));return this},maybeSingle(){single=true;return this},then(resolve){resolve({data:single?rows[0]:rows,error:null});}};
   }};
-  const email={emailConfig:()=>null,checkEmailConnection:async()=>({}),emailDeliveryFailure:()=>({retryable:false,message:'failed'}),sendEmailMessage:async()=>''};
-  const ctx={exports:{},require:n=>n.includes('model')?m:n.includes('email')?email:{createClient:()=>client},Deno:{env:{get:()=>'test'},serve:()=>{}},Response};
+  const email={emailConfig:()=>({provider:'resend'}),checkEmailConnection:async()=>({}),emailDeliveryFailure:()=>({retryable:false,message:'failed'}),sendEmailMessage:async()=>''};
+  const ctx={exports:{},require:n=>n.includes('model')?m:n.includes('email')?email:{createClient:()=>client},Deno:{env:{get:()=>'test'},serve:()=>{}},Response,fetch:async()=>new Response(JSON.stringify({ok:true,sent:1,email_ready:true}),{status:200,headers:{'Content-Type':'application/json'}})};
   vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../supabase/functions/payroll/index.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,ctx);
   return ctx.exports.handlePayroll;
 }
@@ -77,4 +77,11 @@ test('payroll rejects employees, accounting, inactive profiles and unauthenticat
   for(const role of ['employee','accounting'])assert.equal((await handlerFor(role)(calendarRequest())).status,403);
   assert.equal((await handlerFor('admin',false)(calendarRequest())).status,403);
   assert.equal((await handlerFor('admin')(new Request('https://example.test',{method:'POST'}))).status,401);
+});
+test('only administrators can immediately deliver queued payroll email',async()=>{
+  const request=()=>new Request('https://example.test',{method:'POST',headers:{Authorization:'Bearer user-token','Content-Type':'application/json'},body:JSON.stringify({action:'deliver_now',due_date:'2026-11-02'})});
+  assert.equal((await handlerFor('manager')(request())).status,403);
+  const response=await handlerFor('admin')(request());
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).sent,1);
 });

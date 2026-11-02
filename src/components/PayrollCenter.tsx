@@ -57,6 +57,15 @@ export default function PayrollCenter({profile}:{profile:Profile}){
     catch(e){setMessage((e as Error).message);}
     finally{setBusy(false);}
   }
+  async function sendQueuedPayroll(){
+    setBusy(true);setMessage("");
+    try{
+      const result=await call({action:"deliver_now"});
+      await load();
+      setMessage(result.sent>0?"The combined payroll email was sent successfully.":"There are no queued payroll emails waiting to send.");
+    }catch(e){setMessage((e as Error).message);}
+    finally{setBusy(false);}
+  }
   function update<K extends keyof Entry>(index:number,key:K,value:Entry[K]){setEntries(es=>es.map((e,i)=>i===index?{...e,[key]:value}:e));setDirty(true);}
   function changeType(index:number,type:string){setEntries(es=>es.map((entry,i)=>i!==index?entry:{...blank(entry.section,due),type,employee:entry.employee,employee_id:entry.employee_id,effective_date:type==="Pay Rate Change"?due:""}));setDirty(true);}
   async function uploadAttachment(index:number,file:File){
@@ -151,7 +160,8 @@ export default function PayrollCenter({profile}:{profile:Profile}){
         {admin&&<><div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void checkEmail()}>Check email connection</button><span>{data.email_ready?"Email sender configured":"Email sender not configured"}</span></div><details><summary>Preview combined payroll email</summary><pre className="payroll-email-preview">{data.preview}</pre></details>
           <p>Final approval approves every submitted store, locks the entire cycle, and queues one combined email. Missing, draft, or returned stores will block approval.</p>
           <button className="button primary" disabled={busy||data.cycle.status!=="open"||!data.stores.length||counts.submitted!==data.stores.length} onClick={()=>{if(window.confirm(`Approve all ${data.stores.length} submitted stores, lock this payroll cycle, and queue the combined payroll email?`))void mutate({action:"approve_cycle"},"All store submissions approved and the payroll cycle was locked. See email status below.");}}>Approve all submitted stores & queue email</button>
-          {data.emails.map(e=><p key={e.id}>{e.kind==="payroll"?"Combined payroll":"GM reminder"} → {e.recipient}: <strong>{e.status==="sent"?"Accepted by Google Gmail":e.status}</strong>{e.last_error?` — ${e.last_error}`:""}</p>)}
+          {data.emails.map(e=><p key={e.id}>{e.kind==="payroll"?"Combined payroll":"GM reminder"} → {e.recipient}: <strong>{e.status==="sent"?"Accepted by email provider":e.status}</strong>{e.status==="queued"?" — sends automatically within about five minutes":""}{e.last_error?` — ${e.last_error}`:""}</p>)}
+          {data.emails.some(e=>e.kind==="payroll"&&e.status==="queued")&&<button className="button primary" disabled={busy} onClick={()=>void sendQueuedPayroll()}>{busy?"Sending…":"Send queued payroll email now"}</button>}
         </>}
       </section>}
       {tab==="leave"&&<section className="panel payroll-form"><h2>PTO / Vacation requests</h2><p>Your request appears on the Team calendar immediately as pending. Approved time off must also be included in the applicable store payroll submission. This tracks requests, not accrued leave balances.</p>
