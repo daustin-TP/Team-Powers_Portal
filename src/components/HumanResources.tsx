@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, FilePenLine, History, LockKeyhole, Plus, Save, ShieldCheck, UserRound } from "lucide-react";
+import { AlertTriangle, FilePenLine, History, LockKeyhole, Plus, Printer, Save, ShieldCheck, UserRound } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 
@@ -263,7 +263,10 @@ export default function HumanResources({ profile }: { profile: Profile }) {
   return <div className="page hr-page">
     <section className="page-header hr-header">
       <div><p className="eyebrow">Confidential employee records</p><h1>HR Action Logs</h1><p>Document disciplinary action securely and preserve a permanent record for each store.</p></div>
-      <button className="button primary" onClick={openNew}><Plus size={18} />New disciplinary action</button>
+      <div className="button-row">
+        <a className="button secondary" href="/forms/Team_Powers_Employee_Corrective_Action_Form.pdf" target="_blank" rel="noreferrer"><Printer size={18} />Print blank form</a>
+        <button className="button primary" onClick={openNew}><Plus size={18} />New disciplinary action</button>
+      </div>
     </section>
 
     <div className="hr-security-banner"><LockKeyhole size={22} /><div><strong>Restricted and permanent</strong><span>Managers see only records they submitted. District Managers and administrators have oversight and are the only roles permitted to edit. Records cannot be deleted.</span></div></div>
