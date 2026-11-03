@@ -28,6 +28,18 @@
   --dash-silver: #dce2e9;
 }
 
+@media print{
+  body.printing-team-evaluation .evaluation-print-score{gap:.12in;overflow:hidden}
+  body.printing-team-evaluation .evaluation-print-score b,body.printing-team-evaluation .evaluation-print-score span{flex:0 0 auto}
+  body.printing-team-evaluation .evaluation-print-score small{flex:1 1 auto;min-width:0;margin-left:auto;font-size:6pt;line-height:1.15;text-align:right;white-space:normal;overflow-wrap:anywhere}
+  body.printing-team-evaluation .evaluation-print-notes section{min-width:0;overflow:hidden}
+  body.printing-team-evaluation .evaluation-print-notes p{line-height:1.2;overflow-wrap:anywhere}
+  body.printing-team-evaluation .evaluation-print-wages{flex-wrap:wrap;gap:.06in .12in;overflow:hidden}
+  body.printing-team-evaluation .evaluation-print-wages span{overflow-wrap:anywhere}
+  body.printing-team-evaluation .evaluation-print-sheet footer{grid-template-columns:minmax(0,1fr) .55in minmax(0,1fr) .55in}
+  body.printing-team-evaluation .evaluation-print-sheet footer p{min-width:0}
+}
+
 /* Optional roster dates never block scheduling. */
 .roster-date-reminder{border-radius:999px;background:#fff4cf;color:#8a5b0d;padding:.42rem .7rem;font-size:.67rem;font-weight:900;white-space:nowrap}
 .anniversary-exception-toggle{display:flex;align-items:center;gap:.38rem;color:#5f7180;font-size:.64rem;font-weight:800;line-height:1.25}.anniversary-exception-toggle input{width:13px;height:13px;margin:0;flex:0 0 auto}.anniversary-exception-toggle.inline{margin-top:.25rem;max-width:150px}.anniversary-exception-date{display:grid;gap:.25rem;border-left:3px solid #8ebbd7;padding-left:.55rem}.anniversary-exception-date small{color:var(--muted);font-weight:500;line-height:1.3}.anniversary-exception-date.inline{margin-top:.25rem;max-width:150px;font-size:.6rem}.anniversary-exception-date.inline input{min-width:140px;padding:.42rem}.roster-hire-date-cell{display:grid;align-content:start;gap:.15rem}
