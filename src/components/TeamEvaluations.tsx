@@ -72,10 +72,11 @@ export default function TeamEvaluations({ profile }: { profile: Profile }) {
   const dueCandidates = useMemo(() => members.flatMap((member): DueCandidate[] => {
     const detail = details.find((item) => item.member_id === member.id);
     const employmentDate = detail?.rehire_date || detail?.hire_date;
-    if (!employmentDate) return [];
-    const ninetyDay = addDays(employmentDate, 90);
-    const anniversarySource = detail?.evaluation_anniversary || employmentDate;
-    const yearsEmployed = fromIso(today).getFullYear() - fromIso(employmentDate).getFullYear();
+    const evaluationStartDate = detail?.evaluation_anniversary || employmentDate;
+    if (!evaluationStartDate) return [];
+    const ninetyDay = addDays(evaluationStartDate, 90);
+    const anniversarySource = evaluationStartDate;
+    const yearsEmployed = fromIso(today).getFullYear() - fromIso(evaluationStartDate).getFullYear();
     const completedNinetyDay = evaluations.some((item) => item.member_id === member.id && item.evaluation_type === "90_day" && item.status === "completed");
     let type: Evaluation["evaluation_type"] = yearsEmployed < 1 && !completedNinetyDay ? "90_day" : "annual";
     let dueDate = type === "90_day" ? ninetyDay : annualDate(anniversarySource, fromIso(today).getFullYear());
