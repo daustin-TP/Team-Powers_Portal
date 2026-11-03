@@ -114,9 +114,28 @@ export default function TeamEvaluations({ profile }: { profile: Profile }) {
   };
   const printEvaluation = () => {
     if (!selected) return;
+    const source = document.querySelector<HTMLElement>(".evaluation-print-sheet");
+    if (!source) return;
+    const printPortal = document.createElement("div");
+    printPortal.className = "evaluation-print-portal";
+    printPortal.appendChild(source.cloneNode(true));
+    const pageStyle = document.createElement("style");
+    pageStyle.dataset.evaluationPrintPage = "true";
+    pageStyle.textContent = "@page { size: letter portrait; margin: 0.35in; }";
+    document.body.appendChild(printPortal);
+    document.head.appendChild(pageStyle);
     document.body.classList.add("printing-team-evaluation");
-    const cleanup = () => document.body.classList.remove("printing-team-evaluation");
-    window.addEventListener("afterprint", cleanup, { once: true }); window.print(); window.setTimeout(cleanup, 1500);
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      document.body.classList.remove("printing-team-evaluation");
+      printPortal.remove();
+      pageStyle.remove();
+    };
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+    window.setTimeout(cleanup, 60000);
   };
 
   return <div className="page evaluations-page">

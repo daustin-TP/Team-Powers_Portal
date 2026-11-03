@@ -3,6 +3,51 @@
   padding-right: 2.75rem;
 }
 
+.evaluation-print-portal {
+  display: none;
+}
+
+@media print {
+  body.printing-team-evaluation {
+    width: auto !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.printing-team-evaluation > *:not(.evaluation-print-portal) {
+    display: none !important;
+  }
+
+  body.printing-team-evaluation .evaluation-print-portal {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.printing-team-evaluation .evaluation-print-portal .evaluation-print-sheet {
+    page: auto !important;
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 10.3in !important;
+    min-height: 10.3in !important;
+    margin: 0 !important;
+    padding: 0.12in !important;
+    overflow: hidden !important;
+    break-after: avoid-page !important;
+    page-break-after: avoid !important;
+  }
+}
+
 @media (max-width: 650px) {
   .evaluation-editor-heading {
     padding-right: 2.25rem;
