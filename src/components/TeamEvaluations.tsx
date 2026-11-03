@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarCheck, CheckCircle2, ClipboardCheck, Clock3, Plus, Printer, Save, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
+import "./team-evaluations-fix.css";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Member = { id: string; store_id: string; display_name: string; active: boolean };

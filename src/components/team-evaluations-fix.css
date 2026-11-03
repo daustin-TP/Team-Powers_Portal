@@ -1,0 +1,10 @@
+.evaluation-editor-heading {
+  box-sizing: border-box;
+  padding-right: 2.75rem;
+}
+
+@media (max-width: 650px) {
+  .evaluation-editor-heading {
+    padding-right: 2.25rem;
+  }
+}
