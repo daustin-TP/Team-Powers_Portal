@@ -25,6 +25,11 @@ test('payroll validates each request type and limits pay changes to pay-period s
   assert.equal(m.validateEntries([pay],true,'2026-11-02','manager')[0].amount,'17.5');
   assert.throws(()=>m.validateEntries([{...pay,effective_date:'2026-10-26'}],true,'2026-11-02','manager'));
   assert.throws(()=>m.validateEntries([{section:'recognition',type:'Period Bonus',employee:'Test',position:'Manager',effective_date:'2026-11-02',amount:'100'}],true,'2026-11-02','manager'));
+  const miscellaneous={section:'pay',type:'Additional Payroll Update',employee:'',effective_date:'',details:'Correct the store payroll total after a duplicate entry.'};
+  assert.equal(m.validateEntries([miscellaneous],true,'2026-11-02','manager')[0].effective_date,'');
+  assert.equal(m.validateEntries([{...miscellaneous,effective_date:'2026-11-01'}],true,'2026-11-02','manager')[0].effective_date,'2026-11-01');
+  assert.throws(()=>m.validateEntries([{...miscellaneous,effective_date:'2026-02-30'}],true,'2026-11-02','manager'));
+  assert.throws(()=>m.validateEntries([{...miscellaneous,details:''}],true,'2026-11-02','manager'));
   assert.equal(m.validateEntries([]).length,0);
   assert.equal(m.validateEntries([{...entry,employee:'',effective_date:'',details:''}],false).length,1);
 });
@@ -37,6 +42,8 @@ test('one email groups by section, then store, and includes no-change confirmati
   assert.ok(content.indexOf('Alpha')<content.indexOf('Zulu'));
   assert.match(content,/No changes reported/);
   assert.match(content,/Period Bonus — Sample/);
+  const miscellaneous=m.emailBody('2026-11-02',[{store_name:'Alpha',entries:[{section:'pay',type:'Additional Payroll Update',employee:'',effective_date:'',details:'Correct duplicate payroll entry.'}]}]);
+  assert.match(miscellaneous,/Additional Payroll Update\nNo additional fields\nDescription: Correct duplicate payroll entry\./);
 });
 test('payroll email HTML uses DASH branding and escapes submitted text',()=>{
   const html=m.emailHtml('Payroll <Review>','A & B','https://dash.example/');
