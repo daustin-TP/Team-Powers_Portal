@@ -60,12 +60,12 @@ function handlerFor(role,active=true){
     profiles:[profile],profile_store_assignments:[],
     payroll_time_off:[
       {id:'own',requester_id:'user',requester_name:'Own',requester_role:role,store_id:'a',start_date:'2026-11-01',end_date:'2026-11-03',status:'pending',note:'private'},
-      {id:'gm-a',requester_id:'gm-a',requester_name:'GM A',requester_role:'manager',store_id:'a',start_date:'2026-11-01',end_date:'2026-11-03',status:'approved',note:'private'},
+      {id:'gm-a',requester_id:'gm-a',requester_name:'GM A',requester_role:'manager',store_id:'a',start_date:'2026-11-01',end_date:'2026-11-03',status:'pending',note:'private'},
       {id:'gm-b',requester_id:'gm-b',requester_name:'GM B',requester_role:'manager',store_id:'b',start_date:'2026-11-01',end_date:'2026-11-03',status:'pending',note:'private'},
       {id:'sup-a',requester_id:'sup-a',requester_name:'Other supervisor',requester_role:'supervisor',store_id:'a',start_date:'2026-11-01',end_date:'2026-11-03',status:'pending',note:'private'},
     ],
   };
-  const client={auth:{getUser:async()=>({data:{user:{id:'user'}},error:null})},from(name){
+  const client={auth:{getUser:async()=>({data:{user:{id:'user'}},error:null})},rpc:async()=>({data:{id:'reviewed'},error:null}),from(name){
     let rows=tables[name],single=false;
     return {select(){return this},eq(k,v){rows=rows.filter(r=>r[k]===v);return this},lte(k,v){rows=rows.filter(r=>r[k]<=v);return this},gte(k,v){rows=rows.filter(r=>r[k]>=v);return this},in(k,vs){rows=rows.filter(r=>vs.includes(r[k]));return this},maybeSingle(){single=true;return this},then(resolve){resolve({data:single?rows[0]:rows,error:null});}};
   }};
@@ -81,6 +81,16 @@ test('time-off calendar uses hierarchy and omits private notes',async()=>{
     const result=await response.json();assert.deepEqual(result.requests.map(r=>r.id),ids);
     assert.equal(result.requests.some(r=>'note' in r),false);
   }
+});
+test('time-off approvals follow administrator and District Manager hierarchy',async()=>{
+  const review=(id,status='approved')=>new Request('https://example.test',{method:'POST',headers:{Authorization:'Bearer user-token','Content-Type':'application/json'},body:JSON.stringify({action:'time_off_review',due_date:'2026-11-02',id,status})});
+  assert.equal((await handlerFor('admin')(review('gm-b'))).status,200);
+  const districtApproval=await handlerFor('supervisor')(review('gm-a'));
+  assert.equal(districtApproval.status,200,await districtApproval.text());
+  assert.equal((await handlerFor('supervisor')(review('gm-b'))).status,403);
+  assert.equal((await handlerFor('supervisor')(review('sup-a'))).status,403);
+  assert.equal((await handlerFor('manager')(review('gm-a'))).status,403);
+  assert.equal((await handlerFor('manager')(review('own','cancelled'))).status,200);
 });
 test('payroll rejects employees, accounting, inactive profiles and unauthenticated callers',async()=>{
   for(const role of ['employee','accounting'])assert.equal((await handlerFor(role)(calendarRequest())).status,403);

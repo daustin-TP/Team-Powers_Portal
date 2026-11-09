@@ -65,6 +65,7 @@ export async function handlePayroll(req: Request) {
     const assignments=await db.from("profile_store_assignments").select("store_id").eq("profile_id",p.id);check(assignments);
     const assigned=new Set([p.store_id,...(assignments.data??[]).map(a=>a.store_id)].filter(Boolean));
     const canSeeRequest=(r:any)=>r.requester_id===p.id || p.role==="admin" || (p.role==="supervisor" && r.requester_role==="manager" && assigned.has(r.store_id));
+    const canReviewRequest=(r:any)=>r.requester_id!==p.id && r.status==="pending" && (p.role==="admin" || (p.role==="supervisor" && r.requester_role==="manager" && assigned.has(r.store_id)));
     if(body.action==="calendar"){
       if(!/^\d{4}-\d{2}-\d{2}$/.test(body.start??"") || !/^\d{4}-\d{2}-\d{2}$/.test(body.end??""))return json({error:"Invalid calendar dates"},400);
       const requests=await db.from("payroll_time_off").select("*").lte("start_date",body.end).gte("end_date",body.start).in("status",["pending","approved"]);check(requests);
@@ -117,6 +118,13 @@ export async function handlePayroll(req: Request) {
       if(body.action==="time_off"){
         if(!["PTO","Vacation"].includes(body.kind) || !(Number(body.hours)>0) || Number(body.hours)>999999 || !body.start_date || !body.end_date || body.end_date<body.start_date || String(body.note??"").length>2000)throw Error("Enter valid time-off dates and hours.");
       }
+      if(body.action==="time_off_review"){
+        const request=await db.from("payroll_time_off").select("id,requester_id,requester_role,store_id,status").eq("id",String(body.id??"")).maybeSingle();check(request);
+        if(!request.data)return json({error:"Time-off request not found."},404);
+        const ownCancellation=body.status==="cancelled" && request.data.requester_id===p.id && request.data.status!=="declined";
+        const leadershipReview=["approved","declined"].includes(body.status) && canReviewRequest(request.data);
+        if(!ownCancellation&&!leadershipReview)return json({error:"You do not have permission to review this time-off request."},403);
+      }
       const result=await db.rpc("payroll_action",{actor:p.id,action:body.action,payload:body});
       if(result.error)return json({error:result.error.message},400);
       return json({ok:true,...result.data});
@@ -132,7 +140,7 @@ export async function handlePayroll(req: Request) {
     [st,su,tr,out].forEach(check);
     const stores=(st.data??[]).filter(s=>p.role==="admin" || assigned.has(s.id));
     const ids=new Set(stores.map(s=>s.id));
-    return json({ok:true,cycle,stores,submissions:(su.data??[]).filter(s=>ids.has(s.store_id)),requests:(tr.data??[]).filter(canSeeRequest),emails:out.data,email_ready:emailReady,
+    return json({ok:true,cycle,stores,submissions:(su.data??[]).filter(s=>ids.has(s.store_id)),requests:(tr.data??[]).filter(canSeeRequest).map(r=>({...r,can_review:canReviewRequest(r)})),emails:out.data,email_ready:emailReady,
       preview:p.role==="admin"?emailBody(body.due_date,su.data??[]):null});
   }catch(error){
     return json({error:error instanceof Error?error.message:"Payroll request failed."},400);

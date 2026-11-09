@@ -5,7 +5,7 @@ import { addDays, currentCycle, sections, type Entry } from "../../supabase/func
 
 type Store={id:string;name:string};
 type Submission={id:string;store_id:string;store_name:string;entries:Entry[];confirmed_sections:string[];status:string;review_note:string;submitted_at:string|null};
-type TimeOff={id:string;requester_id:string;requester_name:string;requester_role:string;store_id:string|null;kind:string;start_date:string;end_date:string;hours:number;status:string;review_note:string;note:string};
+type TimeOff={id:string;requester_id:string;requester_name:string;requester_role:string;store_id:string|null;kind:string;start_date:string;end_date:string;hours:number;status:string;review_note:string;note:string;can_review:boolean};
 type Data={cycle:{status:string};stores:Store[];submissions:Submission[];requests:TimeOff[];emails:{id:string;kind:string;recipient:string;status:string;last_error:string|null}[];email_ready:boolean;preview:string};
 const blank=(section:string,_due=""):Entry=>({section,type:sections.find(s=>s.key===section)!.types[0],employee:"",employee_id:"",effective_date:"",end_date:"",day_portion:"Full day",position:"",new_position:"",new_name:"",new_address:"",amount:"",hours:"",acknowledged:false,details:"",attachment_path:"",attachment_name:"",attachment_type:""});
 export default function PayrollCenter({profile}:{profile:Profile}){
@@ -179,7 +179,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
         </form>
         {data.requests.map(r=><article className="payroll-entry" key={r.id}><h3>{r.requester_name} · {r.kind} · {r.status}</h3><p>{r.start_date} – {r.end_date} · {r.hours} hours · {data.stores.find(s=>s.id===r.store_id)?.name??"Leadership"}</p><p>{r.note}</p>{r.review_note&&<p>Review: {r.review_note}</p>}
           {r.requester_id===profile.id&&["pending","approved"].includes(r.status)&&<button disabled={busy} className="button secondary" onClick={()=>void mutate({action:"time_off_review",id:r.id,status:"cancelled"},"Request cancelled and removed from the calendar.")}>Cancel request</button>}
-          {r.requester_id!==profile.id&&r.status==="pending"&&(admin||profile.role==="supervisor")&&<div className="button-row"><button disabled={busy} className="button primary" onClick={()=>void mutate({action:"time_off_review",id:r.id,status:"approved"},"Time off approved.")}>Approve request</button><button disabled={busy} className="button secondary" onClick={()=>{const note=window.prompt("Reason for declining");if(note!==null)void mutate({action:"time_off_review",id:r.id,status:"declined",review_note:note},"Request declined.");}}>Decline request</button></div>}
+          {r.can_review&&<div className="button-row"><button disabled={busy} className="button primary" onClick={()=>void mutate({action:"time_off_review",id:r.id,status:"approved"},"Time off approved.")}>Approve request</button><button disabled={busy} className="button secondary" onClick={()=>{const note=window.prompt("Reason for declining");if(note!==null)void mutate({action:"time_off_review",id:r.id,status:"declined",review_note:note},"Request declined.");}}>Decline request</button></div>}
         </article>)}
       </section>}
     </>}
