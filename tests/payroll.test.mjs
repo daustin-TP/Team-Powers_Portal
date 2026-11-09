@@ -25,8 +25,9 @@ test('payroll validates each request type and limits pay changes to pay-period s
   assert.equal(m.validateEntries([pay],true,'2026-11-02','manager')[0].amount,'17.5');
   assert.throws(()=>m.validateEntries([{...pay,effective_date:'2026-10-26'}],true,'2026-11-02','manager'));
   assert.throws(()=>m.validateEntries([{section:'recognition',type:'Period Bonus',employee:'Test',position:'Manager',effective_date:'2026-11-02',amount:'100'}],true,'2026-11-02','manager'));
-  const miscellaneous={section:'pay',type:'Additional Payroll Update',employee:'',effective_date:'',details:'Correct the store payroll total after a duplicate entry.'};
+  const miscellaneous={section:'additional',type:'Additional Payroll Update',employee:'',effective_date:'',details:'Correct the store payroll total after a duplicate entry.'};
   assert.equal(m.validateEntries([miscellaneous],true,'2026-11-02','manager')[0].effective_date,'');
+  assert.equal(m.validateEntries([{...miscellaneous,section:'pay'}],true,'2026-11-02','manager')[0].section,'additional');
   assert.equal(m.validateEntries([{...miscellaneous,effective_date:'2026-11-01'}],true,'2026-11-02','manager')[0].effective_date,'2026-11-01');
   assert.throws(()=>m.validateEntries([{...miscellaneous,effective_date:'2026-02-30'}],true,'2026-11-02','manager'));
   assert.throws(()=>m.validateEntries([{...miscellaneous,details:''}],true,'2026-11-02','manager'));
@@ -38,7 +39,8 @@ test('one email groups by section, then store, and includes no-change confirmati
     {store_name:'Zulu',entries:[]},
     {store_name:'Alpha',entries:[{section:'recognition',type:'Period Bonus',employee:'Sample',employee_id:'',effective_date:'2026-11-01',amount:'100',hours:'',details:'Period bonus'}]},
   ]);
-  assert.ok(content.indexOf('TEAM MEMBER PAY')<content.indexOf('LEADERSHIP BONUSES'));
+  assert.ok(content.indexOf('TEAM MEMBER PAY')<content.indexOf('ADDITIONAL PAYROLL UPDATES'));
+  assert.ok(content.indexOf('ADDITIONAL PAYROLL UPDATES')<content.indexOf('MANAGEMENT BONUSES'));
   assert.ok(content.indexOf('Alpha')<content.indexOf('Zulu'));
   assert.match(content,/No changes reported/);
   assert.match(content,/Period Bonus — Sample/);

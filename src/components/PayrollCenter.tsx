@@ -42,7 +42,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
     finally{if(seq.current===request)setLoading(false);}
   }
   useEffect(()=>{void load();return()=>{seq.current++;};},[due,profile.id]);
-  useEffect(()=>{const savedEntries=selected?.entries??[];const savedConfirmed=selected?.confirmed_sections??[];setEntries(savedEntries.map(entry=>({...blank(entry.section,due),...entry,acknowledged:Boolean(entry.acknowledged)})));setConfirmed(savedConfirmed);setNoChanges(Boolean(selected&&savedEntries.length===0&&requiredSectionKeys.every(key=>savedConfirmed.includes(key))));setReview(selected?.review_note??"");setDirty(false);},[store,data,due]);
+  useEffect(()=>{const savedEntries=selected?.entries??[];const savedConfirmed=selected?.confirmed_sections??[];const migratedConfirmed=selected&&["submitted","approved"].includes(selected.status)&&!savedConfirmed.includes("additional")?[...savedConfirmed,"additional"]:savedConfirmed;setEntries(savedEntries.map(entry=>{const normalizedSection=entry.type==="Additional Payroll Update"?"additional":entry.section;return {...blank(normalizedSection,due),...entry,section:normalizedSection,acknowledged:Boolean(entry.acknowledged)};}));setConfirmed(migratedConfirmed);setNoChanges(Boolean(selected&&savedEntries.length===0&&requiredSectionKeys.every(key=>migratedConfirmed.includes(key))));setReview(selected?.review_note??"");setDirty(false);},[store,data,due]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue="";}};window.addEventListener("beforeunload",warn);return()=>window.removeEventListener("beforeunload",warn);},[dirty]);
   const leaveDraft=()=>!dirty || window.confirm("Discard your unsaved payroll edits?");
   async function mutate(payload:Record<string,unknown>,success:string){
@@ -146,6 +146,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
           <p>Confirm every section, even when there are no changes. For direct deposit, record that the secure update was completed; do not enter bank account or routing numbers here.</p>
           {visibleSections.map(section=><fieldset key={section.key} disabled={locked||busy}>
             <legend>{section.title}</legend>
+            {section.key==="recognition"&&<div className="payroll-security-note"><strong>Management bonus reminder</strong><span>All bonuses are reviewed before submission. Enter bonuses here only as a reminder to payroll when they are due. For OA or Food Safety bonuses, include the Manager in Charge at the time of the evaluation.</span></div>}
             {entries.map((entry,index)=>entry.section!==section.key?null:<div className="payroll-entry" key={index}>
               {entryFields(entry,index)}
               <button type="button" className="button secondary" onClick={()=>{setEntries(es=>es.filter((_,i)=>i!==index));setDirty(true);}}>Remove entry</button>

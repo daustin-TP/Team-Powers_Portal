@@ -1,8 +1,9 @@
 export const sections = [
-  { key: "pay", title: "Team Member Pay and Position Updates", types: ["PTO / Vacation", "Position Change / Promotion", "Pay Rate Change", "Additional Hours", "Shift Coverage Bonus", "Additional Payroll Update"] },
+  { key: "pay", title: "Team Member Pay and Position Updates", types: ["PTO / Vacation", "Position Change / Promotion", "Pay Rate Change", "Additional Hours", "Shift Coverage Bonus"] },
   { key: "information", title: "Team Member Information Updates", types: ["Address Change", "Legal Name Change", "Direct Deposit Update"] },
   { key: "deductions", title: "Donations and Deductions", types: ["Partners Foundation Payroll Deduction"] },
-  { key: "recognition", title: "Leadership Bonuses", types: ["5 Star OA Bonus", "Food Safety Bonus", "Other Bonus", "Period Bonus"] },
+  { key: "additional", title: "Additional Payroll Updates", types: ["Additional Payroll Update"] },
+  { key: "recognition", title: "Management Bonuses", types: ["5 Star OA Bonus", "Food Safety Bonus", "Other Bonus", "Period Bonus"] },
 ] as const;
 export type Entry = {
   section: string; type: string; employee: string; employee_id: string;
@@ -28,10 +29,12 @@ export function validateEntries(entries: unknown, complete = true, due = "", rol
   if (!Array.isArray(entries) || entries.length > 250) throw Error("Use up to 250 entries per store.");
   return entries.map((raw, index) => {
     const entry = raw as Record<string, unknown>;
-    const section = sections.find(s => s.key === entry.section);
+    const normalizedSection = entry.type === "Additional Payroll Update" ? "additional" : String(entry.section ?? "");
+    const section = sections.find(s => s.key === normalizedSection);
     if (!section || !(section.types as readonly string[]).includes(String(entry.type ?? ""))) throw Error("Choose a valid payroll section and update type.");
-    if (section.key === "recognition" && !["supervisor","admin"].includes(role)) throw Error("Leadership bonuses are available only to District Managers and administrators.");
+    if (section.key === "recognition" && !["supervisor","admin"].includes(role)) throw Error("Management bonuses are available only to District Managers and administrators.");
     const clean = Object.fromEntries(textKeys.map(key => [key, String(entry[key] ?? "").trim()])) as unknown as Entry;
+    clean.section = normalizedSection;
     clean.acknowledged = entry.acknowledged === true;
     if (Object.values(clean).some(v => typeof v === "string" && v.length > 2000)) throw Error(`Entry ${index + 1} is too long.`);
     for (const key of ["amount", "hours"] as const) if (clean[key] && (!Number.isFinite(Number(clean[key])) || Number(clean[key]) < 0)) throw Error("Amounts and hours must be positive numbers or zero.");
@@ -76,7 +79,7 @@ function entryText(e: Entry) {
 export function emailBody(due: string, submissions: { store_name: string; entries: Entry[] }[]) {
   return `PAYROLL — due ${due} at 4:00 p.m. America/Chicago\nPay period: ${addDays(due,-14)} through ${addDays(due,-1)}\n\n` +
     sections.map(section => `${section.title.toUpperCase()}\n\n` + [...submissions].sort((a,b)=>a.store_name.localeCompare(b.store_name)).map(store =>
-      `${store.store_name}\n` + (store.entries.filter(e=>e.section===section.key).map(entryText).join("\n\n") || "No changes reported.") + "\n"
+      `${store.store_name}\n` + (store.entries.filter(e=>section.key === "additional" ? e.type === "Additional Payroll Update" : e.section===section.key && e.type !== "Additional Payroll Update").map(entryText).join("\n\n") || "No changes reported.") + "\n"
     ).join("\n")).join("\n\n");
 }
 
