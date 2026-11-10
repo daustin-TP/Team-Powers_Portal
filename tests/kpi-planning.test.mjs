@@ -37,9 +37,9 @@ test('regional report flags poor outliers and missed goals, never missing values
  assert.equal(planning.validateActions([...actions,actions[0]],new Set(stores.map(s=>s.id))),false);
  assert.equal(planning.validateActions([{...actions[0],due_date:'2026-02-30'}],new Set(stores.map(s=>s.id))),false);
 });
-function handler(profile,plan) {
- const tables={profiles:[profile,{id:'reviewer',role:'admin',active:true}],kpi_regional_plans:[plan],kpi_weekly_results:[]};
- const client={auth:{getUser:async()=>({data:{user:{id:profile.id}}})},from(name){let rows=tables[name],patch=null,single=false;return {select(){return this},eq(k,v){rows=rows.filter(r=>r[k]===v);return this},in(k,v){rows=rows.filter(r=>v.includes(r[k]));return this},gt(){return this},lte(){return this},order(){return this},limit(){return this},single(){single=true;return this},maybeSingle(){single=true;return this},update(p){patch=p;return this},then(resolve){if(patch)rows.forEach(r=>Object.assign(r,patch));resolve({data:single?rows[0]??null:rows,error:null});}};}};
+function handler(profile,plan,history=[]) {
+ const tables={profiles:[profile,{id:'reviewer',role:'admin',active:true}],kpi_regional_plans:[plan],kpi_weekly_results:history};
+ const client={auth:{getUser:async()=>({data:{user:{id:profile.id}}})},from(name){let rows=tables[name],patch=null,single=false;return {select(){return this},eq(k,v){rows=rows.filter(r=>r[k]===v);return this},in(k,v){rows=rows.filter(r=>v.includes(r[k]));return this},gt(k,v){rows=rows.filter(r=>r[k]>v);return this},gte(k,v){rows=rows.filter(r=>r[k]>=v);return this},lte(k,v){rows=rows.filter(r=>r[k]<=v);return this},order(){return this},limit(){return this},single(){single=true;return this},maybeSingle(){single=true;return this},update(p){patch=p;return this},then(resolve){if(patch)rows.forEach(r=>Object.assign(r,patch));resolve({data:single?rows[0]??null:rows,error:null});}};}};
  return load('../supabase/functions/kpi-plans/index.ts',{require:n=>n.includes('analytics')?analytics:n.includes('goals')?goals:n.includes('planning')?planning:{createClient:()=>client},Deno:{env:{get:()=>''},serve(){}},Response,console}).handlePlans;
 }
 const request=body=>new Request('https://example.test',{method:'POST',headers:{Authorization:'Bearer test','Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -70,3 +70,11 @@ test('supervisor progress cannot rewrite released instructions or close a report
  assert.equal(p.actions[0].action,'Coach');assert.equal(p.actions[0].outcome,'Improved');
 });
 
+
+test('report history is scoped to assigned stores and follow-up results stay after baseline',async()=>{
+ const p=makePlan();p.status='released';
+ const history=[{store_id:'s',week_end:'2026-10-11'},{store_id:'s',week_end:'2026-10-18'},{store_id:'s',week_end:'2026-10-25'},{store_id:'other',week_end:'2026-10-25'},{store_id:'s',week_end:'2026-01-01'},{store_id:'s',week_end:'2026-12-01'}];
+ const h=handler({id:'sup',role:'supervisor',active:true},p,history);
+ const response=await h(request({action:'results',id:'p'}));assert.equal(response.status,200);
+ const data=await response.json();assert.deepEqual(data.history.map(r=>r.week_end),['2026-10-11','2026-10-18','2026-10-25']);assert.deepEqual(data.results.map(r=>r.week_end),['2026-10-25']);
+});

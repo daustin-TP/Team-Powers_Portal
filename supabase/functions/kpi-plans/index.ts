@@ -56,9 +56,9 @@ export async function handlePlans(req:Request) {
   const plan=existing.data;
   if(!admin&&(plan.supervisor_id!==profile.id||!['released','closed'].includes(plan.status))) return json({error:'Report not available.'},403);
   if(body.action==='results') {
-   const result=await db.from('kpi_weekly_results').select('store_id,week_end,metrics').in('store_id',plan.snapshot.stores.map(s=>s.id)).gt('week_end',plan.week_end).lte('week_end',addDays(plan.followup_date,6)).order('week_end');
+   const result=await db.from('kpi_weekly_results').select('store_id,week_end,metrics').in('store_id',plan.snapshot.stores.map(s=>s.id)).gte('week_end',addDays(plan.week_end,-77)).lte('week_end',addDays(plan.followup_date,6)).order('week_end');
    if(result.error) throw result.error;
-   return json({ok:true,results:result.data});
+   return json({ok:true,results:(result.data??[]).filter(row=>row.week_end>plan.week_end),history:result.data??[]});
   }
   if(body.action!=='save'||plan.status==='closed') return json({error:'This report cannot be changed.'},400);
   const actions=body.actions;
