@@ -70,7 +70,7 @@ export async function handlePlans(req:Request) {
    if(body.status==='released'&&(plan.status!=='director_review'||plan.reviewer_id!==profile.id||body.reviewer_id!==plan.reviewer_id)) return json({error:'The assigned Director reviewer must review and release this report.'},403);
    if(body.reviewer_id) {const reviewer=await db.from('profiles').select('id').eq('id',body.reviewer_id).eq('role','admin').eq('active',true).single();if(reviewer.error) return json({error:'Select an active admin as Director reviewer.'},400);}
    if(body.status!=='draft'&&!body.reviewer_id) return json({error:'Assign the Director reviewer first.'},400);
-   if(body.status==='released'&&actions.some(a=>!a.owner.trim()||!a.action.trim())) return json({error:'Every action needs an owner and an action before release.'},400);
+   if(body.status==='released'&&actions.some(a=>!a.action.trim())) return json({error:'Every action needs instructions before release.'},400);
    for(const key of ['admin_notes','director_notes']) {if(typeof body[key]!=='string'||body[key].length>12000) return json({error:'Notes are too long.'},400);patch[key]=body[key];}
    Object.assign(patch,{actions,status:body.status,reviewer_id:body.reviewer_id||null});
    if(body.status==='released') patch.released_at=new Date().toISOString();

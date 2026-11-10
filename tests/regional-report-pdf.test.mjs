@@ -23,9 +23,9 @@ test('trend controls support 4 and 12 weeks, can omit graphs, and label unsaved 
  for(const weeks of [4,12])assert.match(buildRegionalReportPdf(plan,[],true,{history,trendWeeks:weeks}).output(),new RegExp(`${weeks}-week view`));
  const pdf=buildRegionalReportPdf(plan,[],true,{includeTrends:false}).output();assert.doesNotMatch(pdf,/week view/);assert.match(pdf,/UNSAVED DRAFT/);
 });
-test('long notes and ownership cells paginate without dropping their endings',()=>{
+test('long notes paginate and ownership is omitted',()=>{
  const longPlan={...plan,admin_notes:'Detailed leadership context. '.repeat(300)+'ADMINENDMARKER',actions:[{...plan.actions[0],owner:'Coverage responsibility '.repeat(150)+'OWNERENDMARKER'}]};
- const doc=buildRegionalReportPdf(longPlan,[],false,{includeTrends:false});const pdf=doc.output();assert.match(pdf,/ADMINENDMARKER/);assert.match(pdf,/OWNERENDMARKER/);
+ const doc=buildRegionalReportPdf(longPlan,[],false,{includeTrends:false});const pdf=doc.output();assert.match(pdf,/ADMINENDMARKER/);assert.doesNotMatch(pdf,/OWNERENDMARKER|Action ownership|Unassigned/);
  if(process.env.PDF_PREVIEW_OUTPUT)writeFileSync(process.env.PDF_PREVIEW_OUTPUT.replace('.pdf','-long.pdf'),Buffer.from(doc.output('arraybuffer')));
 });
 

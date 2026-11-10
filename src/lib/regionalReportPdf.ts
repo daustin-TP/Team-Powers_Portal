@@ -85,9 +85,6 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
  paragraph('Director of Ops / weekly priorities',plan.director_notes);
  paragraph('Admin context',plan.admin_notes);
  paragraph('Follow-up review',plan.followup_notes,'Review pending');
- title('Action ownership');
- if(!plan.actions.length)paragraph('Action plan','No store actions recorded.');
- else table(['Store / KPI','Owner','Due','Progress'],[117,75,33,42],plan.actions.map(a=>[{text:`${plan.snapshot.stores.find(s=>s.id===a.store_id)?.name??'Store'} / ${rankingMetrics.find(m=>m.key===a.metric)?.label??a.metric}`},{text:a.owner||'Unassigned'},{text:a.due_date},{text:stage(a.status),fill:a.status==='done'?greenFill:pale,color:a.status==='done'?green:ink}]));
 
  for(const store of plan.snapshot.stores) {
   newPage(`Store plan / ${store.store_number||store.name}`,false);
@@ -103,7 +100,7 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
    const weeks=options.trendWeeks??8;
    const dates=Array.from({length:weeks},(_,i)=>{const d=new Date(`${end}T12:00:00Z`);d.setUTCDate(d.getUTCDate()-(weeks-1-i)*7);return d.toISOString().slice(0,10);});
    const metrics=[...new Set(actions.map(a=>a.metric))];
-   room(90);title('Store trends');
+   room(24+Math.min(metrics.length,3)*68);title('Store trends');
    text(`${store.name} / ${weeks}-week view`,left,y+5,15,true);y+=13;
    for(const key of metrics){
     room(68);const m=rankingMetrics.find(m=>m.key===key)!;
@@ -125,7 +122,7 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
   if(!actions.length)paragraph('Store actions','No actions recorded for this store.');
   actions.forEach((a,index)=>{
    room(35);title(`Action ${index+1} / ${rankingMetrics.find(m=>m.key===a.metric)?.label??a.metric} / ${stage(a.status)}`);
-   paragraph(`Owner / due ${a.due_date}`,a.owner,'Unassigned');
+   text(`Due ${a.due_date}`,left,y+3,9,false,muted);y+=8;
    paragraph('What the team needs to do',a.action);
    if(a.note.trim())paragraph('Store-specific notes',a.note);
    paragraph('Outcome / evidence',a.outcome,'Awaiting supervisor update');

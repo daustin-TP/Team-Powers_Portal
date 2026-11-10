@@ -52,14 +52,14 @@ test('supervisors cannot read another region, unreleased drafts, or create repor
  assert.equal((await h(request({action:'results',id:'p'}))).status,403);
  const list=await (await h(request({action:'list'}))).json();assert.equal(list.plans.length,0);
 });
-test('only assigned director releases; release requires action owners; stale versions cannot overwrite',async()=>{
+test('only assigned director releases; release requires instructions, not owners; stale versions cannot overwrite',async()=>{
  const p=makePlan();
  const body={...p,action:'save',status:'released',admin_notes:'',director_notes:''};
  assert.equal((await handler({id:'other',role:'admin',active:true},p)(request(body))).status,403);
  const h=handler({id:'reviewer',role:'admin',active:true},p);
- assert.equal((await h(request({...body,actions:[{...p.actions[0],owner:''}]}))).status,400);
+ assert.equal((await h(request({...body,actions:[{...p.actions[0],action:''}]}))).status,400);
  assert.equal((await h(request({...body,version:0}))).status,409);
- assert.equal((await h(request(body))).status,200);assert.equal(p.status,'released');assert.equal(p.version,2);
+ assert.equal((await h(request({...body,actions:[{...p.actions[0],owner:''}]}))).status,200);assert.equal(p.status,'released');assert.equal(p.version,2);
 });
 test('supervisor progress cannot rewrite released instructions or close a report',async()=>{
  const p=makePlan();p.status='released';
