@@ -74,6 +74,7 @@ type ShiftChange = {
   changed_by_name: string;
   created_at: string;
 };
+type HistoricalShift = Pick<Shift, "week_plan_id" | "day_of_week" | "role" | "start_time" | "end_time" | "assigned_member_id">;
 type DayProjection = { day_of_week: number; projected_sales: number; projected_oven_items?: number; projected_deliveries?: number };
 type DemandInterval = {
   day_of_week: number;
@@ -305,6 +306,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [weeklySalesTarget, setWeeklySalesTarget] = useState("");
   const [quickAdjustment, setQuickAdjustment] = useState<{ day_of_week: number; all_day: boolean; start_time: string; end_time: string; method: "percent" | "add_dollars" | "set_total"; value: string; label: string }>({ day_of_week: 0, all_day: true, start_time: "16:00", end_time: "18:00", method: "percent", value: "", label: "" });
   const [generatingForecast, setGeneratingForecast] = useState(false);
+  const [autoFillHistoryWeeks, setAutoFillHistoryWeeks] = useState<number | null>(null);
+  const [autoFillingNames, setAutoFillingNames] = useState(false);
   const canCreateCompanyEvent = profile.role === "supervisor" || profile.role === "admin";
   const [eventForm, setEventForm] = useState<EventForm>(() => emptyEvent(mondayOfNextPlanningWeek(), "", canCreateCompanyEvent));
   const [selectedDay, setSelectedDay] = useState(0);
@@ -424,6 +427,16 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   }, [storeId, weekStart, canCreateCompanyEvent]);
 
   useEffect(() => {
+    if (!supabase || !storeId || storeId === "demo-5491") { setAutoFillHistoryWeeks(0); return; }
+    let cancelled = false;
+    setAutoFillHistoryWeeks(null);
+    void supabase.from("labor_week_plans").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("status", "published").lt("week_start", weekStart).then(({ count }) => {
+      if (!cancelled) setAutoFillHistoryWeeks(count ?? 0);
+    });
+    return () => { cancelled = true; };
+  }, [storeId, weekStart]);
+
+  useEffect(() => {
     if (!supabase || !planId || planId === "demo-plan") return;
     const channel = supabase.channel(`labor-plan-${planId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "labor_shifts", filter: `week_plan_id=eq.${planId}` }, () => {
@@ -472,6 +485,63 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     } else if (needsBreak) {
       setMessage(`${member?.display_name} assigned. This shift requires a 30-minute break.`);
     }
+  };
+  const autoFillScheduleNames = async () => {
+    if (!supabase || !planId || planId === "demo-plan" || (autoFillHistoryWeeks ?? 0) < 3) return;
+    const openShifts = shifts.filter((shift) => !shift.assigned_member_id);
+    if (!openShifts.length) { setMessage("Every shift already has an assigned employee."); return; }
+    if (!window.confirm("Suggest employees for the open shifts using published schedule history and this week’s availability? Existing assignments will be preserved.")) return;
+    setAutoFillingNames(true); setError(""); setMessage("");
+    const { data: historicalPlans, error: planHistoryError } = await supabase.from("labor_week_plans").select("id,week_start").eq("store_id", storeId).eq("status", "published").lt("week_start", weekStart).order("week_start", { ascending: false }).limit(12);
+    if (planHistoryError || !historicalPlans || historicalPlans.length < 3) { setError(planHistoryError?.message || "At least three published schedule weeks are required before names can be suggested."); setAutoFillingNames(false); return; }
+    const planIds = historicalPlans.map((plan) => plan.id);
+    const { data: historyData, error: historyError } = await supabase.from("labor_shifts").select("week_plan_id,day_of_week,role,start_time,end_time,assigned_member_id").in("week_plan_id", planIds).not("assigned_member_id", "is", null);
+    if (historyError) { setError(historyError.message); setAutoFillingNames(false); return; }
+    const history = (historyData ?? []) as HistoricalShift[];
+    const recency = new Map(planIds.map((id, index) => [id, 0.88 ** index]));
+    const planned = shifts.map((shift) => ({ ...shift }));
+    const weeklyHours = new Map(members.map((member) => [member.id, planned.filter((shift) => shift.assigned_member_id === member.id).reduce((sum, shift) => sum + shiftHours(shift), 0)]));
+    const assignments: Array<{ shift: Shift; memberId: string; confidence: number }> = [];
+    const orderedOpenShifts = [...openShifts].sort((left, right) => left.day_of_week - right.day_of_week || roleOrder[left.role] - roleOrder[right.role] || left.start_time.localeCompare(right.start_time));
+    for (const shift of orderedOpenShifts) {
+      const targetRange = shiftMinuteRange(shift);
+      const duration = shiftHours(shift);
+      const candidates = members.filter((member) => member.qualified_roles.includes(shift.role) && memberStatus(member, shift) === "✓").map((member) => {
+        const wouldOverlap = planned.some((other) => {
+          if (other.id === shift.id || other.day_of_week !== shift.day_of_week || other.assigned_member_id !== member.id) return false;
+          const otherRange = shiftMinuteRange(other);
+          return targetRange.start < otherRange.end && otherRange.start < targetRange.end;
+        });
+        if (wouldOverlap || (weeklyHours.get(member.id) ?? 0) + duration > 40) return { member, score: -1 };
+        const matches = history.filter((prior) => prior.assigned_member_id === member.id && prior.day_of_week === shift.day_of_week && prior.role === shift.role);
+        let score = matches.reduce((sum, prior) => {
+          const priorRange = shiftMinuteRange(prior);
+          const overlap = Math.max(0, Math.min(targetRange.end, priorRange.end) - Math.max(targetRange.start, priorRange.start));
+          const similarity = overlap / Math.max(15, targetRange.end - targetRange.start, priorRange.end - priorRange.start);
+          return sum + (recency.get(prior.week_plan_id) ?? 0.2) * (0.35 + similarity * 1.65);
+        }, 0);
+        score -= (weeklyHours.get(member.id) ?? 0) * 0.012;
+        if (member.is_minor && duration > minorShiftLimit) score -= 0.75;
+        return { member, score };
+      }).filter((candidate) => candidate.score > 0.75).sort((left, right) => right.score - left.score || (weeklyHours.get(left.member.id) ?? 0) - (weeklyHours.get(right.member.id) ?? 0));
+      const best = candidates[0];
+      if (!best) continue;
+      const confidence = Math.min(99, Math.round(55 + best.score * 10));
+      const plannedShift = planned.find((item) => item.id === shift.id)!;
+      plannedShift.assigned_member_id = best.member.id;
+      weeklyHours.set(best.member.id, (weeklyHours.get(best.member.id) ?? 0) + duration);
+      assignments.push({ shift, memberId: best.member.id, confidence });
+    }
+    if (!assignments.length) { setMessage("No open shifts had a strong enough historical match that also passed availability, overlap, and overtime checks."); setAutoFillingNames(false); return; }
+    const assignmentIds = new Map(assignments.map((item) => [item.shift.id, item.memberId]));
+    const rows = assignments.map(({ shift, memberId }) => ({ ...shift, assigned_member_id: memberId, updated_at: new Date().toISOString() }));
+    const { error: saveError } = await supabase.from("labor_shifts").upsert(rows, { onConflict: "id" });
+    if (saveError) { setError(saveError.message); setAutoFillingNames(false); return; }
+    setShifts((current) => current.map((shift) => assignmentIds.has(shift.id) ? { ...shift, assigned_member_id: assignmentIds.get(shift.id)! } : shift));
+    await returnPlanToDraft();
+    const breakCount = assignments.filter(({ shift, memberId }) => members.find((member) => member.id === memberId)?.is_minor && shiftHours(shift) > minorShiftLimit).length;
+    setMessage(`Suggested employees added to ${assignments.length} open shift${assignments.length === 1 ? "" : "s"} from ${historicalPlans.length} published weeks. Existing assignments were preserved.${breakCount ? ` ${breakCount} minor shift${breakCount === 1 ? " requires" : "s require"} a 30-minute break.` : ""} Review every suggestion before publishing.`);
+    setAutoFillingNames(false);
   };
   const updateShiftTime = async (shift: Shift, field: "start_time" | "end_time", value: string) => {
     if (!/^\d{2}:\d{2}$/.test(value)) { setError("Choose a valid shift time."); return; }
@@ -964,7 +1034,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         <>
           <section className="panel forecast-command-panel">
             <div><p className="eyebrow">Automatic weekly schedule</p><h2>Build minimum required shifts</h2><p>The engine uses historical sales, oven items, deliveries, recent trends, store settings, and scheduled events to create the minimum profitable staffing outline. Rebuilds preserve custom, edited, and assigned shifts, then fill uncovered demand around the manager’s work.</p></div>
-            <div className="forecast-command-actions"><label>Approved weekly sales target <span>Optional</span><div className="kpi-input-affix prefix"><span>$</span><input type="number" min="1" step="1" value={weeklySalesTarget} onChange={(event) => setWeeklySalesTarget(event.target.value)} placeholder="Use engine recommendation" /></div></label><button className="button primary" onClick={() => void generateForecast()} disabled={generatingForecast || !storeId}><CalendarClock size={17} />{generatingForecast ? "Building shifts…" : forecast ? "Rebuild required shifts" : "Build required shifts"}</button></div>
+            <div className="forecast-command-actions"><label>Approved weekly sales target <span>Optional</span><div className="kpi-input-affix prefix"><span>$</span><input type="number" min="1" step="1" value={weeklySalesTarget} onChange={(event) => setWeeklySalesTarget(event.target.value)} placeholder="Use engine recommendation" /></div></label><button className="button primary" onClick={() => void generateForecast()} disabled={generatingForecast || !storeId}><CalendarClock size={17} />{generatingForecast ? "Building shifts…" : forecast ? "Rebuild required shifts" : "Build required shifts"}</button><div className="auto-fill-command"><button className="button secondary" onClick={() => void autoFillScheduleNames()} disabled={autoFillingNames || generatingForecast || !forecast || (autoFillHistoryWeeks ?? 0) < 3 || shifts.every((shift) => shift.assigned_member_id)}><Users size={17} />{autoFillingNames ? "Suggesting names…" : "Auto-fill names"}</button><small>{autoFillHistoryWeeks === null ? "Checking published history…" : autoFillHistoryWeeks < 3 ? `${autoFillHistoryWeeks} of 3 published weeks available` : `Uses up to ${Math.min(12, autoFillHistoryWeeks)} published weeks · optional`}</small></div></div>
           </section>
           <section className="panel quick-projection-panel">
             <div><p className="eyebrow">Day or time adjustment</p><h2>Adjust a specific part of the week</h2><p>Change by percent, add or subtract sales dollars, or set a new total. Sales, oven items, orders, and deliveries move together, then required shifts rebuild around the new demand.</p></div>
