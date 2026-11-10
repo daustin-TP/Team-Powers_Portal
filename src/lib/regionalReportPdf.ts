@@ -24,16 +24,16 @@ function change(current:number|null,baseline:number|null,key:RankingKey) {
 
 /** Browser download and preview tests use this same layout. No additional data is fetched. */
 export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=false,options:{includeTrends?:boolean;trendWeeks?:4|8|12;history?:Result[]}={}) {
- const pdf=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
- const left=15,width=267,bottom=192;
+ const pdf=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});
+ const left=12,width=186,bottom=278;
  let y=0,section='Regional overview';
  const text=(s:string,x:number,top:number,size=10,bold=false,color:RGB=ink)=>{pdf.setFont('helvetica',bold?'bold':'normal');pdf.setFontSize(size);pdf.setTextColor(...color);pdf.text(clean(s),x,top);};
  const wrap=(s:string,w:number,size=10)=>{pdf.setFont('helvetica','normal');pdf.setFontSize(size);return pdf.splitTextToSize(clean(s),w) as string[];};
  function heading(continued=false) {
-  pdf.setFillColor(...navy);pdf.rect(0,0,297,26,'F');
+  pdf.setFillColor(...navy);pdf.rect(0,0,210,26,'F');
   text('DASH / TEAM POWERS',left,10,10,true,[184,213,239]);
-  text(section+(continued?' / continued':''),left,20,19,true,[255,255,255]);
-  text(`${stage(plan.status)}${dirty?' / UNSAVED DRAFT':''}`,210,11,9,true,[255,255,255]);
+  text(section+(continued?' / continued':''),left,20,15,true,[255,255,255]);
+  text(`${stage(plan.status)}${dirty?' / UNSAVED DRAFT':''}`,125,10,8,true,[255,255,255]);
   text(`Results ${plan.week_end} | Follow-up ${plan.followup_date}`,left,33,10,false,muted);
   y=40;
  }
@@ -53,14 +53,17 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
  }
  type Cell={text:string;fill?:RGB;color?:RGB;bold?:boolean};
  function table(headers:string[],sizes:number[],rows:Cell[][]) {
-  function header(){room(18);pdf.setFillColor(...blue);pdf.rect(left,y,width,10,'F');let x=left;headers.forEach((h,i)=>{text(h,x+3,y+6.5,9,true,[255,255,255]);x+=sizes[i];});y+=10;}
-  header();
+  const total=sizes.reduce((sum,n)=>sum+n,0);sizes=sizes.map(n=>n*width/total);
+  const headerLines=headers.map((h,i)=>wrap(h,sizes[i]-4,8));
+  const headerHeight=Math.max(...headerLines.map(l=>l.length))*3.6+6;
+  function header(){room(headerHeight+12);pdf.setFillColor(...blue);pdf.rect(left,y,width,headerHeight,'F');let x=left;headerLines.forEach((lines,i)=>{lines.forEach((line,n)=>text(line,x+2,y+5+n*3.6,8,true,[255,255,255]));x+=sizes[i];});y+=headerHeight;}
+  room(headerHeight+40);header();
   rows.forEach((row,index)=>{
-   const lines=row.map((c,i)=>wrap(c.text,sizes[i]-6,10));const lineCount=Math.max(...lines.map(l=>l.length));let offset=0;
+   const lines=row.map((c,i)=>wrap(c.text,sizes[i]-4,9));const lineCount=Math.max(...lines.map(l=>l.length));let offset=0;
    if(y+Math.min(40,lineCount*4.6+6)>bottom){newPage();header();}
    do {
     const count=Math.min(lineCount-offset,Math.max(1,Math.floor((bottom-y-6)/4.6)));const height=Math.max(11,count*4.6+6);let x=left;
-    row.forEach((c,i)=>{pdf.setFillColor(...(c.fill??(index%2===0?[247,249,252]:[255,255,255]) as RGB));pdf.rect(x,y,sizes[i],height,'F');lines[i].slice(offset,offset+count).forEach((line,n)=>text(line,x+3,y+6+n*4.6,10,c.bold??false,c.color??ink));x+=sizes[i];});
+    row.forEach((c,i)=>{pdf.setFillColor(...(c.fill??(index%2===0?[247,249,252]:[255,255,255]) as RGB));pdf.rect(x,y,sizes[i],height,'F');lines[i].slice(offset,offset+count).forEach((line,n)=>text(line,x+2,y+6+n*4.6,9,c.bold??false,c.color??ink));x+=sizes[i];});
     pdf.setDrawColor(218,226,235);pdf.line(left,y+height,left+width,y+height);y+=height;offset+=count;
     if(offset<lineCount){newPage();header();}
    }while(offset<lineCount);
@@ -71,14 +74,14 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
  const completed=plan.actions.filter(a=>a.status==='done').length;
  const misses=plan.snapshot.stores.reduce((sum,s)=>sum+rankingMetrics.filter(m=>s.metrics[m.key].missed).length,0);
  text(`${plan.snapshot.stores.length} stores | ${misses} missed KPI goals | ${completed}/${plan.actions.length} actions complete`,left,y,10,false,muted);y+=6;
- const cardWidth=(width-18)/7;
- rankingMetrics.forEach((m,i)=>{const x=left+i*(cardWidth+3);pdf.setFillColor(...pale);pdf.roundedRect(x,y,cardWidth,26,2,2,'F');text(m.label,x+3,y+6,9,true,blue);text(value(plan.snapshot.summary.values[m.key],m.key),x+3,y+14,12,true);text(`${plan.snapshot.summary.counts[m.key]} reporting`,x+3,y+21,8,false,muted);});y+=32;
- text('Sales = region total. PCYA = comparable-store growth. Other KPIs = store averages.',left,y,9,false,muted);y+=7;
+ const cardWidth=(width-9)/4;const cardTop=y;
+ rankingMetrics.forEach((m,i)=>{const x=left+(i%4)*(cardWidth+3);y=cardTop+Math.floor(i/4)*29;pdf.setFillColor(...pale);pdf.roundedRect(x,y,cardWidth,26,2,2,'F');text(m.label,x+3,y+6,9,true,blue);text(value(plan.snapshot.summary.values[m.key],m.key),x+3,y+14,12,true);text(`${plan.snapshot.summary.counts[m.key]} reporting`,x+3,y+21,8,false,muted);});y=cardTop+61;
+ text('Sales = region total. PCYA = comparable-store growth. Other KPIs = store averages.',left,y,8,false,muted);y+=7;
  title('Store comparison');
- table(['Store',...rankingMetrics.map(m=>m.label)],[50,...rankingMetrics.map(()=>31)],plan.snapshot.stores.map(s=>[{text:`${s.name}${s.store_number?` / ${s.store_number}`:''}`,bold:true},...rankingMetrics.map(m=>{const v=s.metrics[m.key];return {text:`${value(v.value,m.key)}${v.missed?'\nMissed goal':''}${v.outlier?'\nOutlier':''}`,fill:v.missed?redFill:v.outlier?amberFill:undefined,color:v.missed?red:v.outlier?amber:ink};})]));
- room(14);text('Red: missed goal. Amber: unfavorable regional outlier. Labels remain visible when printed in grayscale.',left,y,9,false,muted);y+=5;text('Missing results are not treated as zero. Store pages show the targets and subsequent results.',left,y,9,false,muted);
+ for(const group of [rankingMetrics.slice(0,4),rankingMetrics.slice(4)])table(['Store',...group.map(m=>m.label)],[40,...group.map(()=>36)],plan.snapshot.stores.map(s=>[{text:`${s.name}${s.store_number?` / ${s.store_number}`:''}`,bold:true},...group.map(m=>{const v=s.metrics[m.key];return {text:`${value(v.value,m.key)}${v.missed?'\nMissed goal':''}${v.outlier?'\nOutlier':''}`,fill:v.missed?redFill:v.outlier?amberFill:undefined,color:v.missed?red:v.outlier?amber:ink};})]));
+ room(14);text('Red: missed goal. Amber: unfavorable regional outlier. Status is also shown in text.',left,y,8,false,muted);y+=5;text('Missing results are not treated as zero. Store pages show targets and subsequent results.',left,y,8,false,muted);y+=8;
 
- newPage('Leadership priorities',false);
+ room(60);title('Leadership priorities');
  paragraph('Director of Ops / weekly priorities',plan.director_notes);
  paragraph('Admin context',plan.admin_notes);
  paragraph('Follow-up review',plan.followup_notes,'Review pending');
@@ -100,7 +103,7 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
    const weeks=options.trendWeeks??8;
    const dates=Array.from({length:weeks},(_,i)=>{const d=new Date(`${end}T12:00:00Z`);d.setUTCDate(d.getUTCDate()-(weeks-1-i)*7);return d.toISOString().slice(0,10);});
    const metrics=[...new Set(actions.map(a=>a.metric))];
-   newPage(`Store trends / ${store.store_number||store.name}`,false);
+   room(90);title('Store trends');
    text(`${store.name} / ${weeks}-week view`,left,y+5,15,true);y+=13;
    for(const key of metrics){
     room(68);const m=rankingMetrics.find(m=>m.key===key)!;
@@ -115,9 +118,9 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
     if(goal!==null){pdf.setDrawColor(...amber);pdf.setLineDashPattern([2,2],0);pdf.line(chartX,py(goal),chartX+chartW,py(goal));pdf.setLineDashPattern([],0);}
     let previous:{x:number;y:number}|null=null;
     points.forEach((v,i)=>{text(dates[i].slice(5),px(i)-4,chartY+chartH+6,8,false,muted);if(v===null){previous=null;return;}const p={x:px(i),y:py(v)};pdf.setDrawColor(...blue);pdf.setLineWidth(.6);if(previous)pdf.line(previous.x,previous.y,p.x,p.y);pdf.setFillColor(...blue);pdf.circle(p.x,p.y,1.1,'F');previous=p;});pdf.setLineWidth(.2);
-    y=chartY+chartH+13;text(`Blue: actuals (${available.length}/${weeks} weeks reported). Gaps: missing data.${goal===null?'':' Dashed: original goal '+value(goal,key)+'.'}`,left,y,9,false,muted);y+=10;
+    y=chartY+chartH+13;text(`Blue: actuals (${available.length}/${weeks} weeks reported). Gaps: missing data.${goal===null?'':' Dashed: original goal '+value(goal,key)+'.'}`,left,y,8,false,muted);y+=10;
    }
-   newPage(`Store actions / ${store.store_number||store.name}`,false);
+   y+=3;
   }
   if(!actions.length)paragraph('Store actions','No actions recorded for this store.');
   actions.forEach((a,index)=>{
@@ -129,13 +132,14 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
    if(later.length)table(['Follow-up week','Actual','Original target','Movement from baseline'],[45,60,60,102],later.map(r=>{const actual=metricValue(r.metrics,a.metric);return [{text:r.week_end},{text:value(actual,a.metric)},{text:value(store.metrics[a.metric].goal,a.metric)},{text:change(actual,store.metrics[a.metric].value,a.metric)}];}));
   });
  }
- newPage('How to read this report',false);
+ title('How to read this report');
  paragraph('Goals and comparisons','The baseline is the selected completed results week. Its targets stay attached to that week. Later results are compared with that original baseline so the follow-up shows movement, not a new goal. Older weeks without saved targets may use estimates generated from earlier results.');
  paragraph('Regional outliers','An unfavorable outlier is more than 1.5 standard deviations from the region average, with at least four reporting stores. Outliers are signals for review, not proof of a cause. A store can meet its goal and still be an outlier.');
  paragraph('Reading changes','Sales, PCYA, and SPLH improve when higher. Labor, signed food variance, Load, and ADT improve when lower. Percentage changes are shown in percentage points. Missing observations are displayed as No data.');
  const pages=pdf.getNumberOfPages();
- for(let page=1;page<=pages;page++){pdf.setPage(page);pdf.setDrawColor(210,220,230);pdf.line(left,198,282,198);text(`${plan.snapshot.supervisor_name} | ${plan.week_end}${dirty?' | UNSAVED DRAFT':''}`,left,204,8,false,muted);text(`${page} / ${pages}`,268,204,8,false,muted);}
+ for(let page=1;page<=pages;page++){pdf.setPage(page);pdf.setDrawColor(210,220,230);pdf.line(left,284,198,284);text(`${plan.snapshot.supervisor_name} | ${plan.week_end}${dirty?' | UNSAVED DRAFT':''}`,left,290,8,false,muted);text(`${page} / ${pages}`,184,290,8,false,muted);}
  pdf.setProperties({title:`DASH Regional Report - ${plan.snapshot.supervisor_name} - ${plan.week_end}`,subject:'Regional KPI review and weekly action plan',creator:'DASH'});
  return pdf;
 }
+
 

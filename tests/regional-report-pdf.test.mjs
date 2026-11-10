@@ -16,7 +16,7 @@ const snapshot=planning.regionSnapshot(stores,history.filter(r=>r.week_end==='20
 const plan={supervisor_id:'sample',week_end:'2026-11-01',followup_date:'2026-11-16',status:'released',snapshot:{...snapshot,supervisor_name:'Sample District / Demonstration data'},admin_notes:'Focus on service consistency while maintaining sales growth. Confirm the staffing plan is aligned with the busiest dayparts.',director_notes:'Prioritize peak-hour deployment and make-line flow. Review each action with the GM, agree on an owner, and bring evidence to the next follow-up.',followup_notes:'Sales continue to improve. Service times need another week of observation before closing the plan.',actions:[{id:'a1',store_id:'a',metric:'sales',note:'Use local outreach to support the next school event.',action:'Review the dinner sales pattern and confirm local outreach by Friday.',owner:'North GM',due_date:'2026-11-13',status:'in_progress',outcome:'Outreach scheduled; results will be reviewed next Monday.'},{id:'a2',store_id:'a',metric:'adt',note:'Coach dispatch during peak periods.',action:'Observe Friday dinner dispatch and adjust driver deployment.',owner:'North GM / District Manager',due_date:'2026-11-13',status:'open',outcome:''},{id:'b1',store_id:'b',metric:'labor',note:'Avoid reducing coverage during the busiest hours.',action:'Align opening and shoulder shifts with demand; review overtime before posting.',owner:'South GM',due_date:'2026-11-13',status:'done',outcome:'Schedule reviewed and adjustments posted.'}]};
 test('formatted PDF includes snapshot, priorities, store actions and eight-week trends',()=>{
  const doc=buildRegionalReportPdf(plan,history.filter(r=>r.week_end>plan.week_end),false,{history});
- const pdf=doc.output();assert.match(pdf,/8-week view/);assert.match(pdf,/Store comparison/);assert.match(pdf,/Director of Ops/);assert.match(pdf,/Outcome/);assert.ok(doc.getNumberOfPages()>4);
+ const pdf=doc.output();assert.match(pdf,/8-week view/);assert.match(pdf,/Store comparison/);assert.match(pdf,/Director of Ops/);assert.match(pdf,/Outcome/);assert.ok(doc.internal.pageSize.getHeight()>doc.internal.pageSize.getWidth());assert.ok(doc.getNumberOfPages()<=7);
  if(process.env.PDF_PREVIEW_OUTPUT){mkdirSync(dirname(process.env.PDF_PREVIEW_OUTPUT),{recursive:true});writeFileSync(process.env.PDF_PREVIEW_OUTPUT,Buffer.from(doc.output('arraybuffer')));}
 });
 test('trend controls support 4 and 12 weeks, can omit graphs, and label unsaved output',()=>{
@@ -28,4 +28,5 @@ test('long notes and ownership cells paginate without dropping their endings',()
  const doc=buildRegionalReportPdf(longPlan,[],false,{includeTrends:false});const pdf=doc.output();assert.match(pdf,/ADMINENDMARKER/);assert.match(pdf,/OWNERENDMARKER/);
  if(process.env.PDF_PREVIEW_OUTPUT)writeFileSync(process.env.PDF_PREVIEW_OUTPUT.replace('.pdf','-long.pdf'),Buffer.from(doc.output('arraybuffer')));
 });
+
 
