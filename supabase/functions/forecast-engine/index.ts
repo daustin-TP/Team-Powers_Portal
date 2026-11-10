@@ -12,6 +12,7 @@ type ForecastRequest = {
   store_id?: string;
   week_start?: string;
   weekly_sales_target?: number | null;
+  reset_to_default?: boolean;
 };
 type BaselineSet = { id: string; weeks_count: number; period_end: string; season: "daylight" | "non_daylight" };
 type BaselineInterval = {
@@ -674,7 +675,7 @@ Deno.serve(async (request) => {
       return new Response(JSON.stringify({ ok: true, result }), { headers });
     }
     if (action !== "generate") throw new HttpError(400, "A valid forecast action is required.");
-    const result = await generateForecast(admin, user.id, body.store_id, body.week_start, body.weekly_sales_target ?? null);
+    const result = await generateForecast(admin, user.id, body.store_id, body.week_start, body.weekly_sales_target ?? null, body.reset_to_default === true);
     return new Response(JSON.stringify({ ok: true, result }), { headers });
   } catch (error) {
     console.error(error);
@@ -703,23 +704,24 @@ async function loadForecast(admin: ReturnType<typeof createClient>, storeId: str
   return { run, daily: daily ?? [], intervals: intervals ?? [] };
 }
 
-async function generateForecast(admin: ReturnType<typeof createClient>, userId: string, storeId: string, weekStart: string, manualWeeklySales: number | null) {
+async function generateForecast(admin: ReturnType<typeof createClient>, userId: string, storeId: string, weekStart: string, manualWeeklySales: number | null, resetToDefault = false) {
   const weekEnd = addDays(weekStart, 6);
   const season = isCentralDaylight(addDays(weekStart, 3)) ? "daylight" : "non_daylight";
   const historyStart = addDays(weekStart, -84);
   const kpiHistoryStart = addDays(weekStart, -420);
 
-  const [setsResult, recentResult, kpiResult, eventsResult, settingsResult, hoursResult, storeResult, adjustmentsResult] = await Promise.all([
+  const [setsResult, recentResult, kpiResult, eventsResult, historicalEventsResult, settingsResult, hoursResult, storeResult, adjustmentsResult] = await Promise.all([
     admin.from("labor_baseline_sets").select("id,weeks_count,period_end,season").eq("store_id", storeId).eq("active", true).order("period_end", { ascending: false }),
     admin.from("labor_metric_intervals").select("business_date,interval_start,royalty_sales,oven_items,delivery_orders,sales_source_batch_id,oven_source_batch_id,delivery_source_batch_id").eq("store_id", storeId).gte("business_date", historyStart).lt("business_date", weekStart),
     admin.from("kpi_weekly_results").select("week_end,metrics").eq("store_id", storeId).gte("week_end", kpiHistoryStart).lt("week_end", weekStart).order("week_end", { ascending: false }),
     admin.from("labor_scheduling_events").select("id,name,category,start_date,end_date,all_day,start_time,end_time,impact_mode,sales_lift_percent,order_count_lift_percent,oven_items_lift_percent,delivery_lift_percent").eq("status", "active").lte("start_date", weekEnd).gte("end_date", weekStart).or(`scope.eq.company,store_id.eq.${storeId}`),
+    admin.from("labor_scheduling_events").select("id,name,category,start_date,end_date,all_day,start_time,end_time,impact_mode,sales_lift_percent,order_count_lift_percent,oven_items_lift_percent,delivery_lift_percent").eq("status", "active").lt("end_date", weekStart).gte("start_date", historyStart).or(`scope.eq.company,store_id.eq.${storeId}`),
     admin.from("labor_store_settings").select("*").eq("store_id", storeId).maybeSingle(),
     admin.from("labor_store_hours").select("day_of_week,open_time,close_time").eq("store_id", storeId),
     admin.from("stores").select("id,name,store_number").eq("id", storeId).single(),
     admin.from("labor_interval_adjustments").select("scope,week_start,day_of_week,interval_start,handling,prep_minutes").eq("store_id", storeId).or(`scope.eq.recurring,and(scope.eq.week,week_start.eq.${weekStart})`),
   ]);
-  const firstError = setsResult.error || recentResult.error || kpiResult.error || eventsResult.error || settingsResult.error || hoursResult.error || storeResult.error || adjustmentsResult.error;
+  const firstError = setsResult.error || recentResult.error || kpiResult.error || eventsResult.error || historicalEventsResult.error || settingsResult.error || hoursResult.error || storeResult.error || adjustmentsResult.error;
   if (firstError) throw firstError;
 
   const allBaselineSets = (setsResult.data ?? []) as BaselineSet[];
@@ -806,6 +808,33 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     return Number(leftDay) - Number(rightDay) || leftTime.localeCompare(rightTime);
   });
   const events = (eventsResult.data ?? []) as SchedulingEvent[];
+  const historicalEvents = (historicalEventsResult.data ?? []) as SchedulingEvent[];
+  const normalizeEventName = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const learnedEventLifts = new Map<string, { sales: number; orders: number; oven: number; deliveries: number; occurrences: number }>();
+  for (const event of events.filter((item) => item.impact_mode === "learning")) {
+    const matches = historicalEvents.filter((prior) => prior.category === event.category && normalizeEventName(prior.name) === normalizeEventName(event.name));
+    if (!matches.length) continue;
+    const totals = { salesActual: 0, salesBase: 0, ovenActual: 0, ovenBase: 0, deliveryActual: 0, deliveryBase: 0 };
+    let occurrences = 0;
+    for (const prior of matches) {
+      let used = false;
+      for (const row of recentRows) {
+        if (!eventIncludesInterval(prior, row.business_date, row.interval_start)) continue;
+        const expected = baseline.get(keyFor(mondayIndex(row.business_date), row.interval_start));
+        if (!expected) continue;
+        if (row.sales_source_batch_id && expected.sales > 0) { totals.salesActual += Number(row.royalty_sales || 0); totals.salesBase += expected.sales; used = true; }
+        if (row.oven_source_batch_id && expected.oven > 0) { totals.ovenActual += Number(row.oven_items || 0); totals.ovenBase += expected.oven; used = true; }
+        if (row.delivery_source_batch_id && expected.deliveries > 0) { totals.deliveryActual += Number(row.delivery_orders || 0); totals.deliveryBase += expected.deliveries; used = true; }
+      }
+      if (used) occurrences += 1;
+    }
+    if (!occurrences) continue;
+    const lift = (actual: number, expected: number) => expected > 0 ? clamp((actual / expected) - 1, -0.9, 4) : 0;
+    const sales = lift(totals.salesActual, totals.salesBase);
+    const oven = lift(totals.ovenActual, totals.ovenBase);
+    const deliveries = lift(totals.deliveryActual, totals.deliveryBase);
+    learnedEventLifts.set(event.id, { sales, oven, deliveries, orders: totals.ovenBase > 0 ? oven : sales, occurrences });
+  }
   const eventAdjustments = events.map((event) => ({
     id: event.id, name: event.name, category: event.category, mode: event.impact_mode,
     dates: `${event.start_date}:${event.end_date}`,
@@ -813,6 +842,13 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     order_count_lift_percent: event.order_count_lift_percent,
     oven_items_lift_percent: event.oven_items_lift_percent,
     delivery_lift_percent: event.delivery_lift_percent,
+    learned_lift: learnedEventLifts.has(event.id) ? {
+      sales_lift_percent: round((learnedEventLifts.get(event.id)?.sales ?? 0) * 100, 1),
+      order_count_lift_percent: round((learnedEventLifts.get(event.id)?.orders ?? 0) * 100, 1),
+      oven_items_lift_percent: round((learnedEventLifts.get(event.id)?.oven ?? 0) * 100, 1),
+      delivery_lift_percent: round((learnedEventLifts.get(event.id)?.deliveries ?? 0) * 100, 1),
+      prior_occurrences: learnedEventLifts.get(event.id)?.occurrences ?? 0,
+    } : null,
   }));
 
   const rawIntervals: IntervalProjection[] = intervalKeys.map((key) => {
@@ -834,12 +870,6 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     let sales = blend("sales");
     let oven = blend("oven");
     let deliveries = blend("deliveries");
-    for (const event of events) {
-      if (event.impact_mode !== "manual" || !eventIncludesInterval(event, date, interval)) continue;
-      sales *= 1 + Number(event.sales_lift_percent || 0) / 100;
-      oven *= 1 + Number(event.oven_items_lift_percent || 0) / 100;
-      deliveries *= 1 + Number(event.delivery_lift_percent || 0) / 100;
-    }
     return {
       business_date: date, day_of_week: day, interval_start: `${interval}:00`,
       projected_sales: Math.max(0, sales), projected_orders: 0,
@@ -860,17 +890,36 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     ? Number(manualWeeklySales)
     : componentSales > 0 ? componentSales * (1 + momentum) : modeledSales;
   const salesScale = modeledSales > 0 ? recommendedSales / modeledSales : 1;
-  rawIntervals.forEach((row) => { row.projected_sales *= salesScale; });
+  // A manager-entered sales target changes the demand workload, not revenue alone.
+  // Keep oven production and delivery demand tied to the same scale unless an event
+  // supplies a metric-specific lift.
+  rawIntervals.forEach((row) => {
+    row.projected_sales *= salesScale;
+    row.projected_oven_items *= salesScale;
+    row.projected_deliveries *= salesScale;
+    // Day/time events are overlays on top of the approved weekly plan. Applying
+    // them after weekly scaling means a two-hour event actually increases or
+    // decreases those hours instead of being normalized out across the week.
+    for (const event of events) {
+      if (!eventIncludesInterval(event, row.business_date, row.interval_start)) continue;
+      const learned = learnedEventLifts.get(event.id);
+      if (event.impact_mode !== "manual" && !learned) continue;
+      row.projected_sales *= 1 + (learned?.sales ?? Number(event.sales_lift_percent || 0) / 100);
+      row.projected_oven_items *= 1 + (learned?.oven ?? Number(event.oven_items_lift_percent || 0) / 100);
+      row.projected_deliveries *= 1 + (learned?.deliveries ?? Number(event.delivery_lift_percent || 0) / 100);
+    }
+  });
 
   const weeklyOrders = weightedKpi("orders");
-  const orderBase = weeklyOrders > 0 ? weeklyOrders : recommendedSales / 23;
+  const orderBase = weeklyOrders > 0 ? weeklyOrders * salesScale : recommendedSales / 23;
   const salesTotal = rawIntervals.reduce((sum, row) => sum + row.projected_sales, 0) || 1;
   for (const row of rawIntervals) {
     row.projected_orders = orderBase * (row.projected_sales / salesTotal);
     for (const event of events) {
-      if (event.impact_mode === "manual" && eventIncludesInterval(event, row.business_date, row.interval_start)) {
-        row.projected_orders *= 1 + Number(event.order_count_lift_percent || 0) / 100;
-      }
+      if (!eventIncludesInterval(event, row.business_date, row.interval_start)) continue;
+      const learned = learnedEventLifts.get(event.id);
+      if (event.impact_mode === "manual") row.projected_orders *= 1 + Number(event.order_count_lift_percent || 0) / 100;
+      else if (learned) row.projected_orders *= 1 + learned.orders;
     }
   }
 
@@ -879,6 +928,24 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   const hours = new Map<number, { open: string; close: string }>(
     (hoursResult.data ?? []).map((row) => [Number(row.day_of_week), { open: String(row.open_time), close: String(row.close_time) }]),
   );
+  // A manual -100% window represents a known closure. When it covers the entire
+  // day or reaches the normal close, also change the operating window so the
+  // minimum manager/driver rules do not create coverage after the store closes.
+  for (let day = 0; day < 7; day += 1) {
+    const date = addDays(weekStart, day);
+    const storeHours = hours.get(day);
+    if (!storeHours) continue;
+    const closures = events.filter((event) => event.impact_mode === "manual" && Number(event.sales_lift_percent) <= -100 && date >= event.start_date && date <= event.end_date);
+    if (closures.some((event) => event.all_day || !event.start_time || !event.end_time)) { hours.delete(day); continue; }
+    const openMinute = timeMinutes(storeHours.open);
+    let closeMinute = businessMinute(storeHours.close, openMinute);
+    if (closeMinute === openMinute) closeMinute += 1440;
+    const earlyClose = closures
+      .map((event) => ({ start: businessMinute(event.start_time!, openMinute), end: businessMinute(event.end_time!, openMinute) }))
+      .filter((window) => window.end >= closeMinute - 15 && window.start > openMinute)
+      .sort((left, right) => left.start - right.start)[0];
+    if (earlyClose) hours.set(day, { ...storeHours, close: clockTime(earlyClose.start).slice(0, 5) });
+  }
 
   // Detect isolated demand spikes before staffing is calculated. A confirmed timed order keeps
   // the week's total oven volume intact but moves the excess into an advance preparation window.
@@ -964,7 +1031,8 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   score += Math.min(15, recentWeekKeys.size * 3);
   score += volatility === null ? 5 : 15 * (1 - clamp(volatility / 0.3, 0, 1));
   score += freshnessDays <= 14 ? 10 : freshnessDays <= 28 ? 6 : freshnessDays <= 56 ? 3 : 0;
-  const learningEvents = events.filter((event) => event.impact_mode === "learning").length;
+  const learnedEvents = events.filter((event) => event.impact_mode === "learning" && learnedEventLifts.has(event.id));
+  const learningEvents = events.filter((event) => event.impact_mode === "learning" && !learnedEventLifts.has(event.id)).length;
   score -= Math.min(15, learningEvents * 5);
   if (baselineFallbackUsed) score -= 20;
   score = round(clamp(score, 0, 100), 1);
@@ -986,6 +1054,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   if (transitionRowsUsed) reasons.push("Current-year post-clock-change interval results receive extra weight during the first four transition weeks");
   if (baselineFallbackUsed) reasons.push("Seasonal fallback lowers confidence until this store records its own post-change history");
   if (learningEvents) reasons.push(`${learningEvents} event${learningEvents === 1 ? " has" : "s have"} no learned lift yet`);
+  if (learnedEvents.length) reasons.push(`${learnedEvents.length} event${learnedEvents.length === 1 ? " uses" : "s use"} measured demand from prior matching occurrences`);
   if (manualWeeklySales) reasons.push("Manager-entered weekly sales target anchored the sales forecast");
 
   const uncertainty = clamp(0.05 + (100 - score) * 0.0025, 0.05, 0.3);
@@ -1042,6 +1111,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   if (dailyError || intervalError) throw dailyError ?? intervalError;
 
   const { data: existingPlan } = await admin.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle();
+  if (resetToDefault && existingPlan?.status === "published") throw new HttpError(409, "Published schedules cannot be reset. Return the schedule to draft first.");
   let planId: string | null = existingPlan?.id ?? null;
   let editedPlanPreserved = false;
   let rebuildSummary = { preserved_shifts: 0, replaced_system_shifts: 0, added_system_shifts: 0, deletion_protected_groups: 0 };
@@ -1052,6 +1122,12 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     }, { onConflict: "store_id,week_start" }).select("id").single();
     if (planError || !plan) throw planError ?? new Error("The labor week plan could not be prepared.");
     planId = plan.id;
+    if (resetToDefault) {
+      const { error: changeResetError } = await admin.from("labor_shift_changes").delete().eq("week_plan_id", plan.id);
+      if (changeResetError) throw changeResetError;
+      const { error: shiftResetError } = await admin.from("labor_shifts").delete().eq("week_plan_id", plan.id);
+      if (shiftResetError) throw shiftResetError;
+    }
     const planDaily = daily.map((row) => ({ week_plan_id: plan.id, day_of_week: row.day_of_week, projected_sales: row.projected_sales, projected_oven_items: Math.round(row.projected_oven_items), projected_deliveries: Math.round(row.projected_deliveries) }));
     const planIntervals = intervalRows.map((row) => ({
       week_plan_id: plan.id, day_of_week: row.day_of_week, interval_start: row.interval_start,
@@ -1114,7 +1190,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v11", manual_weekly_sales: manualWeeklySales, baseline_fallback_used: baselineFallbackUsed, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied, ignored_outliers_applied: ignoredOutliersApplied },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v11", manual_weekly_sales: manualWeeklySales, reset_to_default: resetToDefault, baseline_fallback_used: baselineFallbackUsed, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied, ignored_outliers_applied: ignoredOutliersApplied },
   });
 
   return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved, rebuild_summary: rebuildSummary };
