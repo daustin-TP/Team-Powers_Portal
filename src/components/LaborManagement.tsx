@@ -303,7 +303,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [events, setEvents] = useState<SchedulingEvent[]>([]);
   const [forecast, setForecast] = useState<ForecastRun | null>(null);
   const [weeklySalesTarget, setWeeklySalesTarget] = useState("");
-  const [quickAdjustment, setQuickAdjustment] = useState({ day_of_week: 0, all_day: true, start_time: "16:00", end_time: "18:00", percent: "", label: "" });
+  const [quickAdjustment, setQuickAdjustment] = useState<{ day_of_week: number; all_day: boolean; start_time: string; end_time: string; method: "percent" | "add_dollars" | "set_total"; value: string; label: string }>({ day_of_week: 0, all_day: true, start_time: "16:00", end_time: "18:00", method: "percent", value: "", label: "" });
   const [generatingForecast, setGeneratingForecast] = useState(false);
   const canCreateCompanyEvent = profile.role === "supervisor" || profile.role === "admin";
   const [eventForm, setEventForm] = useState<EventForm>(() => emptyEvent(mondayOfNextPlanningWeek(), "", canCreateCompanyEvent));
@@ -696,21 +696,40 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     await generateForecast(true);
   };
   const saveQuickAdjustment = async () => {
-    const percent = Number(quickAdjustment.percent);
-    if (!Number.isFinite(percent) || percent < -100 || percent > 500) { setError("Enter a projection adjustment from -100% through +500%."); return; }
+    const enteredValue = Number(quickAdjustment.value);
+    if (!Number.isFinite(enteredValue)) { setError("Enter a valid projection adjustment."); return; }
     if (!quickAdjustment.all_day && (!quickAdjustment.start_time || !quickAdjustment.end_time || quickAdjustment.start_time === quickAdjustment.end_time)) { setError("Choose a valid start and end time for the adjustment."); return; }
+    const intervalRange = shiftMinuteRange({ start_time: quickAdjustment.start_time, end_time: quickAdjustment.end_time });
+    const selectedIntervals = demandIntervals.filter((row) => {
+      if (row.day_of_week !== quickAdjustment.day_of_week) return false;
+      if (quickAdjustment.all_day) return true;
+      let minute = timeToMinutes(row.interval_start);
+      if (intervalRange.end > 1440 && minute < intervalRange.start) minute += 1440;
+      return minute >= intervalRange.start && minute < intervalRange.end;
+    });
+    const intervalSales = selectedIntervals.reduce((sum, row) => sum + Number(row.projected_sales || 0), 0);
+    const daySales = Number(projections.find((row) => row.day_of_week === quickAdjustment.day_of_week)?.projected_sales || 0);
+    const currentSales = quickAdjustment.all_day ? (intervalSales || daySales) : intervalSales;
+    if (quickAdjustment.method !== "percent" && currentSales <= 0) { setError("Build this week's projection before using a dollar adjustment."); return; }
+    const percent = quickAdjustment.method === "percent" ? enteredValue
+      : quickAdjustment.method === "add_dollars" ? (enteredValue / currentSales) * 100
+      : ((enteredValue / currentSales) - 1) * 100;
+    if (!Number.isFinite(percent) || percent < -100 || percent > 500) { setError("This adjustment must keep demand between −100% and +500% of the current projection."); return; }
     const date = addIsoDays(weekStart, quickAdjustment.day_of_week);
+    const methodDescription = quickAdjustment.method === "percent" ? `${enteredValue >= 0 ? "+" : ""}${enteredValue}%`
+      : quickAdjustment.method === "add_dollars" ? `${enteredValue >= 0 ? "+" : "−"}$${Math.abs(enteredValue).toLocaleString()}`
+      : `set to $${enteredValue.toLocaleString()}`;
     const payload = {
       scope: "store", store_id: storeId, name: quickAdjustment.label.trim() || `${days[quickAdjustment.day_of_week]} projection adjustment`, category: "operations",
       start_date: date, end_date: date, all_day: quickAdjustment.all_day, start_time: quickAdjustment.all_day ? null : quickAdjustment.start_time,
       end_time: quickAdjustment.all_day ? null : quickAdjustment.end_time, recurrence: "none", status: "active", impact_mode: "manual",
       sales_lift_percent: percent, order_count_lift_percent: percent, oven_items_lift_percent: percent, delivery_lift_percent: percent,
-      notes: `Quick scheduler adjustment: ${percent >= 0 ? "+" : ""}${percent}% across sales and workload.`, created_by: profile.id, updated_by: profile.id,
+      notes: `Quick scheduler adjustment: ${methodDescription}; calculated ${percent >= 0 ? "+" : ""}${percent.toFixed(2)}% across sales and workload from a $${currentSales.toFixed(2)} starting projection.`, created_by: profile.id, updated_by: profile.id,
     };
     if (!supabase) { setMessage("Demo projection adjustment saved."); return; }
     const { data, error: saveError } = await supabase.from("labor_scheduling_events").insert(payload).select("*").single();
     if (saveError || !data) { setError(saveError?.message || "The projection adjustment could not be saved."); return; }
-    setEvents((current) => [...current, data as SchedulingEvent]); setQuickAdjustment({ day_of_week: quickAdjustment.day_of_week, all_day: true, start_time: "16:00", end_time: "18:00", percent: "", label: "" });
+    setEvents((current) => [...current, data as SchedulingEvent]); setQuickAdjustment({ day_of_week: quickAdjustment.day_of_week, all_day: true, start_time: "16:00", end_time: "18:00", method: quickAdjustment.method, value: "", label: "" });
     await generateForecast();
   };
   const reuseEvent = (event: SchedulingEvent) => {
@@ -948,10 +967,11 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
             <div className="forecast-command-actions"><label>Approved weekly sales target <span>Optional</span><div className="kpi-input-affix prefix"><span>$</span><input type="number" min="1" step="1" value={weeklySalesTarget} onChange={(event) => setWeeklySalesTarget(event.target.value)} placeholder="Use engine recommendation" /></div></label><button className="button primary" onClick={() => void generateForecast()} disabled={generatingForecast || !storeId}><CalendarClock size={17} />{generatingForecast ? "Building shifts…" : forecast ? "Rebuild required shifts" : "Build required shifts"}</button></div>
           </section>
           <section className="panel quick-projection-panel">
-            <div><p className="eyebrow">Day or time adjustment</p><h2>Adjust a specific part of the week</h2><p>Use −100% for a closure. Sales, oven items, orders, and deliveries move together, then the required shifts rebuild around the new demand.</p></div>
+            <div><p className="eyebrow">Day or time adjustment</p><h2>Adjust a specific part of the week</h2><p>Change by percent, add or subtract sales dollars, or set a new total. Sales, oven items, orders, and deliveries move together, then required shifts rebuild around the new demand.</p></div>
             <div className="quick-projection-controls">
               <label>Day<select value={quickAdjustment.day_of_week} onChange={(event) => setQuickAdjustment({ ...quickAdjustment, day_of_week: Number(event.target.value) })}>{days.map((day, index) => <option key={day} value={index}>{day} · {formatScheduleDate(weekStart, index, true)}</option>)}</select></label>
-              <label>Adjustment %<input type="number" min="-100" max="500" step="1" value={quickAdjustment.percent} onChange={(event) => setQuickAdjustment({ ...quickAdjustment, percent: event.target.value })} placeholder="Example: 20 or -100" /></label>
+              <label>Adjustment type<select value={quickAdjustment.method} onChange={(event) => setQuickAdjustment({ ...quickAdjustment, method: event.target.value as typeof quickAdjustment.method, value: "" })}><option value="percent">Change by percent</option><option value="add_dollars">Add / subtract dollars</option><option value="set_total">Set new projected total</option></select></label>
+              <label>{quickAdjustment.method === "percent" ? "Percent change" : quickAdjustment.method === "add_dollars" ? "Sales dollars to add" : "New projected sales total"}<div className={quickAdjustment.method === "percent" ? "kpi-input-affix suffix" : "kpi-input-affix prefix"}>{quickAdjustment.method !== "percent" && <span>$</span>}<input type="number" step={quickAdjustment.method === "percent" ? "1" : "50"} value={quickAdjustment.value} onChange={(event) => setQuickAdjustment({ ...quickAdjustment, value: event.target.value })} placeholder={quickAdjustment.method === "percent" ? "20 or -100" : quickAdjustment.method === "add_dollars" ? "1000 or -500" : "5000"} />{quickAdjustment.method === "percent" && <span>%</span>}</div></label>
               <label>Reason<input value={quickAdjustment.label} onChange={(event) => setQuickAdjustment({ ...quickAdjustment, label: event.target.value })} placeholder="Thanksgiving, game, early close…" /></label>
               <label className="checkbox-line quick-all-day"><input type="checkbox" checked={quickAdjustment.all_day} onChange={(event) => setQuickAdjustment({ ...quickAdjustment, all_day: event.target.checked })} />Entire day</label>
               {!quickAdjustment.all_day && <><label>Starts<input type="time" step="900" value={quickAdjustment.start_time} onChange={(event) => setQuickAdjustment({ ...quickAdjustment, start_time: event.target.value })} /></label><label>Ends<input type="time" step="900" value={quickAdjustment.end_time} onChange={(event) => setQuickAdjustment({ ...quickAdjustment, end_time: event.target.value })} /></label></>}
