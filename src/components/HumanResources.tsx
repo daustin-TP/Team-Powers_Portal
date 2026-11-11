@@ -80,7 +80,6 @@ type FormState = {
   termination_date: string;
   employee_home_address: string;
   employee_position: string;
-  separation_reason: string;
   separation_classification: SeparationClassification | "";
   separation_reasons: string[];
   separation_description: string;
@@ -137,7 +136,6 @@ const emptyForm = (storeId = ""): FormState => ({
   termination_date: today(),
   employee_home_address: "",
   employee_position: "",
-  separation_reason: "",
   separation_classification: "",
   separation_reasons: [],
   separation_description: "",
@@ -154,6 +152,10 @@ const formatNumericDate = (value: string) => {
   return new Date(value).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric", timeZone: "America/Chicago" });
 };
 const formatTimestamp = (value: string) => new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+const derivedSeparationReason = (classification: SeparationClassification | "", reasons: string[]) => {
+  const label = classification ? classification.charAt(0).toUpperCase() + classification.slice(1) : "Other";
+  return reasons.length > 0 ? `${label} — ${reasons.join(", ")}` : `Separation classified as ${label}.`;
+};
 
 export default function HumanResources({ profile }: { profile: Profile }) {
   const canEdit = profile.role === "supervisor" || profile.role === "admin";
@@ -271,9 +273,13 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       return;
     }
     if (form.action_type === "termination") {
-      const required = [form.termination_hire_date, form.last_date_worked, form.termination_date, form.employee_home_address.trim(), form.employee_position.trim(), form.separation_reason.trim(), form.separation_classification, form.separation_description.trim(), form.manager_signature.trim()];
+      const required = [form.termination_hire_date, form.last_date_worked, form.termination_date, form.employee_home_address.trim(), form.employee_position.trim(), form.separation_classification, form.manager_signature.trim()];
       if (required.some((value) => !value) || !form.manager_signature_confirmed) {
         setMessage("Complete every required termination field and confirm the manager electronic signature before submitting.");
+        return;
+      }
+      if (form.separation_description.trim().length < 10) {
+        setMessage("Enter at least 10 characters in the description of circumstances.");
         return;
       }
       if (["discharge", "resignation"].includes(form.separation_classification) && form.separation_reasons.length === 0) {
@@ -294,7 +300,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       incident_date: form.action_type === "termination" ? form.termination_date : form.incident_date,
       action_type: form.action_type,
       policy_categories: form.action_type === "termination" ? ["other"] : form.policy_categories,
-      incident_summary: form.action_type === "termination" ? form.separation_reason.trim() : form.incident_summary.trim(),
+      incident_summary: form.action_type === "termination" ? form.separation_description.trim() : form.incident_summary.trim(),
       action_taken: form.action_type === "termination" ? `Employment separated — ${form.separation_classification}.` : form.action_taken.trim(),
       expectations: form.action_type === "termination" ? "" : form.expectations.trim(),
       follow_up_date: form.action_type === "termination" ? null : form.follow_up_date || null,
@@ -307,7 +313,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       termination_date: form.action_type === "termination" ? form.termination_date : null,
       employee_home_address: form.action_type === "termination" ? form.employee_home_address.trim() : "",
       employee_position: form.action_type === "termination" ? form.employee_position.trim() : "",
-      separation_reason: form.action_type === "termination" ? form.separation_reason.trim() : "",
+      separation_reason: form.action_type === "termination" ? derivedSeparationReason(form.separation_classification, form.separation_reasons) : "",
       separation_classification: form.action_type === "termination" ? form.separation_classification : null,
       separation_reasons: form.action_type === "termination" ? form.separation_reasons : [],
       separation_description: form.action_type === "termination" ? form.separation_description.trim() : "",
@@ -352,7 +358,6 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       termination_date: selected.termination_date ?? selected.incident_date,
       employee_home_address: selected.employee_home_address ?? "",
       employee_position: selected.employee_position ?? "",
-      separation_reason: selected.separation_reason ?? selected.incident_summary,
       separation_classification: selected.separation_classification ?? "",
       separation_reasons: selected.separation_reasons ?? [],
       separation_description: selected.separation_description ?? "",
@@ -364,7 +369,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
 
   const saveEdit = async () => {
     if (!supabase || !selected || !canEdit || saving) return;
-    if (form.action_type === "termination" && (!form.termination_hire_date || !form.last_date_worked || !form.termination_date || !form.employee_home_address.trim() || !form.employee_position.trim() || !form.separation_reason.trim() || !form.separation_classification || !form.separation_description.trim() || !form.manager_signature.trim() || !form.manager_signature_confirmed)) {
+    if (form.action_type === "termination" && (!form.termination_hire_date || !form.last_date_worked || !form.termination_date || !form.employee_home_address.trim() || !form.employee_position.trim() || !form.separation_classification || form.separation_description.trim().length < 10 || !form.manager_signature.trim() || !form.manager_signature_confirmed)) {
       setMessage("Complete every required termination field and confirm the manager electronic signature before saving.");
       return;
     }
@@ -381,7 +386,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       incident_date: form.action_type === "termination" ? form.termination_date : form.incident_date,
       action_type: form.action_type,
       policy_categories: form.action_type === "termination" ? ["other"] : form.policy_categories,
-      incident_summary: form.action_type === "termination" ? form.separation_reason.trim() : form.incident_summary.trim(),
+      incident_summary: form.action_type === "termination" ? form.separation_description.trim() : form.incident_summary.trim(),
       action_taken: form.action_type === "termination" ? `Employment separated — ${form.separation_classification}.` : form.action_taken.trim(),
       expectations: form.action_type === "termination" ? "" : form.expectations.trim(),
       follow_up_date: form.action_type === "termination" ? null : form.follow_up_date || null,
@@ -394,7 +399,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       termination_date: form.action_type === "termination" ? form.termination_date : null,
       employee_home_address: form.action_type === "termination" ? form.employee_home_address.trim() : "",
       employee_position: form.action_type === "termination" ? form.employee_position.trim() : "",
-      separation_reason: form.action_type === "termination" ? form.separation_reason.trim() : "",
+      separation_reason: form.action_type === "termination" ? derivedSeparationReason(form.separation_classification, form.separation_reasons) : "",
       separation_classification: form.action_type === "termination" ? form.separation_classification : null,
       separation_reasons: form.action_type === "termination" ? form.separation_reasons : [],
       separation_description: form.action_type === "termination" ? form.separation_description.trim() : "",
@@ -557,26 +562,25 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       <div className="panel-heading"><div><p className="eyebrow">{selected ? "District Manager edit" : "Permanent submission"}</p><h2>{selected ? `Update ${selected.employee_name}` : "Document disciplinary action"}</h2><p>{selected ? "Saving creates an immutable revision. Store and submitter ownership cannot be changed." : "Review carefully before submitting. Managers cannot edit a record after it is saved."}</p></div><AlertTriangle size={28} /></div>
       <div className="hr-form-grid">
         <label>Store<select value={form.store_id} disabled={Boolean(selected)} onChange={(event) => field("store_id", event.target.value)}><option value="">Select store</option>{stores.map((store) => <option key={store.id} value={store.id}>{storeName(store.id)}</option>)}</select></label>
-        <label>Roster employee <small>{form.action_type === "termination" ? "Required for termination" : "Recommended"}</small><select value={form.member_id} onChange={(event) => selectRosterMember(event.target.value)}><option value="">Enter name manually</option>{members.filter((member) => member.store_id === form.store_id && member.employment_status !== "terminated" && member.employment_status !== "archived").map((member) => <option key={member.id} value={member.id}>{member.display_name}{member.employment_status !== "active" ? ` · ${member.employment_status.replace("_", " ")}` : ""}</option>)}</select></label>
+        <label className={form.action_type === "termination" && !form.member_id ? "hr-required-missing" : undefined}>Roster employee <small>{form.action_type === "termination" ? "Required for termination" : "Recommended"}</small><select value={form.member_id} onChange={(event) => selectRosterMember(event.target.value)}><option value="">Enter name manually</option>{members.filter((member) => member.store_id === form.store_id && member.employment_status !== "terminated" && member.employment_status !== "archived").map((member) => <option key={member.id} value={member.id}>{member.display_name}{member.employment_status !== "active" ? ` · ${member.employment_status.replace("_", " ")}` : ""}</option>)}</select></label>
         <label>Employee name<input value={form.employee_name} readOnly={Boolean(form.member_id)} onChange={(event) => field("employee_name", event.target.value)} /></label>
         <label>Employee ID <small>Optional</small><input value={form.employee_identifier} onChange={(event) => field("employee_identifier", event.target.value)} /></label>
         {form.action_type !== "termination" && <label>Incident date<input type="date" value={form.incident_date} onChange={(event) => field("incident_date", event.target.value)} /></label>}
         <label>Action type<select value={form.action_type} onChange={(event) => { const actionType = event.target.value as ActionType; setForm((current) => ({ ...current, action_type: actionType, ...(actionType === "termination" ? { incident_date: current.termination_date || today(), termination_date: current.termination_date || today(), last_date_worked: current.last_date_worked || today() } : {}) })); }}>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{form.action_type === "termination" && <small>Submitting completes the legal separation record, removes the employee from active scheduling, and sends the test-only HR alert.</small>}</label>
         {form.action_type === "termination" ? <>
           <div className="wide hr-termination-notice"><LockKeyhole size={20} /><div><strong>Termination paperwork</strong><span>Required legal fields are preserved with the permanent HR record. Dates print as MM/DD/YYYY.</span></div></div>
-          <label>Hire date<input type="date" value={form.termination_hire_date} onChange={(event) => field("termination_hire_date", event.target.value)} /></label>
-          <label>Last date worked<input type="date" value={form.last_date_worked} onChange={(event) => field("last_date_worked", event.target.value)} /></label>
-          <label>Date terminated<input type="date" value={form.termination_date} onChange={(event) => field("termination_date", event.target.value)} /></label>
+          <label className={!form.termination_hire_date ? "hr-required-missing" : undefined}>Hire date<input type="date" value={form.termination_hire_date} onChange={(event) => field("termination_hire_date", event.target.value)} /></label>
+          <label className={!form.last_date_worked ? "hr-required-missing" : undefined}>Last date worked<input type="date" value={form.last_date_worked} onChange={(event) => field("last_date_worked", event.target.value)} /></label>
+          <label className={!form.termination_date ? "hr-required-missing" : undefined}>Date terminated<input type="date" value={form.termination_date} onChange={(event) => field("termination_date", event.target.value)} /></label>
           <label>Store location<input value={form.store_id ? terminationStoreName(form.store_id) : ""} readOnly /></label>
-          <label className="wide">Employee home address<textarea rows={2} value={form.employee_home_address} onChange={(event) => field("employee_home_address", event.target.value)} placeholder="Street, city, state, ZIP" /></label>
-          <label>Employee position<input value={form.employee_position} onChange={(event) => field("employee_position", event.target.value)} /></label>
-          <label>Classification of separation<select value={form.separation_classification} onChange={(event) => setForm((current) => ({ ...current, separation_classification: event.target.value as SeparationClassification, separation_reasons: [] }))}><option value="">Select classification</option><option value="discharge">Discharge</option><option value="layoff">Layoff</option><option value="resignation">Resignation</option><option value="other">Other</option></select></label>
-          <label className="wide">Reason for separation<textarea rows={3} value={form.separation_reason} onChange={(event) => field("separation_reason", event.target.value)} placeholder="Provide the primary reason for separation." /></label>
-          {form.separation_classification === "discharge" && <fieldset className="wide hr-category-selector"><legend>Reason for discharge <small>Select all that apply</small></legend><div>{["Conduct", "Attendance", "Performance", "Medical", "No Call/No Show"].map((reason) => <label key={reason} className={form.separation_reasons.includes(reason) ? "selected" : ""}><input type="checkbox" checked={form.separation_reasons.includes(reason)} onChange={() => toggleSeparationReason(reason)} /><span>{reason}</span></label>)}</div></fieldset>}
-          {form.separation_classification === "resignation" && <fieldset className="wide hr-category-selector"><legend>Reason for resignation <small>Select all that apply</small></legend><div>{["Relocation", "New Job", "Personal Reasons", "Retirement", "Medical", "School", "Family"].map((reason) => <label key={reason} className={form.separation_reasons.includes(reason) ? "selected" : ""}><input type="checkbox" checked={form.separation_reasons.includes(reason)} onChange={() => toggleSeparationReason(reason)} /><span>{reason}</span></label>)}</div></fieldset>}
-          <label className="wide">Description of circumstances of separation<textarea rows={6} value={form.separation_description} onChange={(event) => field("separation_description", event.target.value)} placeholder="State the facts, dates, prior conversations, and circumstances surrounding the separation." /></label>
-          <label>Manager electronic signature<input value={form.manager_signature} onChange={(event) => setForm((current) => ({ ...current, manager_signature: event.target.value, manager_signature_confirmed: false }))} placeholder="Type full legal name" /></label>
-          <label className="hr-signature-confirm"><input type="checkbox" checked={form.manager_signature_confirmed} onChange={(event) => field("manager_signature_confirmed", event.target.checked)} /><span>I certify that typing my name constitutes my electronic signature and that this report is accurate.</span></label>
+          <label className={`wide${!form.employee_home_address.trim() ? " hr-required-missing" : ""}`}>Employee home address<textarea rows={2} value={form.employee_home_address} onChange={(event) => field("employee_home_address", event.target.value)} placeholder="Street, city, state, ZIP" /></label>
+          <label className={!form.employee_position.trim() ? "hr-required-missing" : undefined}>Employee position<input value={form.employee_position} onChange={(event) => field("employee_position", event.target.value)} /></label>
+          <label className={!form.separation_classification ? "hr-required-missing" : undefined}>Classification of separation<select value={form.separation_classification} onChange={(event) => setForm((current) => ({ ...current, separation_classification: event.target.value as SeparationClassification, separation_reasons: [] }))}><option value="">Select classification</option><option value="discharge">Discharge</option><option value="layoff">Layoff</option><option value="resignation">Resignation</option><option value="other">Other</option></select></label>
+          {form.separation_classification === "discharge" && <fieldset className={`wide hr-category-selector${form.separation_reasons.length === 0 ? " hr-required-missing" : ""}`}><legend>Reason for discharge <small>Select all that apply</small></legend><div>{["Conduct", "Attendance", "Performance", "Medical", "No Call/No Show"].map((reason) => <label key={reason} className={form.separation_reasons.includes(reason) ? "selected" : ""}><input type="checkbox" checked={form.separation_reasons.includes(reason)} onChange={() => toggleSeparationReason(reason)} /><span>{reason}</span></label>)}</div></fieldset>}
+          {form.separation_classification === "resignation" && <fieldset className={`wide hr-category-selector${form.separation_reasons.length === 0 ? " hr-required-missing" : ""}`}><legend>Reason for resignation <small>Select all that apply</small></legend><div>{["Relocation", "New Job", "Personal Reasons", "Retirement", "Medical", "School", "Family"].map((reason) => <label key={reason} className={form.separation_reasons.includes(reason) ? "selected" : ""}><input type="checkbox" checked={form.separation_reasons.includes(reason)} onChange={() => toggleSeparationReason(reason)} /><span>{reason}</span></label>)}</div></fieldset>}
+          <label className={`wide${form.separation_description.trim().length < 10 ? " hr-required-missing" : ""}`}>Description of circumstances of separation <small>Minimum 10 characters</small><textarea rows={6} value={form.separation_description} onChange={(event) => field("separation_description", event.target.value)} placeholder="State the facts, dates, prior conversations, and circumstances surrounding the separation." /></label>
+          <label className={!form.manager_signature.trim() ? "hr-required-missing" : undefined}>Manager electronic signature<input value={form.manager_signature} onChange={(event) => setForm((current) => ({ ...current, manager_signature: event.target.value, manager_signature_confirmed: false }))} placeholder="Type full legal name" /></label>
+          <label className={`hr-signature-confirm${!form.manager_signature_confirmed ? " hr-required-missing" : ""}`}><input type="checkbox" checked={form.manager_signature_confirmed} onChange={(event) => field("manager_signature_confirmed", event.target.checked)} /><span>I certify that typing my name constitutes my electronic signature and that this report is accurate.</span></label>
           <label>Witnesses <small>Optional</small><input value={form.witnesses} onChange={(event) => field("witnesses", event.target.value)} /></label>
         </> : <>
           <fieldset className="wide hr-category-selector"><legend>Policy categories <small>Select all that apply</small></legend><div>{Object.entries(categoryLabels).map(([value, label]) => <label key={value} className={form.policy_categories.includes(value) ? "selected" : ""}><input type="checkbox" checked={form.policy_categories.includes(value)} onChange={() => togglePolicyCategory(value)} /><span>{label}</span></label>)}</div></fieldset>
