@@ -698,8 +698,19 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (statusDraft.status === "terminated" && !statusDraft.hr_action_id && !statusDraft.notes.trim()) { setError("Link a termination report or enter termination notes."); return; }
     if (statusDraft.status === "borrowed" && !statusDraft.home_store_id) { setError("Choose the borrowed employee’s home store."); return; }
     if (statusDraft.status !== "active" && shifts.some((shift) => shift.assigned_member_id === statusMember.id)) { setError("Remove this employee from the selected week’s shifts before changing them to a non-schedulable status."); return; }
-    const updated: TeamMember = { ...statusMember, employment_status: statusDraft.status, active: statusDraft.status === "active" || statusDraft.status === "borrowed", home_store_id: statusDraft.status === "borrowed" ? statusDraft.home_store_id : null, status_reason: statusDraft.reason.trim(), status_effective_date: statusDraft.effective_date, status_notes: statusDraft.notes.trim(), linked_hr_action_id: statusDraft.status === "terminated" ? (statusDraft.hr_action_id || null) : null };
-    if (supabase && statusMember.store_id !== demoStore.id) {
+    let linkedActionId = statusDraft.status === "terminated" ? statusDraft.hr_action_id : "";
+    if (supabase && statusMember.store_id !== demoStore.id && statusDraft.status === "terminated") {
+      if (!linkedActionId) {
+        const { data: generatedAction, error: actionError } = await supabase.from("hr_disciplinary_actions").insert({ store_id: statusMember.store_id, member_id: statusMember.id, employee_name: statusMember.display_name, employee_identifier: null, incident_date: statusDraft.effective_date, action_type: "termination", policy_categories: ["other"], incident_summary: statusDraft.reason.trim(), action_taken: statusDraft.notes.trim() || "Employment terminated.", expectations: "", follow_up_date: null, witnesses: "", acknowledgment_status: "not_required", status: "completed", confidential_notes: statusDraft.notes.trim(), submitted_by: profile.id, submitted_by_name: profile.fullName }).select("id").single();
+        if (actionError || !generatedAction) { setError(actionError?.message || "The termination report could not be created."); return; }
+        linkedActionId = generatedAction.id;
+        setStatusDraft((current) => ({ ...current, hr_action_id: linkedActionId }));
+      }
+      const notification = await supabase.functions.invoke("termination-notifications", { body: { action_id: linkedActionId, member_id: statusMember.id } });
+      if (notification.error) { setError("The termination report was saved, but roster processing or the test HR email failed. An administrator should review it before retrying."); return; }
+    }
+    const updated: TeamMember = { ...statusMember, employment_status: statusDraft.status, active: statusDraft.status === "active" || statusDraft.status === "borrowed", home_store_id: statusDraft.status === "borrowed" ? statusDraft.home_store_id : null, status_reason: statusDraft.reason.trim(), status_effective_date: statusDraft.effective_date, status_notes: statusDraft.notes.trim(), linked_hr_action_id: linkedActionId || null };
+    if (supabase && statusMember.store_id !== demoStore.id && statusDraft.status !== "terminated") {
       const { error: updateError } = await supabase.from("labor_team_members").update({ employment_status: updated.employment_status, active: updated.active, home_store_id: updated.home_store_id, status_reason: updated.status_reason, status_effective_date: updated.status_effective_date, status_notes: updated.status_notes, linked_hr_action_id: updated.linked_hr_action_id, status_changed_by: profile.id, status_changed_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", statusMember.id);
       if (updateError) { setError(updateError.message); return; }
     }
