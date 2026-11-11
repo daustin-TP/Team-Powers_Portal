@@ -22,3 +22,9 @@ test("evaluations remain due through seven days after the qualifying date", () =
   assert.equal(finalDueDay.status, "due");
   assert.equal(schedule.evaluationWindow("2026-11-15", "2026-11-23").status, "past_due");
 });
+
+test("automatic evaluation tracking starts in November 2026", () => {
+  assert.equal(schedule.EVALUATION_LIVE_DATE, "2026-11-01");
+  assert.equal(schedule.isLiveEvaluation("2026-10-31"), false);
+  assert.equal(schedule.isLiveEvaluation("2026-11-01"), true);
+});

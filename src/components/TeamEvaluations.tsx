@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CalendarCheck, CheckCircle2, ClipboardCheck, Clock3, Plus, Printer, Save, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import { evaluationWindow } from "../lib/evaluationSchedule";
+import { EVALUATION_LIVE_DATE, evaluationWindow, isLiveEvaluation } from "../lib/evaluationSchedule";
 import type { Profile } from "../types";
 import "./team-evaluations-fix.css";
 
@@ -90,7 +90,7 @@ export default function TeamEvaluations({ profile }: { profile: Profile }) {
 
   const filteredMembers = members.filter((item) => !storeId || item.store_id === storeId);
   const filteredEvaluations = evaluations.filter((item) => !storeId || item.store_id === storeId);
-  const filteredDue = dueCandidates.filter((item) => evaluationWindow(item.dueDate, today).status !== "upcoming" && (!storeId || item.member.store_id === storeId) && !evaluations.some((evaluation) => evaluation.member_id === item.member.id && evaluation.due_date === item.dueDate));
+  const filteredDue = dueCandidates.filter((item) => isLiveEvaluation(item.dueDate) && evaluationWindow(item.dueDate, today).status !== "upcoming" && (!storeId || item.member.store_id === storeId) && !evaluations.some((evaluation) => evaluation.member_id === item.member.id && evaluation.due_date === item.dueDate));
   const overdueDrafts = filteredEvaluations.filter((item) => item.status === "draft" && evaluationWindow(item.due_date, today).status === "past_due");
   const overdueCount = filteredDue.filter((item) => evaluationWindow(item.dueDate, today).status === "past_due").length + overdueDrafts.length;
   const score = selected ? Object.values(selected.competency_ratings).reduce<number>((sum, value) => sum + (value ?? 0), 0) : 0;
@@ -142,7 +142,7 @@ export default function TeamEvaluations({ profile }: { profile: Profile }) {
   };
 
   return <div className="page evaluations-page">
-    <div className="page-heading evaluations-heading"><div><p className="eyebrow">Employee growth and accountability</p><h1>Team Evaluations</h1><p>Reviews become available 14 days before the qualifying date and are due within 7 days afterward. Save drafts, complete reviews, and print a clear one-page employee copy.</p></div><label>Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)}>{stores.map((store) => <option key={store.id} value={store.id}>{storeLabel(store)}</option>)}</select></label></div>
+    <div className="page-heading evaluations-heading"><div><p className="eyebrow">Employee growth and accountability</p><h1>Team Evaluations</h1><p>Reviews become available 14 days before the qualifying date and are due within 7 days afterward. Managers are emailed when a review opens and every morning after it becomes past due. Automated tracking begins {formatDate(EVALUATION_LIVE_DATE)}.</p></div><label>Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)}>{stores.map((store) => <option key={store.id} value={store.id}>{storeLabel(store)}</option>)}</select></label></div>
     {message && <p className="inline-message">{message}</p>}
     {loading ? <section className="panel activity-empty">Loading evaluation calendar…</section> : <>
       <section className="evaluation-summary-grid"><article className="panel"><Clock3/><span><strong>{overdueCount}</strong> past due</span></article><article className="panel"><CalendarCheck/><span><strong>{filteredDue.filter((item) => item.dueDate.slice(0,7) === today.slice(0,7)).length}</strong> qualifying this month</span></article><article className="panel"><ClipboardCheck/><span><strong>{filteredEvaluations.filter((item) => item.status === "draft").length}</strong> drafts</span></article><article className="panel"><CheckCircle2/><span><strong>{filteredEvaluations.filter((item) => item.status === "completed").length}</strong> completed</span></article><article className="panel missing-dates"><CalendarCheck/><span><strong>{filteredMembers.filter((member) => !details.find((item) => item.member_id === member.id)?.hire_date).length}</strong> hire dates to add later</span></article></section>

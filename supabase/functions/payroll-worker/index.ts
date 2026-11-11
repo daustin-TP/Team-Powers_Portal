@@ -8,5 +8,7 @@ Deno.serve(async req=>{
   const auth=await db.rpc("payroll_worker_authorized",{token});
   if(auth.error || auth.data!==true)return new Response("Unauthorized",{status:401});
   const result=await fetch(`${url}/functions/v1/payroll`,{method:"POST",headers:{"Authorization":`Bearer ${key}`,"Content-Type":"application/json"},body:JSON.stringify({action:"deliver"})});
-  return new Response(await result.text(),{status:result.status,headers:{"Content-Type":"application/json"}});
+  const payrollBody=await result.text();
+  const evaluations=await fetch(`${url}/functions/v1/evaluation-reminders`,{method:"POST",headers:{"Authorization":`Bearer ${key}`,"Content-Type":"application/json"},body:"{}"});
+  return new Response(JSON.stringify({payroll:{status:result.status,body:payrollBody},evaluations:{status:evaluations.status,body:await evaluations.text()}}),{status:result.ok?200:result.status,headers:{"Content-Type":"application/json"}});
 });
