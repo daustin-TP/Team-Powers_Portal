@@ -16,11 +16,12 @@ test('Gmail configuration requires every protected credential',()=>{
 });
 
 test('Gmail message is RFC-compatible, UTF-8 safe, and uses a stable message id',()=>{
-  const raw=gmail.gmailRawMessage({id:'abc-123',to:'payroll@powerspizza.com',subject:'Approved payroll — 2026-11-02',text:'Hello\nPayroll ready.'},config);
+  const raw=gmail.gmailRawMessage({id:'abc-123',to:'payroll@powerspizza.com',cc:['admin@powerspizza.com','dm@powerspizza.com'],subject:'Approved payroll — 2026-11-02',text:'Hello\nPayroll ready.'},config);
   const normalized=raw.replace(/-/g,'+').replace(/_/g,'/');
   const mime=Buffer.from(normalized+'='.repeat((4-normalized.length%4)%4),'base64').toString('utf8');
   assert.match(mime,/From: .*<noreply@powerspizza\.com>/);
   assert.match(mime,/To: payroll@powerspizza\.com/);
+  assert.match(mime,/Cc: admin@powerspizza\.com, dm@powerspizza\.com/);
   assert.match(mime,/Message-ID: <dash-os-abc-123@powerspizza\.com>/);
   assert.doesNotMatch(raw,/[+/=]/);
 });

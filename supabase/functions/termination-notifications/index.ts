@@ -30,7 +30,7 @@ Deno.serve(async (req: Request) => {
       db.from("profiles").select("id,role,active,full_name,store_id").eq("id", auth.data.user.id).maybeSingle(),
       db.from("hr_disciplinary_actions").select("id,store_id,member_id,employee_name,incident_date,incident_summary,action_type,submitted_by,submitted_by_name,termination_hire_date,last_date_worked,termination_date,employee_home_address,employee_position,separation_reason,separation_classification,separation_reasons,separation_description,manager_signature,manager_signed_at").eq("id", actionId).maybeSingle(),
       db.from("labor_team_members").select("id,store_id,display_name").eq("id", memberId).maybeSingle(),
-      db.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients").eq("id", true).maybeSingle(),
+      db.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients,live_to_recipients,live_cc_recipients").eq("id", true).maybeSingle(),
     ]);
     const profile = profileResult.data as any;
     const action = actionResult.data as any;
@@ -63,8 +63,17 @@ Deno.serve(async (req: Request) => {
     const storeResult = await db.from("stores").select("name,store_number").eq("id", member.store_id).maybeSingle();
     const settings = settingsResult.data as any;
     const deliveryMode = settings?.delivery_mode === "live" ? "live" : "test";
-    const recipients = uniqueEmails(deliveryMode === "live" ? (settings?.live_recipients ?? []) : (settings?.test_recipients ?? []));
-    if (!recipients.length) return json({ ok: true, roster_updated: true, sent: 0, warning: "No HR notification recipients are configured." });
+    const toRecipients = uniqueEmails(deliveryMode === "live" ? (settings?.live_to_recipients?.length ? settings.live_to_recipients : settings?.live_recipients ?? []) : (settings?.test_recipients ?? []));
+    if (!toRecipients.length) return json({ ok: true, roster_updated: true, sent: 0, warning: "No HR notification recipients are configured." });
+    const [assignmentResult, supervisorResult] = deliveryMode === "live" ? await Promise.all([
+      db.from("profile_store_assignments").select("profile_id").eq("store_id", member.store_id),
+      db.from("profiles").select("id,email,store_id").eq("role", "supervisor").eq("active", true),
+    ]) : [{ data: [], error: null }, { data: [], error: null }];
+    if (assignmentResult.error || supervisorResult.error) throw new Error("The assigned District Manager could not be resolved for the HR notification.");
+    const assignedSupervisorIds = new Set((assignmentResult.data ?? []).map((row: any) => row.profile_id));
+    const supervisorEmails = (supervisorResult.data ?? []).filter((row: any) => row.store_id === member.store_id || assignedSupervisorIds.has(row.id)).map((row: any) => row.email);
+    const primarySet = new Set(toRecipients);
+    const ccRecipients = uniqueEmails(deliveryMode === "live" ? [...(settings?.live_cc_recipients ?? []), ...supervisorEmails] : []).filter((email) => !primarySet.has(email));
     const email = emailConfig();
     if (!email) return json({ ok: true, roster_updated: true, sent: 0, warning: "The termination was recorded, but the DASH email sender is not configured." });
     const store = storeResult.data as any;
@@ -90,12 +99,12 @@ Deno.serve(async (req: Request) => {
     });
 
     let sent = 0, failed = 0;
-    for (const recipient of recipients) {
-      const logResult = await db.from("hr_termination_notifications").insert({ action_id: action.id, member_id: member.id, recipient_email: recipient, delivery_mode: deliveryMode, status: "sending" }).select("id").maybeSingle();
+    for (const recipient of toRecipients) {
+      const logResult = await db.from("hr_termination_notifications").insert({ action_id: action.id, member_id: member.id, recipient_email: recipient, cc_recipients: ccRecipients, delivery_mode: deliveryMode, status: "sending" }).select("id").maybeSingle();
       if (logResult.error?.code === "23505") continue;
       if (logResult.error || !logResult.data) throw new Error("Termination delivery could not be recorded.");
       try {
-        const providerId = await sendEmailMessage(email, { id: logResult.data.id, to: recipient, subject: copy.subject, text: copy.text, html: copy.html, fromName: "DASH-OS Human Resources" });
+        const providerId = await sendEmailMessage(email, { id: logResult.data.id, to: recipient, cc: ccRecipients, subject: copy.subject, text: copy.text, html: copy.html, fromName: "DASH-OS Human Resources" });
         await db.from("hr_termination_notifications").update({ status: "sent", sent_at: new Date().toISOString(), provider_id: providerId }).eq("id", logResult.data.id);
         sent += 1;
       } catch (error) {
@@ -103,7 +112,7 @@ Deno.serve(async (req: Request) => {
         failed += 1;
       }
     }
-    return json({ ok: failed === 0, roster_updated: true, delivery_mode: deliveryMode, sent, failed, ...(failed ? { warning: "The termination was recorded, but one or more test emails failed." } : {}) });
+    return json({ ok: failed === 0, roster_updated: true, delivery_mode: deliveryMode, sent, failed, cc_count: ccRecipients.length, ...(failed ? { warning: "The termination was recorded, but one or more HR emails failed." } : {}) });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "Termination processing failed" }, 400);
   }

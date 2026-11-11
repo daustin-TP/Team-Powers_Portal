@@ -51,12 +51,13 @@ function wrappedBase64(value: string) {
   return base64(value).match(/.{1,76}/g)?.join("\r\n") ?? "";
 }
 
-export function gmailRawMessage(message: { id: string; to: string; subject: string; text: string }, config: GmailConfig) {
+export function gmailRawMessage(message: { id: string; to: string; cc?: string[]; subject: string; text: string }, config: GmailConfig) {
   const messageId = safeHeader(message.id).replace(/[^a-zA-Z0-9._-]/g, "-");
   const domain = config.fromEmail.split("@")[1] || "powerspizza.com";
   const mime = [
     `From: ${encodedHeader(config.fromName)} <${safeHeader(config.fromEmail)}>`,
     `To: ${safeHeader(message.to)}`,
+    ...(message.cc?.length ? [`Cc: ${message.cc.map(safeHeader).join(", ")}`] : []),
     `Subject: ${encodedHeader(message.subject)}`,
     `Date: ${new Date().toUTCString()}`,
     `Message-ID: <dash-os-${messageId}@${safeHeader(domain)}>`,
@@ -95,7 +96,7 @@ export async function refreshGmailAccessToken(config: GmailConfig, request: type
 
 export async function sendGmailMessage(
   config: GmailConfig,
-  message: { id: string; to: string; subject: string; text: string },
+  message: { id: string; to: string; cc?: string[]; subject: string; text: string },
   request: typeof fetch = fetch,
 ) {
   const accessToken = await refreshGmailAccessToken(config, request);

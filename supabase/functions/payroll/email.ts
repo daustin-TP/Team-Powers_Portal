@@ -28,6 +28,7 @@ export function sendEmailMessage(
   message: {
     id: string;
     to: string;
+    cc?: string[];
     subject: string;
     text: string;
     html?: string;

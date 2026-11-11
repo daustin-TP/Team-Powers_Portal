@@ -13,8 +13,8 @@ type TeamMember = { id: string; store_id: string; display_name: string; employme
 type MemberDetails = { member_id: string; hire_date: string | null; rehire_date: string | null };
 type MemberPosition = { member_id: string; position_name: string };
 type SeparationClassification = "discharge" | "layoff" | "resignation" | "other";
-type StatusHistory = { id: string; member_id: string; store_id: string; from_status: EmploymentStatus | null; to_status: EmploymentStatus; effective_date: string; changed_at: string };
-type HrNotificationSettings = { delivery_mode: "test" | "live"; test_recipients: string[]; live_recipients: string[] };
+type StatusHistory = { id: string; member_id: string; store_id: string; from_status: EmploymentStatus | null; to_status: EmploymentStatus; effective_date: string; changed_at: string; exclude_from_turnover: boolean };
+type HrNotificationSettings = { delivery_mode: "test" | "live"; test_recipients: string[]; live_recipients: string[]; live_to_recipients: string[]; live_cc_recipients: string[] };
 
 type DisciplinaryAction = {
   id: string;
@@ -197,10 +197,10 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       supabase.from("team_member_private_details").select("member_id,hire_date,rehire_date"),
       supabase.from("team_member_positions").select("member_id,position_name").eq("active", true).order("position_name"),
       profile.role === "supervisor" || profile.role === "admin"
-        ? supabase.from("team_member_status_history").select("id,member_id,store_id,from_status,to_status,effective_date,changed_at").order("effective_date")
+        ? supabase.from("team_member_status_history").select("id,member_id,store_id,from_status,to_status,effective_date,changed_at,exclude_from_turnover").order("effective_date")
         : Promise.resolve({ data: [], error: null }),
       profile.role === "admin"
-        ? supabase.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients").eq("id", true).maybeSingle()
+        ? supabase.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients,live_to_recipients,live_cc_recipients").eq("id", true).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
     if (storeResult.error || recordResult.error || memberResult.error || detailResult.error || positionResult.error || historyResult.error || settingsResult.error) {
@@ -444,7 +444,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     const included = (status: EmploymentStatus | null) => status === "active" || status === "on_leave";
     const opening = storeMembers.filter((member) => included(statusAt(member, turnoverStart))).length;
     const closing = storeMembers.filter((member) => included(statusAt(member, turnoverEnd))).length;
-    const terminations = statusHistory.filter((event) => event.store_id === store.id && event.to_status === "terminated" && event.effective_date >= turnoverStart && event.effective_date <= turnoverEnd).length;
+    const terminations = statusHistory.filter((event) => event.store_id === store.id && event.to_status === "terminated" && !event.exclude_from_turnover && event.effective_date >= turnoverStart && event.effective_date <= turnoverEnd).length;
     const averageHeadcount = (opening + closing) / 2;
     return { store, opening, closing, terminations, rate: averageHeadcount > 0 ? terminations / averageHeadcount * 100 : 0 };
   }).sort((left, right) => right.rate - left.rate), [members, statusHistory, stores, turnoverEnd, turnoverStart]);
@@ -462,10 +462,10 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     if (!supabase || profile.role !== "admin" || !notificationSettings) return;
     setSaving(true); setMessage("");
     const recipients = notificationSettings.test_recipients.map((email) => email.trim().toLowerCase()).filter(Boolean);
-    const { error } = await supabase.from("hr_notification_settings").update({ test_recipients: recipients, delivery_mode: "test", updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", true);
+    const { error } = await supabase.from("hr_notification_settings").update({ test_recipients: recipients, updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", true);
     setSaving(false);
-    setNotificationSettings({ ...notificationSettings, delivery_mode: "test", test_recipients: recipients });
-    setMessage(error ? error.message : "Test termination recipients saved. The outside HR provider is still disabled.");
+    setNotificationSettings({ ...notificationSettings, test_recipients: recipients });
+    setMessage(error ? error.message : notificationSettings.delivery_mode === "live" ? "Test-recipient fallback saved. Live HR delivery remains active." : "Test termination recipients saved.");
   };
 
   const togglePolicyCategory = (category: string) => {
@@ -546,7 +546,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     </section>}
 
     {profile.role === "admin" && notificationSettings && <section className="panel hr-notification-settings">
-      <div className="panel-heading"><div><p className="eyebrow">Termination delivery settings</p><h2><Mail size={21} /> HR notification testing</h2><p>Only the test recipients below receive termination alerts. teampowershr@outlook.com remains disabled until you approve going live.</p></div><span className="status-pill monitoring">TEST MODE</span></div>
+      <div className="panel-heading"><div><p className="eyebrow">Termination delivery settings</p><h2><Mail size={21} /> HR notifications</h2><p>{notificationSettings.delivery_mode === "live" ? `Live delivery goes to ${notificationSettings.live_to_recipients.join(", ")} with ${notificationSettings.live_cc_recipients.join(", ")} and the assigned District Manager copied.` : "Only the test recipients below receive termination alerts."}</p></div><span className={`status-pill ${notificationSettings.delivery_mode === "live" ? "completed" : "monitoring"}`}>{notificationSettings.delivery_mode.toUpperCase()} MODE</span></div>
       <label>Test recipient emails <small>Separate multiple addresses with commas</small><textarea rows={2} value={notificationSettings.test_recipients.join(", ")} onChange={(event) => setNotificationSettings({ ...notificationSettings, test_recipients: event.target.value.split(",") })} /></label>
       <div className="hr-form-actions"><button className="button secondary" disabled={saving} onClick={() => void saveNotificationSettings()}><Save size={17} />Save test recipients</button></div>
     </section>}

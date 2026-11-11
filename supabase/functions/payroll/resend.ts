@@ -31,6 +31,7 @@ export async function sendResendMessage(
   message: {
     id: string;
     to: string;
+    cc?: string[];
     subject: string;
     text: string;
     html?: string;
@@ -50,6 +51,7 @@ export async function sendResendMessage(
       body: JSON.stringify({
         from: `${config.fromName} <${config.fromEmail}>`,
         to: [message.to],
+        ...(message.cc?.length ? { cc: message.cc } : {}),
         subject: message.subject,
         text: message.text,
         ...(message.html ? { html: message.html } : {}),
