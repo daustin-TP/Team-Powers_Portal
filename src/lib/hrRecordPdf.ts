@@ -29,6 +29,11 @@ export type HrRecordPdfData = {
   separationDescription?: string;
   managerSignature?: string;
   managerSignedAt?: string;
+  acknowledgment?: {
+    outcome: "acknowledged" | "refused"; employeeName: string; employeeSignatureData: string | null; employeeStatement: string; employeeSignedAt: string;
+    managerName: string; managerSignatureData: string; managerSignedAt: string; witnessName: string | null; witnessSignatureData: string | null;
+    witnessSignedAt: string; documentSha256: string; recordVersion: number;
+  };
 };
 
 type BrandImages = { crest?: string; dash?: string };
@@ -229,26 +234,53 @@ export async function buildHrRecordPdf(data: HrRecordPdfData, images: BrandImage
 
   pdf.addPage("letter", "portrait");
   header("Employee response, acknowledgment, signatures, and management follow-up.");
-  writingBox("Employee comments", "The employee may explain their perspective, provide context, or note disagreement.", 110, 180);
+  const signed = data.acknowledgment;
+  if (signed) textBox("Employee comments", signed.employeeStatement || "The employee did not add a written statement.", 110, 180);
+  else writingBox("Employee comments", "The employee may explain their perspective, provide context, or note disagreement.", 110, 180);
   y = 304;
   fill(colors.paleBlue); stroke(colors.blue); pdf.roundedRect(margin, y, contentWidth, 82, 5, 5, "FD");
   pdf.setFont("helvetica", "bold"); pdf.setFontSize(8); ink(colors.navy); pdf.text("EMPLOYEE ACKNOWLEDGMENT", margin + 12, y + 18);
   pdf.setFont("helvetica", "normal"); pdf.setFontSize(7.2); pdf.text("My signature confirms that I received and discussed this corrective action. It does not necessarily mean that I agree.", margin + 12, y + 35);
-  choice(margin + 12, y + 63, data.acknowledgmentStatus === "acknowledged", "Acknowledged");
-  choice(margin + 190, y + 63, data.acknowledgmentStatus === "declined", "Employee declined to sign");
+  choice(margin + 12, y + 63, signed?.outcome === "acknowledged" || data.acknowledgmentStatus === "acknowledged", "Acknowledged");
+  choice(margin + 190, y + 63, signed?.outcome === "refused" || data.acknowledgmentStatus === "declined", "Employee declined to sign");
   choice(margin + 404, y + 63, data.acknowledgmentStatus === "not_required", "Not required");
   y += 100;
   pdf.setFont("helvetica", "bold"); pdf.setFontSize(7.2); ink(colors.midGray); pdf.text("SIGNATURES", margin, y);
-  const signatureRows = ["Employee signature", "Manager signature", "Witness / District Manager"];
-  signatureRows.forEach((label, index) => {
-    const rowY = y + 27 + index * 31;
-    pdf.setFontSize(6.5); pdf.text(label.toUpperCase(), margin, rowY);
-    stroke(colors.line); pdf.line(margin + 122, rowY + 1, margin + 355, rowY + 1);
-    pdf.text("DATE", margin + 374, rowY); pdf.line(margin + 403, rowY + 1, pageWidth - margin, rowY + 1);
-  });
-  y += 120;
-  writingBox("Management follow-up", "Document progress, additional coaching, or completion of the corrective action.", y, 115);
-  y += 130;
+  if (signed) {
+    const signatureRows = [
+      { label: "Employee signature", name: signed.employeeName, image: signed.employeeSignatureData, date: signed.employeeSignedAt || "Declined to sign" },
+      { label: "Manager signature", name: signed.managerName, image: signed.managerSignatureData, date: signed.managerSignedAt },
+      { label: "Witness signature", name: signed.witnessName || "Not required", image: signed.witnessSignatureData, date: signed.witnessSignedAt || "—" },
+    ];
+    signatureRows.forEach((row, index) => {
+      const rowY = y + 15 + index * 48;
+      pdf.setFont("helvetica", "bold"); pdf.setFontSize(6.3); ink(colors.midGray); pdf.text(row.label.toUpperCase(), margin, rowY);
+      if (row.image) pdf.addImage(row.image, "PNG", margin + 112, rowY - 9, 145, 34, undefined, "FAST");
+      else { pdf.setFont("helvetica", "italic"); pdf.setFontSize(7.2); ink(colors.navy); pdf.text(row.name, margin + 112, rowY + 10); }
+      pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.5); ink(colors.navy); pdf.text(row.name, margin + 268, rowY + 5, { maxWidth: 120 });
+      pdf.setFontSize(6.1); ink(colors.midGray); pdf.text(row.date, margin + 403, rowY + 5, { maxWidth: 115 });
+      stroke(colors.line); pdf.line(margin, rowY + 31, pageWidth - margin, rowY + 31);
+    });
+    y += 165;
+    fill(colors.paleBlue); stroke(colors.blue); pdf.roundedRect(margin, y, contentWidth, 67, 5, 5, "FD");
+    pdf.setFont("helvetica", "bold"); pdf.setFontSize(7); ink(colors.navy); pdf.text("ELECTRONIC SIGNATURE AUDIT CERTIFICATE", margin + 10, y + 16);
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.3); ink(colors.midGray);
+    pdf.text(`Record version ${signed.recordVersion} · Finalized ${signed.managerSignedAt}`, margin + 10, y + 31);
+    pdf.text(`SHA-256 ${signed.documentSha256}`, margin + 10, y + 44, { maxWidth: contentWidth - 20 });
+    pdf.text("The fingerprint verifies the exact record and signature packet preserved by DASH-OS.", margin + 10, y + 57);
+    y += 82;
+  } else {
+    const signatureRows = ["Employee signature", "Manager signature", "Witness / District Manager"];
+    signatureRows.forEach((label, index) => {
+      const rowY = y + 27 + index * 31;
+      pdf.setFontSize(6.5); pdf.text(label.toUpperCase(), margin, rowY);
+      stroke(colors.line); pdf.line(margin + 122, rowY + 1, margin + 355, rowY + 1);
+      pdf.text("DATE", margin + 374, rowY); pdf.line(margin + 403, rowY + 1, pageWidth - margin, rowY + 1);
+    });
+    y += 120;
+    writingBox("Management follow-up", "Document progress, additional coaching, or completion of the corrective action.", y, 115);
+    y += 130;
+  }
   y = optionGroup("Record status", [
     { label: "Open", checked: data.status === "open" },
     { label: "Monitoring", checked: data.status === "monitoring" },

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, FilePenLine, History, LockKeyhole, Mail, Plus, Printer, Save, ShieldCheck, UserRound } from "lucide-react";
+import { AlertTriangle, BarChart3, FileCheck2, FilePenLine, History, LockKeyhole, Mail, PenLine, Plus, Printer, Save, ShieldCheck, UserRound, X } from "lucide-react";
 import { openHrRecordPdf } from "../lib/hrRecordPdf";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
+import SignaturePad from "./SignaturePad";
 
 type Store = { id: string; name: string; store_number: string | null };
 type ActionType = "coaching" | "verbal_warning" | "written_warning" | "final_warning" | "suspension" | "termination";
@@ -15,6 +16,12 @@ type MemberPosition = { member_id: string; position_name: string };
 type SeparationClassification = "discharge" | "layoff" | "resignation" | "other";
 type StatusHistory = { id: string; member_id: string; store_id: string; from_status: EmploymentStatus | null; to_status: EmploymentStatus; effective_date: string; changed_at: string; exclude_from_turnover: boolean };
 type HrNotificationSettings = { delivery_mode: "test" | "live"; test_recipients: string[]; live_recipients: string[]; live_to_recipients: string[]; live_cc_recipients: string[] };
+type AcknowledgmentPacket = {
+  id: string; action_id: string; record_version: number; document_sha256: string; outcome: "acknowledged" | "refused";
+  employee_name: string; employee_signature_data: string | null; employee_statement: string; employee_consented: boolean; employee_signed_at: string | null;
+  manager_name: string; manager_signature_data: string; manager_signed_at: string;
+  witness_name: string | null; witness_signature_data: string | null; witness_signed_at: string | null; created_at: string;
+};
 
 type DisciplinaryAction = {
   id: string;
@@ -44,6 +51,7 @@ type DisciplinaryAction = {
   separation_description: string;
   manager_signature: string;
   manager_signed_at: string | null;
+  amends_action_id: string | null;
   submitted_by: string;
   submitted_by_name: string;
   last_edited_by: string | null;
@@ -58,6 +66,22 @@ type Revision = {
   before_state: Record<string, unknown>;
   after_state: Record<string, unknown>;
 };
+
+type SignatureForm = {
+  outcome: "acknowledged" | "refused";
+  employee_name: string;
+  employee_statement: string;
+  employee_consented: boolean;
+  employee_signature_data: string;
+  manager_signature_data: string;
+  witness_name: string;
+  witness_signature_data: string;
+};
+
+const emptySignatureForm = (employeeName = ""): SignatureForm => ({
+  outcome: "acknowledged", employee_name: employeeName, employee_statement: "", employee_consented: false,
+  employee_signature_data: "", manager_signature_data: "", witness_name: "", witness_signature_data: "",
+});
 
 type FormState = {
   store_id: string;
@@ -166,6 +190,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
   const [memberPositions, setMemberPositions] = useState<MemberPosition[]>([]);
   const [statusHistory, setStatusHistory] = useState<StatusHistory[]>([]);
   const [notificationSettings, setNotificationSettings] = useState<HrNotificationSettings | null>(null);
+  const [acknowledgments, setAcknowledgments] = useState<AcknowledgmentPacket[]>([]);
   const [turnoverStart, setTurnoverStart] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [turnoverEnd, setTurnoverEnd] = useState(today);
   const [turnoverStore, setTurnoverStore] = useState("all");
@@ -180,12 +205,15 @@ export default function HumanResources({ profile }: { profile: Profile }) {
   const [search, setSearch] = useState("");
   const [storeFilter, setStoreFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [signingRecord, setSigningRecord] = useState<DisciplinaryAction | null>(null);
+  const [signatureForm, setSignatureForm] = useState<SignatureForm>(() => emptySignatureForm());
+  const [amendingActionId, setAmendingActionId] = useState<string | null>(null);
 
   const load = async () => {
     if (!supabase) { setLoading(false); return; }
     setLoading(true);
     setMessage("");
-    const [storeResult, recordResult, assignmentResult, memberResult, detailResult, positionResult, historyResult, settingsResult] = await Promise.all([
+    const [storeResult, recordResult, assignmentResult, memberResult, detailResult, positionResult, historyResult, settingsResult, acknowledgmentResult] = await Promise.all([
       supabase.from("stores").select("id,name,store_number").eq("active", true).order("name"),
       supabase.from("hr_disciplinary_actions").select("*").order("incident_date", { ascending: false }).order("created_at", { ascending: false }),
       profile.role === "manager"
@@ -202,9 +230,10 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       profile.role === "admin"
         ? supabase.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients,live_to_recipients,live_cc_recipients").eq("id", true).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
+      supabase.from("hr_disciplinary_action_acknowledgments").select("id,action_id,record_version,document_sha256,outcome,employee_name,employee_signature_data,employee_statement,employee_consented,employee_signed_at,manager_name,manager_signature_data,manager_signed_at,witness_name,witness_signature_data,witness_signed_at,created_at"),
     ]);
-    if (storeResult.error || recordResult.error || memberResult.error || detailResult.error || positionResult.error || historyResult.error || settingsResult.error) {
-      setMessage(storeResult.error?.message || recordResult.error?.message || memberResult.error?.message || detailResult.error?.message || positionResult.error?.message || historyResult.error?.message || settingsResult.error?.message || "The confidential HR file could not be loaded.");
+    if (storeResult.error || recordResult.error || memberResult.error || detailResult.error || positionResult.error || historyResult.error || settingsResult.error || acknowledgmentResult.error) {
+      setMessage(storeResult.error?.message || recordResult.error?.message || memberResult.error?.message || detailResult.error?.message || positionResult.error?.message || historyResult.error?.message || settingsResult.error?.message || acknowledgmentResult.error?.message || "The confidential HR file could not be loaded.");
       setLoading(false);
       return;
     }
@@ -221,6 +250,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     setMemberPositions((positionResult.data ?? []) as MemberPosition[]);
     setStatusHistory((historyResult.data ?? []) as StatusHistory[]);
     setNotificationSettings((settingsResult.data as HrNotificationSettings | null) ?? null);
+    setAcknowledgments((acknowledgmentResult.data ?? []) as AcknowledgmentPacket[]);
     setForm((current) => ({ ...current, store_id: current.store_id || visibleStores[0]?.id || "" }));
     setLoading(false);
   };
@@ -245,6 +275,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       && (statusFilter === "all" || record.status === statusFilter)
       && (!term || record.employee_name.toLowerCase().includes(term) || record.incident_summary.toLowerCase().includes(term));
   }), [records, search, statusFilter, storeFilter]);
+  const selectedAcknowledgment = selected ? acknowledgments.find((item) => item.action_id === selected.id) ?? null : null;
 
   const storeName = (id: string) => {
     const store = stores.find((item) => item.id === id);
@@ -261,6 +292,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
   const openNew = () => {
     setSelected(null);
     setRevisions([]);
+    setAmendingActionId(null);
     setForm(emptyForm(form.store_id || stores[0]?.id || ""));
     setShowForm(true);
     setMessage("");
@@ -318,11 +350,12 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       separation_reasons: form.action_type === "termination" ? form.separation_reasons : [],
       separation_description: form.action_type === "termination" ? form.separation_description.trim() : "",
       manager_signature: form.action_type === "termination" ? form.manager_signature.trim() : "",
+      amends_action_id: amendingActionId,
       submitted_by: profile.id,
       submitted_by_name: profile.fullName,
     }).select("id").single();
     if (error) { setSaving(false); setMessage(error.message); return; }
-    let completionMessage = "Disciplinary action saved to the permanent confidential file.";
+    let completionMessage = amendingActionId ? "Amendment saved as a new permanent record. The signed original was not changed." : "Disciplinary action saved to the permanent confidential file.";
     if (form.action_type === "termination" && savedRecord && form.member_id) {
       const notification = await supabase.functions.invoke("termination-notifications", { body: { action_id: savedRecord.id, member_id: form.member_id } });
       if (notification.error) completionMessage = "Termination report saved. The roster or test email needs administrator review.";
@@ -331,12 +364,17 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     }
     setSaving(false);
     setMessage(completionMessage);
+    setAmendingActionId(null);
     setShowForm(false);
     await load();
   };
 
   const beginEdit = () => {
     if (!selected || !canEdit) return;
+    if (acknowledgments.some((item) => item.action_id === selected.id)) {
+      setMessage("This record is signed and permanently locked. Create a linked amendment instead.");
+      return;
+    }
     setForm({
       store_id: selected.store_id,
       employee_name: selected.employee_name,
@@ -365,6 +403,25 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       manager_signature_confirmed: Boolean(selected.manager_signature),
     });
     setShowForm(true);
+  };
+
+  const beginAmendment = () => {
+    if (!selected || !canEdit) return;
+    const original = selected;
+    setForm({
+      store_id: original.store_id, employee_name: original.employee_name, employee_identifier: original.employee_identifier ?? "", member_id: original.member_id ?? "",
+      incident_date: original.incident_date, action_type: original.action_type, policy_categories: original.policy_categories, incident_summary: original.incident_summary,
+      action_taken: original.action_taken, expectations: original.expectations, follow_up_date: original.follow_up_date ?? "", witnesses: original.witnesses,
+      acknowledgment_status: "pending", status: original.status, confidential_notes: original.confidential_notes,
+      termination_hire_date: original.termination_hire_date ?? "", last_date_worked: original.last_date_worked ?? "", termination_date: original.termination_date ?? original.incident_date,
+      employee_home_address: original.employee_home_address ?? "", employee_position: original.employee_position ?? "", separation_classification: original.separation_classification ?? "",
+      separation_reasons: original.separation_reasons ?? [], separation_description: original.separation_description ?? "", manager_signature: "", manager_signature_confirmed: false,
+    });
+    setAmendingActionId(original.id);
+    setSelected(null);
+    setRevisions([]);
+    setShowForm(true);
+    setMessage("Creating a linked amendment. The signed original will remain unchanged.");
   };
 
   const saveEdit = async () => {
@@ -512,6 +569,21 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         separationDescription: selected.separation_description,
         managerSignature: selected.manager_signature,
         managerSignedAt: selected.manager_signed_at ? formatNumericDate(selected.manager_signed_at) : "",
+        acknowledgment: selectedAcknowledgment ? {
+          outcome: selectedAcknowledgment.outcome,
+          employeeName: selectedAcknowledgment.employee_name,
+          employeeSignatureData: selectedAcknowledgment.employee_signature_data,
+          employeeStatement: selectedAcknowledgment.employee_statement,
+          employeeSignedAt: selectedAcknowledgment.employee_signed_at ? formatTimestamp(selectedAcknowledgment.employee_signed_at) : "",
+          managerName: selectedAcknowledgment.manager_name,
+          managerSignatureData: selectedAcknowledgment.manager_signature_data,
+          managerSignedAt: formatTimestamp(selectedAcknowledgment.manager_signed_at),
+          witnessName: selectedAcknowledgment.witness_name,
+          witnessSignatureData: selectedAcknowledgment.witness_signature_data,
+          witnessSignedAt: selectedAcknowledgment.witness_signed_at ? formatTimestamp(selectedAcknowledgment.witness_signed_at) : "",
+          documentSha256: selectedAcknowledgment.document_sha256,
+          recordVersion: selectedAcknowledgment.record_version,
+        } : undefined,
       });
       setMessage(selected.action_type === "termination" ? "Portrait employee separation PDF created. It is ready to review and print." : "Two-page portrait PDF created. It is ready to review and print.");
     } catch (error) {
@@ -519,6 +591,33 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     } finally {
       setPrintingRecord(false);
     }
+  };
+
+  const startSignatures = (record: DisciplinaryAction) => {
+    setSigningRecord(record);
+    setSignatureForm(emptySignatureForm(record.employee_name));
+    setMessage("");
+  };
+
+  const finalizeSignatures = async () => {
+    if (!supabase || !signingRecord || saving) return;
+    if (!signatureForm.manager_signature_data) { setMessage("The manager signature is required."); return; }
+    if (signatureForm.outcome === "acknowledged" && (!signatureForm.employee_consented || !signatureForm.employee_signature_data)) {
+      setMessage("The employee must consent and sign before acknowledgment can be finalized."); return;
+    }
+    if (signatureForm.outcome === "refused" && (!signatureForm.witness_name.trim() || !signatureForm.witness_signature_data)) {
+      setMessage("A witness name and signature are required when the employee declines to sign."); return;
+    }
+    setSaving(true); setMessage("");
+    const result = await supabase.functions.invoke("hr-signatures", { body: { action_id: signingRecord.id, ...signatureForm } });
+    setSaving(false);
+    if (result.error || result.data?.error) {
+      setMessage(result.data?.error || result.error?.message || "The signatures could not be finalized.");
+      return;
+    }
+    setSigningRecord(null);
+    setMessage(signatureForm.outcome === "acknowledged" ? "Employee and manager signatures secured. The signed record is now permanently locked." : "Employee refusal, witness signature, and manager signature secured. The record is now permanently locked.");
+    await load();
   };
 
   return <div className="page hr-page">
@@ -535,7 +634,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
 
     <section className="panel hr-records-panel">
       <div className="table-toolbar hr-toolbar"><div><p className="eyebrow">Disciplinary file</p><h2>{canEdit ? "Company records" : "Your submitted records"}</h2></div><div className="hr-filters"><input aria-label="Search HR records" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search employee or incident" />{canEdit && <select aria-label="Filter by store" value={storeFilter} onChange={(event) => setStoreFilter(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{storeName(store.id)}</option>)}</select>}<select aria-label="Filter by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option><option value="open">Open</option><option value="monitoring">Monitoring</option><option value="completed">Completed</option></select></div></div>
-      {loading ? <div className="activity-empty">Opening the secure HR file…</div> : filtered.length === 0 ? <div className="activity-empty"><ShieldCheck size={30} /><strong>No disciplinary records found</strong><span>New records will appear here after they are submitted.</span></div> : <div className="responsive-table"><table className="hr-records-table"><thead><tr><th>Employee</th><th>Store</th><th>Incident</th><th>Action</th><th>Status</th><th>Submitted by</th><th>Last updated</th></tr></thead><tbody>{filtered.map((record) => <tr key={record.id} onClick={() => void loadRevisions(record)} className={selected?.id === record.id ? "selected" : ""}><td><strong>{record.employee_name}</strong>{record.employee_identifier && <small>{record.employee_identifier}</small>}</td><td>{storeName(record.store_id)}</td><td>{formatDate(record.incident_date)}</td><td><span className={`hr-action-pill ${record.action_type}`}>{actionLabels[record.action_type]}</span></td><td><span className={`status-pill ${record.status}`}>{record.status}</span></td><td>{record.submitted_by_name}</td><td>{formatTimestamp(record.updated_at)}</td></tr>)}</tbody></table></div>}
+      {loading ? <div className="activity-empty">Opening the secure HR file…</div> : filtered.length === 0 ? <div className="activity-empty"><ShieldCheck size={30} /><strong>No disciplinary records found</strong><span>New records will appear here after they are submitted.</span></div> : <div className="responsive-table"><table className="hr-records-table"><thead><tr><th>Employee</th><th>Store</th><th>Incident</th><th>Action</th><th>Status</th><th>Submitted by</th><th>Last updated</th></tr></thead><tbody>{filtered.map((record) => { const signedPacket = acknowledgments.find((item) => item.action_id === record.id); return <tr key={record.id} onClick={() => void loadRevisions(record)} className={selected?.id === record.id ? "selected" : ""}><td><strong>{record.employee_name}</strong>{record.employee_identifier && <small>{record.employee_identifier}</small>}</td><td>{storeName(record.store_id)}</td><td>{formatDate(record.incident_date)}</td><td><span className={`hr-action-pill ${record.action_type}`}>{actionLabels[record.action_type]}</span></td><td><span className={`status-pill ${signedPacket ? "completed" : record.status}`}>{signedPacket ? signedPacket.outcome === "acknowledged" ? "signed" : "refusal witnessed" : record.status}</span></td><td>{record.submitted_by_name}</td><td>{formatTimestamp(record.updated_at)}</td></tr>; })}</tbody></table></div>}
     </section>
 
     {canEdit && <section className="panel hr-turnover-panel">
@@ -552,14 +651,16 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     </section>}
 
     {selected && !showForm && <section className="panel hr-detail-panel">
-      <div className="panel-heading"><div><p className="eyebrow">Permanent record</p><h2>{selected.employee_name}</h2><p>{storeName(selected.store_id)} · Incident {formatDate(selected.incident_date)}</p></div><div className="button-row"><button className="button secondary" disabled={printingRecord} onClick={() => void printRecord()}><Printer size={17} />{printingRecord ? "Preparing PDF…" : "Print record"}</button>{canEdit && <button className="button secondary" onClick={beginEdit}><FilePenLine size={17} />Edit record</button>}</div></div>
-      <div className="hr-record-meta"><span className={`hr-action-pill ${selected.action_type}`}>{actionLabels[selected.action_type]}</span><span className={`status-pill ${selected.status}`}>{selected.status}</span><span>{selected.policy_categories.map((category) => categoryLabels[category] ?? category).join(" · ")}</span><span>Acknowledgment: {selected.acknowledgment_status.replace("_", " ")}</span></div>
+      <div className="panel-heading"><div><p className="eyebrow">Permanent record</p><h2>{selected.employee_name}</h2><p>{storeName(selected.store_id)} · Incident {formatDate(selected.incident_date)}</p></div><div className="button-row"><button className="button secondary" disabled={printingRecord} onClick={() => void printRecord()}><Printer size={17} />{printingRecord ? "Preparing PDF…" : "Print record"}</button>{!selectedAcknowledgment && selected.action_type !== "termination" && <button className="button primary" onClick={() => startSignatures(selected)}><PenLine size={17} />Collect signatures</button>}{canEdit && !selectedAcknowledgment && <button className="button secondary" onClick={beginEdit}><FilePenLine size={17} />Edit record</button>}{canEdit && selectedAcknowledgment && <button className="button secondary" onClick={beginAmendment}><FilePenLine size={17} />Create amendment</button>}</div></div>
+      <div className="hr-record-meta"><span className={`hr-action-pill ${selected.action_type}`}>{actionLabels[selected.action_type]}</span><span className={`status-pill ${selected.status}`}>{selected.status}</span><span>{selected.policy_categories.map((category) => categoryLabels[category] ?? category).join(" · ")}</span><span>Acknowledgment: {selectedAcknowledgment ? selectedAcknowledgment.outcome === "acknowledged" ? "electronically signed" : "refusal witnessed" : selected.acknowledgment_status.replace("_", " ")}</span></div>
       {selected.action_type === "termination" ? <div className="hr-detail-grid"><article><h3>Classification</h3><p>{selected.separation_classification || "—"}</p></article><article><h3>Date terminated</h3><p>{selected.termination_date ? formatDate(selected.termination_date) : formatDate(selected.incident_date)}</p></article><article><h3>Position</h3><p>{selected.employee_position || "—"}</p></article><article><h3>Last date worked</h3><p>{selected.last_date_worked ? formatDate(selected.last_date_worked) : "—"}</p></article><article className="wide"><h3>Reason for separation</h3><p>{selected.separation_reason || selected.incident_summary}</p></article><article className="wide"><h3>Description of circumstances</h3><p>{selected.separation_description || "—"}</p></article><article><h3>Manager signature</h3><p>{selected.manager_signature || "—"}</p></article><article><h3>Signed</h3><p>{selected.manager_signed_at ? formatTimestamp(selected.manager_signed_at) : "—"}</p></article>{selected.confidential_notes && <article className="wide"><h3>Confidential notes</h3><p>{selected.confidential_notes}</p></article>}</div> : <div className="hr-detail-grid"><article><h3>Incident summary</h3><p>{selected.incident_summary}</p></article><article><h3>Action taken</h3><p>{selected.action_taken}</p></article><article><h3>Expectations</h3><p>{selected.expectations || "—"}</p></article><article><h3>Witnesses</h3><p>{selected.witnesses || "—"}</p></article>{selected.confidential_notes && <article className="wide"><h3>Confidential notes</h3><p>{selected.confidential_notes}</p></article>}</div>}
+      {selected.amends_action_id && <div className="hr-amendment-note"><FilePenLine size={18} /><span>This is a linked amendment. The original signed record remains unchanged.</span></div>}
+      {selectedAcknowledgment && <div className="hr-signature-certificate"><FileCheck2 size={22} /><div><strong>{selectedAcknowledgment.outcome === "acknowledged" ? "Electronically acknowledged" : "Employee declined · refusal witnessed"}</strong><span>Finalized by {selectedAcknowledgment.manager_name} on {formatTimestamp(selectedAcknowledgment.manager_signed_at)} · Record version {selectedAcknowledgment.record_version}</span><small>SHA-256 {selectedAcknowledgment.document_sha256}</small></div></div>}
       <div className="hr-audit"><History size={19} /><div><strong>Record history</strong><span>Submitted by {selected.submitted_by_name} on {formatTimestamp(selected.created_at)}.</span>{revisions.length === 0 ? <small>No edits have been made.</small> : revisions.map((revision) => <small key={revision.id}>Edited by {revision.changed_by_name} · {formatTimestamp(revision.created_at)}</small>)}</div></div>
     </section>}
 
     {showForm && <section className="panel hr-form-panel">
-      <div className="panel-heading"><div><p className="eyebrow">{selected ? "District Manager edit" : "Permanent submission"}</p><h2>{selected ? `Update ${selected.employee_name}` : "Document disciplinary action"}</h2><p>{selected ? "Saving creates an immutable revision. Store and submitter ownership cannot be changed." : "Review carefully before submitting. Managers cannot edit a record after it is saved."}</p></div><AlertTriangle size={28} /></div>
+      <div className="panel-heading"><div><p className="eyebrow">{amendingActionId ? "Linked amendment" : selected ? "District Manager edit" : "Permanent submission"}</p><h2>{amendingActionId ? `Amend ${form.employee_name}` : selected ? `Update ${selected.employee_name}` : "Document disciplinary action"}</h2><p>{amendingActionId ? "This creates a new linked record. The signed original will remain permanently unchanged." : selected ? "Saving creates an immutable revision. Store and submitter ownership cannot be changed." : "Review carefully before submitting. Managers cannot edit a record after it is saved."}</p></div><AlertTriangle size={28} /></div>
       <div className="hr-form-grid">
         <label>Store<select value={form.store_id} disabled={Boolean(selected)} onChange={(event) => field("store_id", event.target.value)}><option value="">Select store</option>{stores.map((store) => <option key={store.id} value={store.id}>{storeName(store.id)}</option>)}</select></label>
         <label className={form.action_type === "termination" && !form.member_id ? "hr-required-missing" : undefined}>Roster employee <small>{form.action_type === "termination" ? "Required for termination" : "Recommended"}</small><select value={form.member_id} onChange={(event) => selectRosterMember(event.target.value)}><option value="">Enter name manually</option>{members.filter((member) => member.store_id === form.store_id && member.employment_status !== "terminated" && member.employment_status !== "archived").map((member) => <option key={member.id} value={member.id}>{member.display_name}{member.employment_status !== "active" ? ` · ${member.employment_status.replace("_", " ")}` : ""}</option>)}</select></label>
@@ -594,8 +695,19 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         </>}
         <label className="wide">Confidential District Manager notes <small>Optional</small><textarea rows={3} value={form.confidential_notes} onChange={(event) => field("confidential_notes", event.target.value)} /></label>
       </div>
-      <div className="hr-form-actions"><button className="button secondary" onClick={() => setShowForm(false)}>Cancel</button><button className="button primary" disabled={saving} onClick={() => void (selected ? saveEdit() : submit())}><Save size={17} />{saving ? "Saving securely…" : selected ? "Save revision" : "Submit permanent record"}</button></div>
+      <div className="hr-form-actions"><button className="button secondary" onClick={() => { setShowForm(false); setAmendingActionId(null); }}>Cancel</button><button className="button primary" disabled={saving} onClick={() => void (selected ? saveEdit() : submit())}><Save size={17} />{saving ? "Saving securely…" : selected ? "Save revision" : amendingActionId ? "Submit linked amendment" : "Submit permanent record"}</button></div>
     </section>}
+
+    {signingRecord && <div className="modal-backdrop hr-signing-backdrop" role="dialog" aria-modal="true" aria-label="Electronic signature review"><section className="panel hr-signing-modal">
+      <div className="panel-heading"><div><p className="eyebrow">In-person employee review</p><h2>Review and sign</h2><p>{signingRecord.employee_name} · {storeName(signingRecord.store_id)} · {formatDate(signingRecord.incident_date)}</p></div><button className="icon-button" aria-label="Close signature review" disabled={saving} onClick={() => setSigningRecord(null)}><X size={22} /></button></div>
+      <div className="hr-signing-review"><article><strong>Incident summary</strong><p>{signingRecord.incident_summary}</p></article><article><strong>Action taken</strong><p>{signingRecord.action_taken}</p></article><article><strong>Expected correction</strong><p>{signingRecord.expectations || "No additional expectations documented."}</p></article></div>
+      <div className="hr-signing-choice"><label className={signatureForm.outcome === "acknowledged" ? "selected" : ""}><input type="radio" name="signature-outcome" checked={signatureForm.outcome === "acknowledged"} onChange={() => setSignatureForm(emptySignatureForm(signingRecord.employee_name))} /><span>Employee will sign</span></label><label className={signatureForm.outcome === "refused" ? "selected" : ""}><input type="radio" name="signature-outcome" checked={signatureForm.outcome === "refused"} onChange={() => setSignatureForm({ ...emptySignatureForm(signingRecord.employee_name), outcome: "refused" })} /><span>Employee declined to sign</span></label></div>
+      <label>Employee statement <small>Optional; disagreement may be recorded here</small><textarea rows={4} value={signatureForm.employee_statement} onChange={(event) => setSignatureForm((current) => ({ ...current, employee_statement: event.target.value }))} /></label>
+      {signatureForm.outcome === "acknowledged" ? <div className="hr-employee-signing"><label className="hr-signature-confirm"><input type="checkbox" checked={signatureForm.employee_consented} onChange={(event) => setSignatureForm((current) => ({ ...current, employee_consented: event.target.checked }))} /><span>I reviewed and received this disciplinary action. My signature acknowledges receipt, not necessarily agreement with its contents. I consent to sign electronically.</span></label><SignaturePad label={`${signatureForm.employee_name} · Employee signature`} value={signatureForm.employee_signature_data} onChange={(value) => setSignatureForm((current) => ({ ...current, employee_signature_data: value }))} /></div> : <div className="hr-refusal-box"><AlertTriangle size={20} /><p>The manager confirms this action was presented to the employee and the employee declined to sign. A witness must observe and sign below.</p><label>Witness full name<input value={signatureForm.witness_name} onChange={(event) => setSignatureForm((current) => ({ ...current, witness_name: event.target.value }))} /></label><SignaturePad label="Witness signature" value={signatureForm.witness_signature_data} onChange={(value) => setSignatureForm((current) => ({ ...current, witness_signature_data: value }))} /></div>}
+      <div className="hr-manager-signing"><strong>Manager certification · {profile.fullName}</strong><p>I verified the employee’s identity in person, presented the complete record shown above, and certify that this signature session is accurate.</p><SignaturePad label="Manager signature" value={signatureForm.manager_signature_data} onChange={(value) => setSignatureForm((current) => ({ ...current, manager_signature_data: value }))} /></div>
+      <div className="hr-signing-disclosure"><LockKeyhole size={17} /><span>Finalizing captures the exact document version, signatures, time, authenticated manager, device session, and a SHA-256 fingerprint. The signed original cannot be edited.</span></div>
+      <div className="hr-form-actions"><button className="button secondary" disabled={saving} onClick={() => setSigningRecord(null)}>Cancel</button><button className="button primary" disabled={saving} onClick={() => void finalizeSignatures()}><ShieldCheck size={17} />{saving ? "Securing signatures…" : "Finalize and permanently lock"}</button></div>
+    </section></div>}
 
   </div>;
 }
