@@ -28,7 +28,7 @@ Deno.serve(async (req: Request) => {
 
     const [profileResult, actionResult, memberResult, settingsResult] = await Promise.all([
       db.from("profiles").select("id,role,active,full_name,store_id").eq("id", auth.data.user.id).maybeSingle(),
-      db.from("hr_disciplinary_actions").select("id,store_id,member_id,employee_name,incident_date,incident_summary,action_type,submitted_by,submitted_by_name").eq("id", actionId).maybeSingle(),
+      db.from("hr_disciplinary_actions").select("id,store_id,member_id,employee_name,incident_date,incident_summary,action_type,submitted_by,submitted_by_name,termination_hire_date,last_date_worked,termination_date,employee_home_address,employee_position,separation_reason,separation_classification,separation_reasons,separation_description,manager_signature,manager_signed_at").eq("id", actionId).maybeSingle(),
       db.from("labor_team_members").select("id,store_id,display_name").eq("id", memberId).maybeSingle(),
       db.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients").eq("id", true).maybeSingle(),
     ]);
@@ -37,6 +37,9 @@ Deno.serve(async (req: Request) => {
     const member = memberResult.data as any;
     if (!profile?.active || !["manager", "supervisor", "admin"].includes(profile.role)) return json({ error: "Access denied" }, 403);
     if (!action || !member || action.action_type !== "termination" || action.store_id !== member.store_id || (action.member_id && action.member_id !== member.id)) return json({ error: "Termination record does not match the roster member" }, 400);
+    const requiredLegalFields = [action.termination_hire_date, action.last_date_worked, action.termination_date, action.employee_home_address, action.employee_position, action.separation_reason, action.separation_classification, action.separation_description, action.manager_signature, action.manager_signed_at];
+    if (requiredLegalFields.some((value) => !String(value ?? "").trim())) return json({ error: "Complete the required termination paperwork before finalizing the roster status" }, 400);
+    if (["discharge", "resignation"].includes(action.separation_classification) && (!Array.isArray(action.separation_reasons) || action.separation_reasons.length === 0)) return json({ error: `Select at least one reason for ${action.separation_classification}` }, 400);
     if (profile.role === "manager" && action.submitted_by !== profile.id) return json({ error: "Managers may only finalize their own termination reports" }, 403);
 
     if (profile.role !== "admin" && profile.store_id !== member.store_id) {
@@ -47,8 +50,8 @@ Deno.serve(async (req: Request) => {
     const updateResult = await db.from("labor_team_members").update({
       employment_status: "terminated",
       active: false,
-      status_reason: action.incident_summary,
-      status_effective_date: action.incident_date,
+      status_reason: action.separation_reason || action.incident_summary,
+      status_effective_date: action.termination_date || action.incident_date,
       status_notes: "Termination recorded through HR Action Logs.",
       linked_hr_action_id: action.id,
       status_changed_by: profile.id,
@@ -65,9 +68,26 @@ Deno.serve(async (req: Request) => {
     const email = emailConfig();
     if (!email) return json({ ok: true, roster_updated: true, sent: 0, warning: "The termination was recorded, but the DASH email sender is not configured." });
     const store = storeResult.data as any;
-    const storeName = store ? `${store.name}${store.store_number ? ` ${store.store_number}` : ""}` : "Store";
+    const storeName = store ? `${store.store_number ? `${store.store_number}- ` : ""}${store.name}` : "Store";
     const portalUrl = `${Deno.env.get("DASH_OS_URL")?.trim() || "https://team-powers-portal.daustin-15d.workers.dev/"}?section=hr&record=${action.id}`;
-    const copy = terminationEmailCopy({ employeeName: member.display_name, storeName, effectiveDate: action.incident_date, reason: action.incident_summary, submittedBy: action.submitted_by_name, portalUrl, testMode: deliveryMode === "test" });
+    const copy = terminationEmailCopy({
+      employeeName: member.display_name,
+      storeName,
+      hireDate: action.termination_hire_date || "",
+      lastDateWorked: action.last_date_worked || "",
+      terminationDate: action.termination_date || action.incident_date,
+      homeAddress: action.employee_home_address || "Not provided",
+      employeePosition: action.employee_position || "Not provided",
+      separationReason: action.separation_reason || action.incident_summary,
+      separationClassification: action.separation_classification || "Other",
+      separationReasons: action.separation_reasons || [],
+      separationDescription: action.separation_description || "See confidential HR Action Log",
+      managerSignature: action.manager_signature || action.submitted_by_name,
+      managerSignedAt: action.manager_signed_at || action.incident_date,
+      submittedBy: action.submitted_by_name,
+      portalUrl,
+      testMode: deliveryMode === "test",
+    });
 
     let sent = 0, failed = 0;
     for (const recipient of recipients) {

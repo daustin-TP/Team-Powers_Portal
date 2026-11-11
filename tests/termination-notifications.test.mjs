@@ -9,10 +9,13 @@ vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../supabase/function
 const model=context.exports;
 
 test('termination email is branded, confidential, and clearly test-only',()=>{
-  const copy=model.terminationEmailCopy({employeeName:'Test Employee',storeName:'Smithville 5491',effectiveDate:'2026-11-11',reason:'Policy violation <script>alert(1)</script>',submittedBy:'Store Manager',portalUrl:'https://dash.example/',testMode:true});
+  const copy=model.terminationEmailCopy({employeeName:'Test Employee',storeName:'5491- Smithville',hireDate:'2025-03-04',lastDateWorked:'2026-11-09',terminationDate:'2026-11-11',homeAddress:'123 Main St',employeePosition:'Driver',separationReason:'Policy violation <script>alert(1)</script>',separationClassification:'Discharge',separationReasons:['Conduct','Attendance'],separationDescription:'Documented circumstances',managerSignature:'Store Manager',managerSignedAt:'2026-11-11T18:30:00Z',submittedBy:'Store Manager',portalUrl:'https://dash.example/',testMode:true});
   assert.match(copy.subject,/^\[TEST\]/);
   assert.match(copy.text,/outside HR provider/i);
-  assert.match(copy.text,/Smithville 5491/);
+  assert.match(copy.text,/5491- Smithville/);
+  assert.match(copy.text,/11\/11\/2026/);
+  assert.doesNotMatch(copy.text,/2026-11-11/);
+  assert.match(copy.text,/Conduct, Attendance/);
   assert.match(copy.html,/DASH-OS/);
   assert.match(copy.html,/CONFIDENTIAL HR/);
   assert.doesNotMatch(copy.html,/<script>/);

@@ -9,7 +9,10 @@ type ActionType = "coaching" | "verbal_warning" | "written_warning" | "final_war
 type HrStatus = "open" | "monitoring" | "completed";
 type Acknowledgment = "pending" | "acknowledged" | "declined" | "not_required";
 type EmploymentStatus = "active" | "on_leave" | "borrowed" | "terminated" | "archived";
-type TeamMember = { id: string; store_id: string; display_name: string; employment_status: EmploymentStatus; created_at: string };
+type TeamMember = { id: string; store_id: string; display_name: string; employment_status: EmploymentStatus; created_at: string; qualified_roles: string[] };
+type MemberDetails = { member_id: string; hire_date: string | null; rehire_date: string | null };
+type MemberPosition = { member_id: string; position_name: string };
+type SeparationClassification = "discharge" | "layoff" | "resignation" | "other";
 type StatusHistory = { id: string; member_id: string; store_id: string; from_status: EmploymentStatus | null; to_status: EmploymentStatus; effective_date: string; changed_at: string };
 type HrNotificationSettings = { delivery_mode: "test" | "live"; test_recipients: string[]; live_recipients: string[] };
 
@@ -30,6 +33,17 @@ type DisciplinaryAction = {
   acknowledgment_status: Acknowledgment;
   status: HrStatus;
   confidential_notes: string;
+  termination_hire_date: string | null;
+  last_date_worked: string | null;
+  termination_date: string | null;
+  employee_home_address: string;
+  employee_position: string;
+  separation_reason: string;
+  separation_classification: SeparationClassification | null;
+  separation_reasons: string[];
+  separation_description: string;
+  manager_signature: string;
+  manager_signed_at: string | null;
   submitted_by: string;
   submitted_by_name: string;
   last_edited_by: string | null;
@@ -61,6 +75,17 @@ type FormState = {
   acknowledgment_status: Acknowledgment;
   status: HrStatus;
   confidential_notes: string;
+  termination_hire_date: string;
+  last_date_worked: string;
+  termination_date: string;
+  employee_home_address: string;
+  employee_position: string;
+  separation_reason: string;
+  separation_classification: SeparationClassification | "";
+  separation_reasons: string[];
+  separation_description: string;
+  manager_signature: string;
+  manager_signature_confirmed: boolean;
 };
 
 const actionLabels: Record<ActionType, string> = {
@@ -107,6 +132,17 @@ const emptyForm = (storeId = ""): FormState => ({
   acknowledgment_status: "pending",
   status: "open",
   confidential_notes: "",
+  termination_hire_date: "",
+  last_date_worked: today(),
+  termination_date: today(),
+  employee_home_address: "",
+  employee_position: "",
+  separation_reason: "",
+  separation_classification: "",
+  separation_reasons: [],
+  separation_description: "",
+  manager_signature: "",
+  manager_signature_confirmed: false,
 });
 
 const formatDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -117,6 +153,8 @@ export default function HumanResources({ profile }: { profile: Profile }) {
   const [stores, setStores] = useState<Store[]>([]);
   const [records, setRecords] = useState<DisciplinaryAction[]>([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
+  const [memberDetails, setMemberDetails] = useState<MemberDetails[]>([]);
+  const [memberPositions, setMemberPositions] = useState<MemberPosition[]>([]);
   const [statusHistory, setStatusHistory] = useState<StatusHistory[]>([]);
   const [notificationSettings, setNotificationSettings] = useState<HrNotificationSettings | null>(null);
   const [turnoverStart, setTurnoverStart] = useState(() => `${new Date().getFullYear()}-01-01`);
@@ -138,15 +176,17 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     if (!supabase) { setLoading(false); return; }
     setLoading(true);
     setMessage("");
-    const [storeResult, recordResult, assignmentResult, memberResult, historyResult, settingsResult] = await Promise.all([
+    const [storeResult, recordResult, assignmentResult, memberResult, detailResult, positionResult, historyResult, settingsResult] = await Promise.all([
       supabase.from("stores").select("id,name,store_number").eq("active", true).order("name"),
       supabase.from("hr_disciplinary_actions").select("*").order("incident_date", { ascending: false }).order("created_at", { ascending: false }),
       profile.role === "manager"
         ? supabase.from("profile_store_assignments").select("store_id").eq("profile_id", profile.id)
         : Promise.resolve({ data: null, error: null }),
       profile.role === "supervisor" || profile.role === "admin"
-        ? supabase.from("labor_team_members").select("id,store_id,display_name,employment_status,created_at").order("display_name")
-        : supabase.from("labor_team_members").select("id,store_id,display_name,employment_status,created_at").eq("active", true).order("display_name"),
+        ? supabase.from("labor_team_members").select("id,store_id,display_name,employment_status,created_at,qualified_roles").order("display_name")
+        : supabase.from("labor_team_members").select("id,store_id,display_name,employment_status,created_at,qualified_roles").eq("active", true).order("display_name"),
+      supabase.from("team_member_private_details").select("member_id,hire_date,rehire_date"),
+      supabase.from("team_member_positions").select("member_id,position_name").eq("active", true).order("position_name"),
       profile.role === "supervisor" || profile.role === "admin"
         ? supabase.from("team_member_status_history").select("id,member_id,store_id,from_status,to_status,effective_date,changed_at").order("effective_date")
         : Promise.resolve({ data: [], error: null }),
@@ -154,8 +194,8 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         ? supabase.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients").eq("id", true).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
-    if (storeResult.error || recordResult.error || memberResult.error || historyResult.error || settingsResult.error) {
-      setMessage(storeResult.error?.message || recordResult.error?.message || memberResult.error?.message || historyResult.error?.message || settingsResult.error?.message || "The confidential HR file could not be loaded.");
+    if (storeResult.error || recordResult.error || memberResult.error || detailResult.error || positionResult.error || historyResult.error || settingsResult.error) {
+      setMessage(storeResult.error?.message || recordResult.error?.message || memberResult.error?.message || detailResult.error?.message || positionResult.error?.message || historyResult.error?.message || settingsResult.error?.message || "The confidential HR file could not be loaded.");
       setLoading(false);
       return;
     }
@@ -168,6 +208,8 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     setStores(visibleStores);
     setRecords((recordResult.data ?? []) as DisciplinaryAction[]);
     setMembers(((memberResult.data ?? []) as TeamMember[]).filter((member) => visibleStores.some((store) => store.id === member.store_id)));
+    setMemberDetails((detailResult.data ?? []) as MemberDetails[]);
+    setMemberPositions((positionResult.data ?? []) as MemberPosition[]);
     setStatusHistory((historyResult.data ?? []) as StatusHistory[]);
     setNotificationSettings((settingsResult.data as HrNotificationSettings | null) ?? null);
     setForm((current) => ({ ...current, store_id: current.store_id || visibleStores[0]?.id || "" }));
@@ -201,6 +243,12 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     return store.store_number ? `${store.name} ${store.store_number}` : store.name;
   };
 
+  const terminationStoreName = (id: string) => {
+    const store = stores.find((item) => item.id === id);
+    if (!store) return "Store record";
+    return store.store_number ? `${store.store_number}- ${store.name}` : store.name;
+  };
+
   const openNew = () => {
     setSelected(null);
     setRevisions([]);
@@ -215,7 +263,17 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       setMessage("Select the roster employee before submitting a termination report.");
       return;
     }
-    if (!form.store_id || !form.employee_name.trim() || form.incident_summary.trim().length < 10 || form.action_taken.trim().length < 5) {
+    if (form.action_type === "termination") {
+      const required = [form.termination_hire_date, form.last_date_worked, form.termination_date, form.employee_home_address.trim(), form.employee_position.trim(), form.separation_reason.trim(), form.separation_classification, form.separation_description.trim(), form.manager_signature.trim()];
+      if (required.some((value) => !value) || !form.manager_signature_confirmed) {
+        setMessage("Complete every required termination field and confirm the manager electronic signature before submitting.");
+        return;
+      }
+      if (["discharge", "resignation"].includes(form.separation_classification) && form.separation_reasons.length === 0) {
+        setMessage(`Select at least one reason for ${form.separation_classification}.`);
+        return;
+      }
+    } else if (!form.store_id || !form.employee_name.trim() || form.incident_summary.trim().length < 10 || form.action_taken.trim().length < 5) {
       setMessage("Complete the store, employee, incident summary, and action taken before saving.");
       return;
     }
@@ -226,17 +284,27 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       employee_name: form.employee_name.trim(),
       employee_identifier: form.employee_identifier.trim() || null,
       member_id: form.member_id || null,
-      incident_date: form.incident_date,
+      incident_date: form.action_type === "termination" ? form.termination_date : form.incident_date,
       action_type: form.action_type,
-      policy_categories: form.policy_categories,
-      incident_summary: form.incident_summary.trim(),
-      action_taken: form.action_taken.trim(),
-      expectations: form.expectations.trim(),
-      follow_up_date: form.follow_up_date || null,
+      policy_categories: form.action_type === "termination" ? ["other"] : form.policy_categories,
+      incident_summary: form.action_type === "termination" ? form.separation_reason.trim() : form.incident_summary.trim(),
+      action_taken: form.action_type === "termination" ? `Employment separated — ${form.separation_classification}.` : form.action_taken.trim(),
+      expectations: form.action_type === "termination" ? "" : form.expectations.trim(),
+      follow_up_date: form.action_type === "termination" ? null : form.follow_up_date || null,
       witnesses: form.witnesses.trim(),
       confidential_notes: form.confidential_notes.trim(),
-      acknowledgment_status: form.acknowledgment_status,
-      status: form.status,
+      acknowledgment_status: form.action_type === "termination" ? "not_required" : form.acknowledgment_status,
+      status: form.action_type === "termination" ? "completed" : form.status,
+      termination_hire_date: form.action_type === "termination" ? form.termination_hire_date : null,
+      last_date_worked: form.action_type === "termination" ? form.last_date_worked : null,
+      termination_date: form.action_type === "termination" ? form.termination_date : null,
+      employee_home_address: form.action_type === "termination" ? form.employee_home_address.trim() : "",
+      employee_position: form.action_type === "termination" ? form.employee_position.trim() : "",
+      separation_reason: form.action_type === "termination" ? form.separation_reason.trim() : "",
+      separation_classification: form.action_type === "termination" ? form.separation_classification : null,
+      separation_reasons: form.action_type === "termination" ? form.separation_reasons : [],
+      separation_description: form.action_type === "termination" ? form.separation_description.trim() : "",
+      manager_signature: form.action_type === "termination" ? form.manager_signature.trim() : "",
       submitted_by: profile.id,
       submitted_by_name: profile.fullName,
     }).select("id").single();
@@ -272,29 +340,58 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       acknowledgment_status: selected.acknowledgment_status,
       status: selected.status,
       confidential_notes: selected.confidential_notes,
+      termination_hire_date: selected.termination_hire_date ?? "",
+      last_date_worked: selected.last_date_worked ?? "",
+      termination_date: selected.termination_date ?? selected.incident_date,
+      employee_home_address: selected.employee_home_address ?? "",
+      employee_position: selected.employee_position ?? "",
+      separation_reason: selected.separation_reason ?? selected.incident_summary,
+      separation_classification: selected.separation_classification ?? "",
+      separation_reasons: selected.separation_reasons ?? [],
+      separation_description: selected.separation_description ?? "",
+      manager_signature: selected.manager_signature ?? "",
+      manager_signature_confirmed: Boolean(selected.manager_signature),
     });
     setShowForm(true);
   };
 
   const saveEdit = async () => {
     if (!supabase || !selected || !canEdit || saving) return;
+    if (form.action_type === "termination" && (!form.termination_hire_date || !form.last_date_worked || !form.termination_date || !form.employee_home_address.trim() || !form.employee_position.trim() || !form.separation_reason.trim() || !form.separation_classification || !form.separation_description.trim() || !form.manager_signature.trim() || !form.manager_signature_confirmed)) {
+      setMessage("Complete every required termination field and confirm the manager electronic signature before saving.");
+      return;
+    }
+    if (form.action_type === "termination" && ["discharge", "resignation"].includes(form.separation_classification) && form.separation_reasons.length === 0) {
+      setMessage(`Select at least one reason for ${form.separation_classification}.`);
+      return;
+    }
     setSaving(true);
     setMessage("");
     const { error } = await supabase.from("hr_disciplinary_actions").update({
       employee_name: form.employee_name.trim(),
       employee_identifier: form.employee_identifier.trim() || null,
       member_id: form.member_id || null,
-      incident_date: form.incident_date,
+      incident_date: form.action_type === "termination" ? form.termination_date : form.incident_date,
       action_type: form.action_type,
-      policy_categories: form.policy_categories,
-      incident_summary: form.incident_summary.trim(),
-      action_taken: form.action_taken.trim(),
-      expectations: form.expectations.trim(),
-      follow_up_date: form.follow_up_date || null,
+      policy_categories: form.action_type === "termination" ? ["other"] : form.policy_categories,
+      incident_summary: form.action_type === "termination" ? form.separation_reason.trim() : form.incident_summary.trim(),
+      action_taken: form.action_type === "termination" ? `Employment separated — ${form.separation_classification}.` : form.action_taken.trim(),
+      expectations: form.action_type === "termination" ? "" : form.expectations.trim(),
+      follow_up_date: form.action_type === "termination" ? null : form.follow_up_date || null,
       witnesses: form.witnesses.trim(),
-      acknowledgment_status: form.acknowledgment_status,
-      status: form.status,
+      acknowledgment_status: form.action_type === "termination" ? "not_required" : form.acknowledgment_status,
+      status: form.action_type === "termination" ? "completed" : form.status,
       confidential_notes: form.confidential_notes.trim(),
+      termination_hire_date: form.action_type === "termination" ? form.termination_hire_date : null,
+      last_date_worked: form.action_type === "termination" ? form.last_date_worked : null,
+      termination_date: form.action_type === "termination" ? form.termination_date : null,
+      employee_home_address: form.action_type === "termination" ? form.employee_home_address.trim() : "",
+      employee_position: form.action_type === "termination" ? form.employee_position.trim() : "",
+      separation_reason: form.action_type === "termination" ? form.separation_reason.trim() : "",
+      separation_classification: form.action_type === "termination" ? form.separation_classification : null,
+      separation_reasons: form.action_type === "termination" ? form.separation_reasons : [],
+      separation_description: form.action_type === "termination" ? form.separation_description.trim() : "",
+      manager_signature: form.action_type === "termination" ? form.manager_signature.trim() : "",
     }).eq("id", selected.id);
     setSaving(false);
     if (error) { setMessage(error.message); return; }
@@ -308,8 +405,20 @@ export default function HumanResources({ profile }: { profile: Profile }) {
 
   const selectRosterMember = (memberId: string) => {
     const member = members.find((item) => item.id === memberId);
-    setForm((current) => ({ ...current, member_id: memberId, employee_name: member?.display_name ?? current.employee_name }));
+    const details = memberDetails.find((item) => item.member_id === memberId);
+    const positions = memberPositions.filter((item) => item.member_id === memberId).map((item) => item.position_name);
+    setForm((current) => ({
+      ...current,
+      member_id: memberId,
+      employee_name: member?.display_name ?? current.employee_name,
+      termination_hire_date: details?.hire_date ?? details?.rehire_date ?? current.termination_hire_date,
+      employee_position: positions.length ? positions.join(", ") : (member?.qualified_roles ?? []).map((role) => role.charAt(0).toUpperCase() + role.slice(1)).join(", ") || current.employee_position,
+    }));
   };
+
+  const toggleSeparationReason = (reason: string) => field("separation_reasons", form.separation_reasons.includes(reason)
+    ? form.separation_reasons.filter((value) => value !== reason)
+    : [...form.separation_reasons, reason]);
 
   const statusAt = (member: TeamMember, date: string) => {
     const events = statusHistory
@@ -368,7 +477,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         id: selected.id,
         employeeName: selected.employee_name,
         employeeIdentifier: selected.employee_identifier ?? "",
-        storeName: storeName(selected.store_id),
+        storeName: selected.action_type === "termination" ? terminationStoreName(selected.store_id) : storeName(selected.store_id),
         incidentDate: formatDate(selected.incident_date),
         actionType: selected.action_type,
         policyCategories: selected.policy_categories,
@@ -380,8 +489,19 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         acknowledgmentStatus: selected.acknowledgment_status,
         status: selected.status,
         submittedByName: selected.submitted_by_name,
+        hireDate: selected.termination_hire_date ? formatDate(selected.termination_hire_date) : "",
+        lastDateWorked: selected.last_date_worked ? formatDate(selected.last_date_worked) : "",
+        terminationDate: selected.termination_date ? formatDate(selected.termination_date) : formatDate(selected.incident_date),
+        homeAddress: selected.employee_home_address,
+        employeePosition: selected.employee_position,
+        separationReason: selected.separation_reason,
+        separationClassification: selected.separation_classification ?? "",
+        separationReasons: selected.separation_reasons,
+        separationDescription: selected.separation_description,
+        managerSignature: selected.manager_signature,
+        managerSignedAt: selected.manager_signed_at ? formatTimestamp(selected.manager_signed_at) : "",
       });
-      setMessage("Two-page portrait PDF created. It is ready to review and print.");
+      setMessage(selected.action_type === "termination" ? "Portrait employee separation PDF created. It is ready to review and print." : "Two-page portrait PDF created. It is ready to review and print.");
     } catch (error) {
       setMessage(`The HR record PDF could not be created: ${(error as Error).message}`);
     } finally {
@@ -422,7 +542,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     {selected && !showForm && <section className="panel hr-detail-panel">
       <div className="panel-heading"><div><p className="eyebrow">Permanent record</p><h2>{selected.employee_name}</h2><p>{storeName(selected.store_id)} · Incident {formatDate(selected.incident_date)}</p></div><div className="button-row"><button className="button secondary" disabled={printingRecord} onClick={() => void printRecord()}><Printer size={17} />{printingRecord ? "Preparing PDF…" : "Print record"}</button>{canEdit && <button className="button secondary" onClick={beginEdit}><FilePenLine size={17} />Edit record</button>}</div></div>
       <div className="hr-record-meta"><span className={`hr-action-pill ${selected.action_type}`}>{actionLabels[selected.action_type]}</span><span className={`status-pill ${selected.status}`}>{selected.status}</span><span>{selected.policy_categories.map((category) => categoryLabels[category] ?? category).join(" · ")}</span><span>Acknowledgment: {selected.acknowledgment_status.replace("_", " ")}</span></div>
-      <div className="hr-detail-grid"><article><h3>Incident summary</h3><p>{selected.incident_summary}</p></article><article><h3>Action taken</h3><p>{selected.action_taken}</p></article><article><h3>Expectations</h3><p>{selected.expectations || "—"}</p></article><article><h3>Witnesses</h3><p>{selected.witnesses || "—"}</p></article>{selected.confidential_notes && <article className="wide"><h3>Confidential notes</h3><p>{selected.confidential_notes}</p></article>}</div>
+      {selected.action_type === "termination" ? <div className="hr-detail-grid"><article><h3>Classification</h3><p>{selected.separation_classification || "—"}</p></article><article><h3>Date terminated</h3><p>{selected.termination_date ? formatDate(selected.termination_date) : formatDate(selected.incident_date)}</p></article><article><h3>Position</h3><p>{selected.employee_position || "—"}</p></article><article><h3>Last date worked</h3><p>{selected.last_date_worked ? formatDate(selected.last_date_worked) : "—"}</p></article><article className="wide"><h3>Reason for separation</h3><p>{selected.separation_reason || selected.incident_summary}</p></article><article className="wide"><h3>Description of circumstances</h3><p>{selected.separation_description || "—"}</p></article><article><h3>Manager signature</h3><p>{selected.manager_signature || "—"}</p></article><article><h3>Signed</h3><p>{selected.manager_signed_at ? formatTimestamp(selected.manager_signed_at) : "—"}</p></article>{selected.confidential_notes && <article className="wide"><h3>Confidential notes</h3><p>{selected.confidential_notes}</p></article>}</div> : <div className="hr-detail-grid"><article><h3>Incident summary</h3><p>{selected.incident_summary}</p></article><article><h3>Action taken</h3><p>{selected.action_taken}</p></article><article><h3>Expectations</h3><p>{selected.expectations || "—"}</p></article><article><h3>Witnesses</h3><p>{selected.witnesses || "—"}</p></article>{selected.confidential_notes && <article className="wide"><h3>Confidential notes</h3><p>{selected.confidential_notes}</p></article>}</div>}
       <div className="hr-audit"><History size={19} /><div><strong>Record history</strong><span>Submitted by {selected.submitted_by_name} on {formatTimestamp(selected.created_at)}.</span>{revisions.length === 0 ? <small>No edits have been made.</small> : revisions.map((revision) => <small key={revision.id}>Edited by {revision.changed_by_name} · {formatTimestamp(revision.created_at)}</small>)}</div></div>
     </section>}
 
@@ -433,16 +553,34 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         <label>Roster employee <small>{form.action_type === "termination" ? "Required for termination" : "Recommended"}</small><select value={form.member_id} onChange={(event) => selectRosterMember(event.target.value)}><option value="">Enter name manually</option>{members.filter((member) => member.store_id === form.store_id && member.employment_status !== "terminated" && member.employment_status !== "archived").map((member) => <option key={member.id} value={member.id}>{member.display_name}{member.employment_status !== "active" ? ` · ${member.employment_status.replace("_", " ")}` : ""}</option>)}</select></label>
         <label>Employee name<input value={form.employee_name} readOnly={Boolean(form.member_id)} onChange={(event) => field("employee_name", event.target.value)} /></label>
         <label>Employee ID <small>Optional</small><input value={form.employee_identifier} onChange={(event) => field("employee_identifier", event.target.value)} /></label>
-        <label>Incident date<input type="date" value={form.incident_date} onChange={(event) => field("incident_date", event.target.value)} /></label>
-        <label>Action type<select value={form.action_type} onChange={(event) => field("action_type", event.target.value as ActionType)}>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{form.action_type === "termination" && <small>Submitting will remove this employee from active scheduling and send a test-only HR alert.</small>}</label>
-        <fieldset className="wide hr-category-selector"><legend>Policy categories <small>Select all that apply</small></legend><div>{Object.entries(categoryLabels).map(([value, label]) => <label key={value} className={form.policy_categories.includes(value) ? "selected" : ""}><input type="checkbox" checked={form.policy_categories.includes(value)} onChange={() => togglePolicyCategory(value)} /><span>{label}</span></label>)}</div></fieldset>
-        <label className="wide">Incident summary<textarea rows={5} value={form.incident_summary} onChange={(event) => field("incident_summary", event.target.value)} placeholder="State the facts, dates, and observed behavior. Avoid assumptions." /></label>
-        <label className="wide">Action taken<textarea rows={4} value={form.action_taken} onChange={(event) => field("action_taken", event.target.value)} placeholder="Describe the conversation and disciplinary action issued." /></label>
-        <label className="wide">Expected correction<textarea rows={3} value={form.expectations} onChange={(event) => field("expectations", event.target.value)} placeholder="What must change, by when, and how success will be measured." /></label>
-        <label>Follow-up date <small>Optional</small><input type="date" min={form.incident_date} value={form.follow_up_date} onChange={(event) => field("follow_up_date", event.target.value)} /></label>
-        <label>Witnesses <small>Optional</small><input value={form.witnesses} onChange={(event) => field("witnesses", event.target.value)} /></label>
-        <label>Acknowledgment<select value={form.acknowledgment_status} onChange={(event) => field("acknowledgment_status", event.target.value as Acknowledgment)}><option value="pending">Pending</option><option value="acknowledged">Acknowledged</option><option value="declined">Employee declined</option><option value="not_required">Not required</option></select></label>
-        <label>Record status<select value={form.status} onChange={(event) => field("status", event.target.value as HrStatus)}><option value="open">Open</option><option value="monitoring">Monitoring</option><option value="completed">Completed</option></select></label>
+        {form.action_type !== "termination" && <label>Incident date<input type="date" value={form.incident_date} onChange={(event) => field("incident_date", event.target.value)} /></label>}
+        <label>Action type<select value={form.action_type} onChange={(event) => { const actionType = event.target.value as ActionType; setForm((current) => ({ ...current, action_type: actionType, ...(actionType === "termination" ? { incident_date: current.termination_date || today(), termination_date: current.termination_date || today(), last_date_worked: current.last_date_worked || today() } : {}) })); }}>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{form.action_type === "termination" && <small>Submitting completes the legal separation record, removes the employee from active scheduling, and sends the test-only HR alert.</small>}</label>
+        {form.action_type === "termination" ? <>
+          <div className="wide hr-termination-notice"><LockKeyhole size={20} /><div><strong>Termination paperwork</strong><span>Required legal fields are preserved with the permanent HR record. Dates print as MM/DD/YYYY.</span></div></div>
+          <label>Hire date<input type="date" value={form.termination_hire_date} onChange={(event) => field("termination_hire_date", event.target.value)} /></label>
+          <label>Last date worked<input type="date" value={form.last_date_worked} onChange={(event) => field("last_date_worked", event.target.value)} /></label>
+          <label>Date terminated<input type="date" value={form.termination_date} onChange={(event) => field("termination_date", event.target.value)} /></label>
+          <label>Store location<input value={form.store_id ? terminationStoreName(form.store_id) : ""} readOnly /></label>
+          <label className="wide">Employee home address<textarea rows={2} value={form.employee_home_address} onChange={(event) => field("employee_home_address", event.target.value)} placeholder="Street, city, state, ZIP" /></label>
+          <label>Employee position<input value={form.employee_position} onChange={(event) => field("employee_position", event.target.value)} /></label>
+          <label>Classification of separation<select value={form.separation_classification} onChange={(event) => setForm((current) => ({ ...current, separation_classification: event.target.value as SeparationClassification, separation_reasons: [] }))}><option value="">Select classification</option><option value="discharge">Discharge</option><option value="layoff">Layoff</option><option value="resignation">Resignation</option><option value="other">Other</option></select></label>
+          <label className="wide">Reason for separation<textarea rows={3} value={form.separation_reason} onChange={(event) => field("separation_reason", event.target.value)} placeholder="Provide the primary reason for separation." /></label>
+          {form.separation_classification === "discharge" && <fieldset className="wide hr-category-selector"><legend>Reason for discharge <small>Select all that apply</small></legend><div>{["Conduct", "Attendance", "Performance", "Medical", "No Call/No Show"].map((reason) => <label key={reason} className={form.separation_reasons.includes(reason) ? "selected" : ""}><input type="checkbox" checked={form.separation_reasons.includes(reason)} onChange={() => toggleSeparationReason(reason)} /><span>{reason}</span></label>)}</div></fieldset>}
+          {form.separation_classification === "resignation" && <fieldset className="wide hr-category-selector"><legend>Reason for resignation <small>Select all that apply</small></legend><div>{["Relocation", "New Job", "Personal Reasons", "Retirement", "Medical", "School", "Family"].map((reason) => <label key={reason} className={form.separation_reasons.includes(reason) ? "selected" : ""}><input type="checkbox" checked={form.separation_reasons.includes(reason)} onChange={() => toggleSeparationReason(reason)} /><span>{reason}</span></label>)}</div></fieldset>}
+          <label className="wide">Description of circumstances of separation<textarea rows={6} value={form.separation_description} onChange={(event) => field("separation_description", event.target.value)} placeholder="State the facts, dates, prior conversations, and circumstances surrounding the separation." /></label>
+          <label>Manager electronic signature<input value={form.manager_signature} onChange={(event) => setForm((current) => ({ ...current, manager_signature: event.target.value, manager_signature_confirmed: false }))} placeholder="Type full legal name" /></label>
+          <label className="hr-signature-confirm"><input type="checkbox" checked={form.manager_signature_confirmed} onChange={(event) => field("manager_signature_confirmed", event.target.checked)} /><span>I certify that typing my name constitutes my electronic signature and that this report is accurate.</span></label>
+          <label>Witnesses <small>Optional</small><input value={form.witnesses} onChange={(event) => field("witnesses", event.target.value)} /></label>
+        </> : <>
+          <fieldset className="wide hr-category-selector"><legend>Policy categories <small>Select all that apply</small></legend><div>{Object.entries(categoryLabels).map(([value, label]) => <label key={value} className={form.policy_categories.includes(value) ? "selected" : ""}><input type="checkbox" checked={form.policy_categories.includes(value)} onChange={() => togglePolicyCategory(value)} /><span>{label}</span></label>)}</div></fieldset>
+          <label className="wide">Incident summary<textarea rows={5} value={form.incident_summary} onChange={(event) => field("incident_summary", event.target.value)} placeholder="State the facts, dates, and observed behavior. Avoid assumptions." /></label>
+          <label className="wide">Action taken<textarea rows={4} value={form.action_taken} onChange={(event) => field("action_taken", event.target.value)} placeholder="Describe the conversation and disciplinary action issued." /></label>
+          <label className="wide">Expected correction<textarea rows={3} value={form.expectations} onChange={(event) => field("expectations", event.target.value)} placeholder="What must change, by when, and how success will be measured." /></label>
+          <label>Follow-up date <small>Optional</small><input type="date" min={form.incident_date} value={form.follow_up_date} onChange={(event) => field("follow_up_date", event.target.value)} /></label>
+          <label>Witnesses <small>Optional</small><input value={form.witnesses} onChange={(event) => field("witnesses", event.target.value)} /></label>
+          <label>Acknowledgment<select value={form.acknowledgment_status} onChange={(event) => field("acknowledgment_status", event.target.value as Acknowledgment)}><option value="pending">Pending</option><option value="acknowledged">Acknowledged</option><option value="declined">Employee declined</option><option value="not_required">Not required</option></select></label>
+          <label>Record status<select value={form.status} onChange={(event) => field("status", event.target.value as HrStatus)}><option value="open">Open</option><option value="monitoring">Monitoring</option><option value="completed">Completed</option></select></label>
+        </>}
         <label className="wide">Confidential District Manager notes <small>Optional</small><textarea rows={3} value={form.confidential_notes} onChange={(event) => field("confidential_notes", event.target.value)} /></label>
       </div>
       <div className="hr-form-actions"><button className="button secondary" onClick={() => setShowForm(false)}>Cancel</button><button className="button primary" disabled={saving} onClick={() => void (selected ? saveEdit() : submit())}><Save size={17} />{saving ? "Saving securely…" : selected ? "Save revision" : "Submit permanent record"}</button></div>

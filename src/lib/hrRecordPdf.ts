@@ -18,6 +18,17 @@ export type HrRecordPdfData = {
   acknowledgmentStatus: HrAcknowledgment;
   status: HrStatus;
   submittedByName: string;
+  hireDate?: string;
+  lastDateWorked?: string;
+  terminationDate?: string;
+  homeAddress?: string;
+  employeePosition?: string;
+  separationReason?: string;
+  separationClassification?: string;
+  separationReasons?: string[];
+  separationDescription?: string;
+  managerSignature?: string;
+  managerSignedAt?: string;
 };
 
 type BrandImages = { crest?: string; dash?: string };
@@ -95,11 +106,11 @@ export async function buildHrRecordPdf(data: HrRecordPdfData, images: BrandImage
     fill(colors.red); pdf.rect(0, 92, pageWidth / 2, 5, "F"); fill(colors.blue); pdf.rect(pageWidth / 2, 92, pageWidth / 2, 5, "F");
   };
 
-  const footer = (page: number) => {
+  const footer = (page: number, total = 2) => {
     stroke([212, 219, 224]); pdf.setLineWidth(.6); pdf.line(margin, pageHeight - 26, pageWidth - margin, pageHeight - 26);
     pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.8); ink(colors.midGray);
     pdf.text(`Team Powers | Confidential employee record | Record ${data.id.slice(0, 8).toUpperCase()}`, margin, pageHeight - 14);
-    pdf.text(`Page ${page} of 2`, pageWidth - margin, pageHeight - 14, { align: "right" });
+    pdf.text(`Page ${page} of ${total}`, pageWidth - margin, pageHeight - 14, { align: "right" });
   };
 
   const choice = (x: number, y: number, checked: boolean, label: string) => {
@@ -151,6 +162,45 @@ export async function buildHrRecordPdf(data: HrRecordPdfData, images: BrandImage
     stroke([205, 212, 218]); pdf.setLineWidth(.4);
     for (let lineY = y + 56; lineY < y + height - 8; lineY += 20) pdf.line(margin + 10, lineY, pageWidth - margin - 10, lineY);
   };
+
+  if (data.actionType === "termination") {
+    pdf.setProperties({ title: `${data.employeeName} - Employee Separation Record`, subject: "Team Powers employee separation record" });
+    header("Permanent employee separation record prepared from DASH-OS.");
+    let separationY = 112;
+    fill(colors.paleBlue); stroke(colors.blue); pdf.setLineWidth(.8); pdf.roundedRect(margin, separationY, contentWidth, 126, 5, 5, "FD");
+    const separationIdentity = [
+      ["Employee name", data.employeeName], ["Employee position", data.employeePosition || "-"],
+      ["Hire date", data.hireDate || "-"], ["Last date worked", data.lastDateWorked || "-"],
+      ["Date terminated", data.terminationDate || data.incidentDate], ["Store location", data.storeName],
+      ["Home address", data.homeAddress || "-"], ["Prepared by", data.submittedByName],
+    ];
+    separationIdentity.forEach(([label, value], index) => {
+      const column = index % 2;
+      const row = Math.floor(index / 2);
+      const x = margin + 12 + column * 274;
+      const rowY = separationY + 18 + row * 27;
+      pdf.setFont("helvetica", "bold"); pdf.setFontSize(6.3); ink(colors.midGray); pdf.text(label.toUpperCase(), x, rowY);
+      pdf.setFontSize(7.8); ink(colors.navy); pdf.text(String(value), x, rowY + 11, { maxWidth: 250 });
+    });
+    separationY += 140;
+    pdf.setFont("helvetica", "bold"); pdf.setFontSize(7.2); ink(colors.midGray); pdf.text("CLASSIFICATION OF SEPARATION", margin, separationY);
+    ["Discharge", "Layoff", "Resignation", "Other"].forEach((label, index) => choice(margin + index * 132, separationY + 20, data.separationClassification?.toLowerCase() === label.toLowerCase(), label));
+    separationY += 42;
+    if ((data.separationClassification || "").toLowerCase() === "discharge") {
+      separationY = optionGroup("Reason for discharge", ["Conduct", "Attendance", "Performance", "Medical", "No Call/No Show"].map((label) => ({ label, checked: (data.separationReasons ?? []).includes(label) })), separationY, 18);
+    } else if ((data.separationClassification || "").toLowerCase() === "resignation") {
+      separationY = optionGroup("Reason for resignation", ["Relocation", "New Job", "Personal Reasons", "Retirement", "Medical", "School", "Family"].map((label) => ({ label, checked: (data.separationReasons ?? []).includes(label) })), separationY, 18);
+    }
+    textBox("Reason for separation", data.separationReason || data.incidentSummary, separationY, 82); separationY += 92;
+    textBox("Description of circumstances of separation", data.separationDescription || "Not documented.", separationY, 174); separationY += 186;
+    fill(colors.paleGray); stroke(colors.line); pdf.roundedRect(margin, separationY, contentWidth, 70, 5, 5, "FD");
+    pdf.setFont("helvetica", "bold"); pdf.setFontSize(7); ink(colors.midGray); pdf.text("MANAGER ELECTRONIC SIGNATURE", margin + 12, separationY + 17);
+    pdf.setFontSize(10); ink(colors.navy); pdf.text(data.managerSignature || "-", margin + 12, separationY + 37);
+    pdf.setFontSize(7); ink(colors.midGray); pdf.text("DATE CAPTURED", margin + 330, separationY + 17);
+    pdf.setFontSize(9); ink(colors.navy); pdf.text(data.managerSignedAt || "-", margin + 330, separationY + 37);
+    footer(1, 1);
+    return pdf;
+  }
 
   header("Prepared from the permanent DASH-OS record for employee review and signature.");
   let y = 110;
@@ -212,7 +262,7 @@ export async function openHrRecordPdf(data: HrRecordPdfData) {
   const previewWindow = window.open("", "_blank");
   if (previewWindow) {
     previewWindow.document.title = "Preparing HR record PDF";
-    previewWindow.document.body.innerHTML = '<p style="font:600 16px Arial;padding:24px">Preparing the two-page portrait HR record...</p>';
+    previewWindow.document.body.innerHTML = `<p style="font:600 16px Arial;padding:24px">Preparing the ${data.actionType === "termination" ? "employee separation" : "two-page portrait HR"} record...</p>`;
   }
   try {
     const [crest, dash] = await Promise.all([
@@ -225,7 +275,7 @@ export async function openHrRecordPdf(data: HrRecordPdfData) {
       previewWindow.location.href = url;
       window.setTimeout(() => URL.revokeObjectURL(url), 120000);
     } else {
-      pdf.save(`${data.employeeName.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")}-corrective-action.pdf`);
+      pdf.save(`${data.employeeName.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")}-${data.actionType === "termination" ? "employee-separation" : "corrective-action"}.pdf`);
       URL.revokeObjectURL(url);
     }
   } catch (error) {
