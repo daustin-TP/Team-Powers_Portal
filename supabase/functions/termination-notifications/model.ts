@@ -7,8 +7,10 @@ const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (character) => (
 }[character] ?? character));
 
 export function formatTerminationDate(value: string) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || "");
-  return match ? `${match[2]}/${match[3]}/${match[1]}` : value || "Not provided";
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+  if (dateOnly) return `${dateOnly[2]}/${dateOnly[3]}/${dateOnly[1]}`;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value || "Not provided" : new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "2-digit", day: "2-digit", year: "numeric" }).format(parsed);
 }
 
 export function terminationEmailCopy(input: {

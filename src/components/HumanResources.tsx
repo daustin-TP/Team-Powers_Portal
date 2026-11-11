@@ -146,6 +146,13 @@ const emptyForm = (storeId = ""): FormState => ({
 });
 
 const formatDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+const formatNumericDate = (value: string) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-");
+    return `${month}/${day}/${year}`;
+  }
+  return new Date(value).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric", timeZone: "America/Chicago" });
+};
 const formatTimestamp = (value: string) => new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 
 export default function HumanResources({ profile }: { profile: Profile }) {
@@ -199,7 +206,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       setLoading(false);
       return;
     }
-    const allStores = (storeResult.data ?? []) as Store[];
+    const allStores = ((storeResult.data ?? []) as Store[]).filter((store) => store.name.trim().toLowerCase() !== "all stores");
     const allowedIds = new Set<string>([
       ...(profile.storeId ? [profile.storeId] : []),
       ...((assignmentResult.data ?? []) as { store_id: string }[]).map((row) => row.store_id),
@@ -478,7 +485,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         employeeName: selected.employee_name,
         employeeIdentifier: selected.employee_identifier ?? "",
         storeName: selected.action_type === "termination" ? terminationStoreName(selected.store_id) : storeName(selected.store_id),
-        incidentDate: formatDate(selected.incident_date),
+        incidentDate: selected.action_type === "termination" ? formatNumericDate(selected.incident_date) : formatDate(selected.incident_date),
         actionType: selected.action_type,
         policyCategories: selected.policy_categories,
         incidentSummary: selected.incident_summary,
@@ -489,9 +496,9 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         acknowledgmentStatus: selected.acknowledgment_status,
         status: selected.status,
         submittedByName: selected.submitted_by_name,
-        hireDate: selected.termination_hire_date ? formatDate(selected.termination_hire_date) : "",
-        lastDateWorked: selected.last_date_worked ? formatDate(selected.last_date_worked) : "",
-        terminationDate: selected.termination_date ? formatDate(selected.termination_date) : formatDate(selected.incident_date),
+        hireDate: selected.termination_hire_date ? formatNumericDate(selected.termination_hire_date) : "",
+        lastDateWorked: selected.last_date_worked ? formatNumericDate(selected.last_date_worked) : "",
+        terminationDate: selected.termination_date ? formatNumericDate(selected.termination_date) : formatNumericDate(selected.incident_date),
         homeAddress: selected.employee_home_address,
         employeePosition: selected.employee_position,
         separationReason: selected.separation_reason,
@@ -499,7 +506,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         separationReasons: selected.separation_reasons,
         separationDescription: selected.separation_description,
         managerSignature: selected.manager_signature,
-        managerSignedAt: selected.manager_signed_at ? formatTimestamp(selected.manager_signed_at) : "",
+        managerSignedAt: selected.manager_signed_at ? formatNumericDate(selected.manager_signed_at) : "",
       });
       setMessage(selected.action_type === "termination" ? "Portrait employee separation PDF created. It is ready to review and print." : "Two-page portrait PDF created. It is ready to review and print.");
     } catch (error) {
