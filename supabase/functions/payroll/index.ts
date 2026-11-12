@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.110.9";
-import { emailBody, emailHtml, validCycle, validateEntries } from "./model.ts";
+import { emailBody, emailHtml, reminderBody, validCycle, validateEntries } from "./model.ts";
 import { checkEmailConnection, emailConfig, emailDeliveryFailure, sendEmailMessage } from "./email.ts";
 
 const headers = { "Access-Control-Allow-Origin":"*", "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods":"POST, OPTIONS", "Content-Type":"application/json" };
@@ -34,15 +34,18 @@ export async function handlePayroll(req: Request) {
           const stores=await db.from("stores").select("id,name,store_number").in("id",ids).eq("active",true);check(stores);
           const submitted=await db.from("payroll_submissions").select("store_id").eq("due_date",mail.due_date).in("status",["submitted","approved"]);check(submitted);
           const missing=(stores.data??[]).filter(s=>!/^all\s*stores$/i.test(s.name.trim()) && !/^all\s*stores$/i.test((s.store_number??"").trim()) && !(submitted.data??[]).some(x=>x.store_id===s.id));
-          if(local!==mail.due_date || hour>=16 || !profile.data?.active || profile.data.role!=="manager" || !missing.length){
+          const reminderSlot=mail.payload.reminder_slot==="morning"?"morning":"afternoon";
+          const reminderExpired=reminderSlot==="morning"?hour>=14:hour>=16;
+          if(local!==mail.due_date || reminderExpired || !profile.data?.active || profile.data.role!=="manager" || !missing.length){
             check(await db.from("payroll_email_outbox").update({status:"cancelled"}).eq("id",mail.id));continue;
           }
           // Always resolve the current account email immediately before delivery.
           mail.recipient=profile.data.email;
           mail.payload.store_names=missing.map(s=>s.name).join(", ");
+          mail.payload.reminder_slot=reminderSlot;
         }
         const text=mail.kind==="payroll" ? emailBody(mail.due_date,mail.payload.submissions) :
-          `Hello ${mail.payload.name},\n\nPayroll has not been submitted for ${mail.payload.store_names}.\nPlease submit through Dash-OS by 4:00 p.m. Central today (${mail.due_date}).\n\nThis is the 2:00 p.m. payroll reminder.`;
+          reminderBody(mail.due_date,mail.payload.name,mail.payload.store_names,mail.payload.reminder_slot);
         const subject=mail.kind==="payroll"?`Approved payroll — ${mail.due_date}`:`Payroll due today by 4 p.m. — ${mail.due_date}`;
         try{
           const providerId=await sendEmailMessage(email!,{id:mail.id,to:mail.recipient,subject,text,html:emailHtml(subject,text,Deno.env.get("DASH_OS_URL")?.trim()||"https://team-powers-portal.daustin-15d.workers.dev/"),fromName:"DASH-OS Payroll"});

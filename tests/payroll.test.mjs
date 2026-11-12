@@ -54,6 +54,14 @@ test('payroll email HTML uses DASH branding and escapes submitted text',()=>{
   assert.match(html,/A &amp; B/);
   assert.doesNotMatch(html,/<Review>/);
 });
+test('Payroll Monday reminders clearly identify the 9 a.m. and 2 p.m. checkpoints',()=>{
+  const morning=m.reminderBody('2026-11-16','Alex Manager','Smithville','morning');
+  const afternoon=m.reminderBody('2026-11-16','Alex Manager','Smithville','afternoon');
+  assert.match(morning,/not been sent in for review/);
+  assert.match(morning,/9:00 a\.m\./);
+  assert.match(afternoon,/2:00 p\.m\./);
+  assert.match(afternoon,/by 4:00 p\.m\. Central/);
+});
 function handlerFor(role,active=true){
   const profile={id:'user',role,active,store_id:'a'};
   const tables={

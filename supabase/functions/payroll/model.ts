@@ -83,6 +83,11 @@ export function emailBody(due: string, submissions: { store_name: string; entrie
     ).join("\n")).join("\n\n");
 }
 
+export function reminderBody(due: string, name: string, storeNames: string, slot: "morning" | "afternoon") {
+  const reminderTime = slot === "morning" ? "9:00 a.m." : "2:00 p.m.";
+  return `Hello ${name},\n\nPayroll has not been sent in for review for ${storeNames}.\nPlease submit through DASH-OS by 4:00 p.m. Central today (${due}).\n\nThis is the ${reminderTime} Payroll Monday reminder.`;
+}
+
 export function emailHtml(title: string, text: string, portalUrl: string) {
   const escaped = (value: string) => value
     .replaceAll("&", "&amp;")

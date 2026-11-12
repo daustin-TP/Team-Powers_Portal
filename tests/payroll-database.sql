@@ -31,6 +31,19 @@ begin
   begin perform public.payroll_action(a,'approve_cycle',jsonb_build_object('due_date',d)); exception when others then rejected:=true; end;
   if not rejected then raise exception 'Cycle could be approved twice'; end if;
   if has_table_privilege('authenticated','public.payroll_submissions','select') or has_function_privilege('authenticated','public.payroll_action(uuid,text,jsonb)','execute') then raise exception 'Raw payroll bypass exposed'; end if;
-  if public.payroll_queue_reminders('2103-06-18T18:00:00Z')<>0 then raise exception 'Reminder queued outside window'; end if;
+  if public.payroll_queue_reminders('2103-06-18T12:00:00Z')<>0 then raise exception 'Reminder queued before the morning window'; end if;
+  perform public.payroll_queue_reminders('2103-06-18T15:00:00Z');
+  perform public.payroll_queue_reminders('2103-06-18T20:00:00Z');
+  if exists(
+    select 1 from public.payroll_email_outbox
+    where due_date=date '2103-06-18' and kind='reminder'
+    group by payload->>'profile_id'
+    having count(distinct payload->>'reminder_slot')<>2
+  ) then raise exception 'A manager did not receive both reminder slots'; end if;
+  if exists(
+    select 1 from public.payroll_email_outbox
+    where due_date=date '2103-06-18' and kind='reminder'
+      and payload->>'reminder_slot' not in ('morning','afternoon')
+  ) then raise exception 'Reminder slot was not recorded'; end if;
 end $$;
 rollback;
