@@ -7,14 +7,18 @@ type Store={id:string;name:string};
 type Submission={id:string;store_id:string;store_name:string;entries:Entry[];confirmed_sections:string[];status:string;review_note:string;submitted_at:string|null};
 type TimeOff={id:string;requester_id:string;requester_name:string;requester_role:string;store_id:string|null;kind:string;start_date:string;end_date:string;hours:number;status:string;review_note:string;note:string;can_review:boolean};
 type Data={cycle:{status:string};stores:Store[];submissions:Submission[];requests:TimeOff[];emails:{id:string;kind:string;recipient:string;status:string;last_error:string|null}[];email_ready:boolean;preview:string};
+type AutoSaveSnapshot={due_date:string;action:"save";store_id:string;entries:Entry[];confirmed_sections:string[];status:"draft"};
+type AutoSaveState="idle"|"pending"|"saving"|"saved"|"error";
 const blank=(section:string,_due=""):Entry=>({section,type:sections.find(s=>s.key===section)!.types[0],employee:"",employee_id:"",effective_date:"",end_date:"",day_portion:"Full day",position:"",new_position:"",new_name:"",new_address:"",amount:"",hours:"",acknowledged:false,details:"",attachment_path:"",attachment_name:"",attachment_type:""});
 export default function PayrollCenter({profile}:{profile:Profile}){
   const [due,setDue]=useState(currentCycle),[store,setStore]=useState(""),[data,setData]=useState<Data|null>(null);
   const [entries,setEntries]=useState<Entry[]>([]),[confirmed,setConfirmed]=useState<string[]>([]),[dirty,setDirty]=useState(false);
   const [noChanges,setNoChanges]=useState(false);
+  const [autoSaveState,setAutoSaveState]=useState<AutoSaveState>("idle");
   const [tab,setTab]=useState("submission"),[busy,setBusy]=useState(false),[loading,setLoading]=useState(false),[message,setMessage]=useState(""),[review,setReview]=useState("");
   const [leave,setLeave]=useState({kind:"PTO",start_date:"",end_date:"",hours:"",note:""});
   const seq=useRef(0);
+  const autoSaveTimer=useRef<ReturnType<typeof setTimeout>|null>(null),autoSaveRevision=useRef(0),autoSaveInFlight=useRef(false),autoSaveQueued=useRef(false),latestAutoSave=useRef<AutoSaveSnapshot|null>(null);
   const admin=profile.role==="admin",leadership=["supervisor","admin"].includes(profile.role);
   const visibleSections=sections.filter(section=>section.key!=="recognition"||leadership);
   const requiredSectionKeys=visibleSections.map(section=>section.key);
@@ -42,14 +46,49 @@ export default function PayrollCenter({profile}:{profile:Profile}){
     finally{if(seq.current===request)setLoading(false);}
   }
   useEffect(()=>{void load();return()=>{seq.current++;};},[due,profile.id]);
-  useEffect(()=>{const savedEntries=selected?.entries??[];const savedConfirmed=selected?.confirmed_sections??[];const migratedConfirmed=selected&&["submitted","approved"].includes(selected.status)&&!savedConfirmed.includes("additional")?[...savedConfirmed,"additional"]:savedConfirmed;setEntries(savedEntries.map(entry=>{const normalizedSection=entry.type==="Additional Payroll Update"?"additional":entry.section;return {...blank(normalizedSection,due),...entry,section:normalizedSection,acknowledged:Boolean(entry.acknowledged)};}));setConfirmed(migratedConfirmed);setNoChanges(Boolean(selected&&savedEntries.length===0&&requiredSectionKeys.every(key=>migratedConfirmed.includes(key))));setReview(selected?.review_note??"");setDirty(false);},[store,data,due]);
+  useEffect(()=>{const savedEntries=selected?.entries??[];const savedConfirmed=selected?.confirmed_sections??[];const migratedConfirmed=selected&&["submitted","approved"].includes(selected.status)&&!savedConfirmed.includes("additional")?[...savedConfirmed,"additional"]:savedConfirmed;setEntries(savedEntries.map(entry=>{const normalizedSection=entry.type==="Additional Payroll Update"?"additional":entry.section;return {...blank(normalizedSection,due),...entry,section:normalizedSection,acknowledged:Boolean(entry.acknowledged)};}));setConfirmed(migratedConfirmed);setNoChanges(Boolean(selected&&savedEntries.length===0&&requiredSectionKeys.every(key=>migratedConfirmed.includes(key))));setReview(selected?.review_note??"");setDirty(false);setAutoSaveState("idle");},[store,data,due]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue="";}};window.addEventListener("beforeunload",warn);return()=>window.removeEventListener("beforeunload",warn);},[dirty]);
+  useEffect(()=>{
+    if(autoSaveTimer.current)clearTimeout(autoSaveTimer.current);
+    if(!dirty||locked||busy||!supabase||!store||store==="preview")return;
+    autoSaveRevision.current+=1;
+    latestAutoSave.current={due_date:due,action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"draft"};
+    setAutoSaveState("pending");
+    autoSaveTimer.current=setTimeout(()=>void flushAutoSave(),700);
+    return()=>{if(autoSaveTimer.current)clearTimeout(autoSaveTimer.current);};
+  },[entries,confirmed,dirty,locked,busy,store,due,leadership]);
+  useEffect(()=>{
+    const flushWhenHidden=()=>{if(dirty&&!locked&&document.visibilityState==="hidden"){if(autoSaveTimer.current)clearTimeout(autoSaveTimer.current);void flushAutoSave();}};
+    const flushWhenClosing=()=>{if(dirty&&!locked){if(autoSaveTimer.current)clearTimeout(autoSaveTimer.current);void flushAutoSave();}};
+    document.addEventListener("visibilitychange",flushWhenHidden);window.addEventListener("pagehide",flushWhenClosing);
+    return()=>{document.removeEventListener("visibilitychange",flushWhenHidden);window.removeEventListener("pagehide",flushWhenClosing);};
+  },[dirty,locked]);
+  useEffect(()=>()=>{if(autoSaveTimer.current)clearTimeout(autoSaveTimer.current);latestAutoSave.current=null;autoSaveRevision.current+=1;},[]);
   const leaveDraft=()=>!dirty || window.confirm("Discard your unsaved payroll edits?");
   async function mutate(payload:Record<string,unknown>,success:string){
     setBusy(true);setMessage("");
     try{await call(payload);setDirty(false);await load();setMessage(success);}
     catch(e){setMessage((e as Error).message);}
     finally{setBusy(false);}
+  }
+  async function flushAutoSave(){
+    const snapshot=latestAutoSave.current;
+    if(!supabase||!snapshot)return;
+    if(autoSaveInFlight.current){autoSaveQueued.current=true;return;}
+    autoSaveInFlight.current=true;autoSaveQueued.current=false;
+    const revision=autoSaveRevision.current;
+    setAutoSaveState("saving");
+    try{
+      const {data:result,error}=await supabase.functions.invoke("payroll",{body:snapshot});
+      if(error){let detail=result?.error;try{detail=detail||(await error.context?.json())?.error;}catch{}throw Error(detail||error.message);}
+      if(!result?.ok)throw Error(result?.error||"Draft auto-save failed.");
+      if(autoSaveRevision.current===revision){setDirty(false);setAutoSaveState("saved");}
+    }catch{
+      if(autoSaveRevision.current===revision)setAutoSaveState("error");
+    }finally{
+      autoSaveInFlight.current=false;
+      if(autoSaveQueued.current||autoSaveRevision.current!==revision){autoSaveQueued.current=false;void flushAutoSave();}
+    }
   }
   async function checkEmail(){
     setBusy(true);setMessage("");
@@ -140,7 +179,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
       {tab==="submission"&&<section className="panel payroll-form">
         <label>Store<select value={store} disabled={busy} onChange={e=>{if(leaveDraft())setStore(e.target.value);}}>{data.stores.map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label>
         {!data.stores.length?<p>No store is assigned to this account. An admin can assign stores in Team access.</p>:<>
-          <p>Status: <strong>{selected?.status??"Not started"}</strong>{dirty?" · Unsaved changes":""}</p>
+          <p>Status: <strong>{selected?.status??(autoSaveState==="saved"?"draft":"Not started")}</strong>{autoSaveState!=="idle"&&<span className={`payroll-autosave ${autoSaveState}`}>{autoSaveState==="pending"?"Changes pending…":autoSaveState==="saving"?"Saving draft…":autoSaveState==="saved"?"Draft saved automatically":"Auto-save needs attention — use Save draft"}</span>}</p>
           {selected?.submitted_at&&<p>Submitted {new Date(selected.submitted_at).toLocaleString("en-US",{timeZone:"America/Chicago"})} Central</p>}
           {selected?.review_note&&<p className="inline-message">Review note: {selected.review_note}</p>}
           <p>Confirm every section, even when there are no changes. For direct deposit, record that the secure update was completed; do not enter bank account or routing numbers here.</p>

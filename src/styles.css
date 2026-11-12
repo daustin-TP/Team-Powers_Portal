@@ -499,6 +499,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .payroll-form fieldset{border:1px solid #dce4ec;border-radius:12px;margin:24px 0;padding:20px}
 .payroll-form legend{font-weight:700;padding:0 8px}.payroll-form label{display:flex;flex-direction:column;gap:7px;margin-bottom:14px}
 .payroll-form .check-row{flex-direction:row;align-items:center;margin-top:16px}
+.payroll-autosave{display:inline-flex;align-items:center;margin-left:.55rem;border-radius:999px;padding:.22rem .5rem;font-size:.68rem;font-weight:850}.payroll-autosave.pending,.payroll-autosave.saving{background:#e8f3fc;color:#075a9f}.payroll-autosave.saved{background:#e3f4e9;color:#276646}.payroll-autosave.error{background:#fde8e7;color:#942d28}
 .payroll-entry{padding:18px;margin:16px 0;border:1px solid #dce4ec;border-radius:10px;background:#f8fafc}
 .payroll-status-row{justify-content:space-between;padding:14px 0;border-bottom:1px solid #dce4ec}
 .payroll-email-preview{white-space:pre-wrap;overflow-wrap:anywhere;max-height:500px;overflow:auto;background:#f8fafc;padding:20px}

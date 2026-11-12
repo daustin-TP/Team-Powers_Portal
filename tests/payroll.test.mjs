@@ -104,3 +104,13 @@ test('only administrators can immediately deliver queued payroll email',async()=
   assert.equal(response.status,200);
   assert.equal((await response.json()).sent,1);
 });
+
+test('store payroll drafts auto-save after edits without submitting',()=>{
+  const source=readFileSync(new URL('../src/components/PayrollCenter.tsx',import.meta.url),'utf8');
+  assert.match(source,/status:\"draft\"/);
+  assert.match(source,/setTimeout\(\(\)=>void flushAutoSave\(\),700\)/);
+  assert.match(source,/autoSaveInFlight\.current/);
+  assert.match(source,/autoSaveQueued\.current/);
+  assert.match(source,/Draft saved automatically/);
+  assert.match(source,/Auto-save needs attention — use Save draft/);
+});
