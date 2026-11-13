@@ -95,30 +95,24 @@ type RequestBadges = Partial<Record<RequestBadgeSection, number>>;
 async function loadProfile(userId: string, email: string): Promise<Profile | null> {
   if (!supabase) return demoProfile;
   const { data, error } = await supabase
-    .from("profiles")
-    .select("id,email,full_name,role,location,active,store_id")
-    .eq("id", userId)
+    .rpc("portal_current_profile")
     .maybeSingle();
+  const row = data as {
+    id: string; email: string | null; full_name: string | null; role: Role;
+    location: string | null; active: boolean; store_id: string | null; permissions: string[] | null;
+  } | null;
 
-  if (error || !data || !data.active) return null;
-
-  // KPI permissions are optional enrichment. A missing or temporarily stale
-  // permissions relation must never prevent an active employee from entering
-  // the rest of Dash-OS.
-  const { data: permissionRows } = await supabase
-    .from("profile_permissions")
-    .select("permission")
-    .eq("profile_id", userId);
+  if (error || !row || !row.active || row.id !== userId) return null;
 
   return {
-    id: data.id,
-    email: data.email ?? email,
-    fullName: data.full_name ?? email.split("@")[0],
-    role: data.role,
-    location: data.location ?? "",
-    active: data.active,
-    storeId: data.store_id,
-    permissions: (permissionRows ?? []).map((item: { permission: string }) => item.permission),
+    id: row.id,
+    email: row.email ?? email,
+    fullName: row.full_name ?? email.split("@")[0],
+    role: row.role,
+    location: row.location ?? "",
+    active: row.active,
+    storeId: row.store_id,
+    permissions: row.permissions ?? [],
   };
 }
 
