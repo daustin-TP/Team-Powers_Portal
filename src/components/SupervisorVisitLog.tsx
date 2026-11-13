@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -58,6 +58,7 @@ type VisitLog = {
   submitted_at: string | null;
   created_at: string;
   updated_at: string;
+  schedule_id: string | null;
 };
 
 type VisitPhoto = {
@@ -201,7 +202,7 @@ const formStats = (form: VisitForm, storeId: string) => {
 const formatDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 const formatTime = (value: string | null) => value ? new Date(`2000-01-01T${value}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "Time not entered";
 
-export default function SupervisorVisitLog({ profile }: { profile: Profile }) {
+export default function SupervisorVisitLog({ profile, initialScheduleId }: { profile: Profile; initialScheduleId?: string | null }) {
   const [stores, setStores] = useState<Store[]>([]);
   const [logs, setLogs] = useState<VisitLog[]>([]);
   const [photoCounts, setPhotoCounts] = useState<Record<string, number>>({});
@@ -218,6 +219,8 @@ export default function SupervisorVisitLog({ profile }: { profile: Profile }) {
   const [message, setMessage] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | VisitStatus>("all");
   const [storeFilter, setStoreFilter] = useState("all");
+  const [scheduleId,setScheduleId]=useState<string|null>(null);
+  const openedSchedule=useRef<string|null>(null);
 
   const readOnly = selected?.status === "submitted" || Boolean(selected && selected.supervisor_id !== profile.id);
   const stats = useMemo(() => formStats(form, storeId), [form, storeId]);
@@ -266,6 +269,7 @@ export default function SupervisorVisitLog({ profile }: { profile: Profile }) {
     setStepIndex(0);
     setShowEditor(true);
     setMessage("");
+    setScheduleId(null);
   };
 
   const openLog = async (log: VisitLog) => {
@@ -276,8 +280,22 @@ export default function SupervisorVisitLog({ profile }: { profile: Profile }) {
     setStepIndex(log.status === "submitted" ? 9 : 0);
     setShowEditor(true);
     setMessage("");
+    setScheduleId(log.schedule_id);
     await loadPhotos(log.id);
   };
+
+  useEffect(()=>{
+    if(!initialScheduleId||loading||openedSchedule.current===initialScheduleId||!supabase)return;
+    openedSchedule.current=initialScheduleId;
+    window.sessionStorage.removeItem('dashos:visit-schedule');
+    const linked=logs.find(log=>log.schedule_id===initialScheduleId);
+    if(linked){void openLog(linked);return;}
+    void supabase.from('supervisor_visit_schedules').select('id,supervisor_id,store_id,visit_date,start_time').eq('id',initialScheduleId).maybeSingle().then(({data,error})=>{
+      if(error||!data){setMessage(error?.message||'This calendar visit is not available.');return;}
+      if(profile.role==='admin'){setMessage('No DM Visit Form has been started for this scheduled visit yet. The assigned Area Supervisor can open it from their calendar.');return;}
+      setSelected(null);setLogId(null);setScheduleId(data.id);setStoreId(data.store_id);setForm({...emptyForm(),visitDate:data.visit_date,visitTime:data.start_time.slice(0,5)});setPhotos([]);setStepIndex(0);setShowEditor(true);setMessage('This new visit form is linked to the selected calendar visit.');
+    });
+  },[initialScheduleId,loading,logs,profile.role]);
 
   const persist = async (status: VisitStatus = "draft") => {
     if (!supabase || saving) return null;
@@ -298,6 +316,7 @@ export default function SupervisorVisitLog({ profile }: { profile: Profile }) {
       issues_found: stats.issues,
       submitted_at: status === "submitted" ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),
+      schedule_id: scheduleId,
     };
     const result = logId
       ? await supabase.from("supervisor_visit_logs").update(payload).eq("id", logId).select("*").single()
