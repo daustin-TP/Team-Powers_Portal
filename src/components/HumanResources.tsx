@@ -15,7 +15,7 @@ type MemberDetails = { member_id: string; hire_date: string | null; rehire_date:
 type MemberPosition = { member_id: string; position_name: string };
 type SeparationClassification = "discharge" | "layoff" | "resignation" | "other";
 type StatusHistory = { id: string; member_id: string; store_id: string; from_status: EmploymentStatus | null; to_status: EmploymentStatus; effective_date: string; changed_at: string; exclude_from_turnover: boolean };
-type HrNotificationSettings = { delivery_mode: "test" | "live"; test_recipients: string[]; live_recipients: string[]; live_to_recipients: string[]; live_cc_recipients: string[] };
+type HrNotificationSettings = { delivery_mode: "test" | "live"; test_recipients: string[]; live_recipients: string[]; live_to_recipients: string[]; live_cc_recipients: string[]; copy_assigned_supervisors: boolean };
 type AcknowledgmentPacket = {
   id: string; action_id: string; record_version: number; document_sha256: string; outcome: "acknowledged" | "refused";
   employee_name: string; employee_signature_data: string | null; employee_statement: string; employee_consented: boolean; employee_signed_at: string | null;
@@ -77,6 +77,20 @@ type SignatureForm = {
   witness_name: string;
   witness_signature_data: string;
 };
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const normalizeEmails = (values: string[]) => Array.from(new Set(values.flatMap((value) => value.split(/[,;\s]+/)).map((value) => value.trim().toLowerCase()).filter((value) => emailPattern.test(value))));
+
+function RecipientEditor({ label, help, emails, onChange }: { label: string; help: string; emails: string[]; onChange: (emails: string[]) => void }) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const additions = normalizeEmails([draft]);
+    if (!additions.length) return;
+    onChange(normalizeEmails([...emails, ...additions]));
+    setDraft("");
+  };
+  return <div className="hr-recipient-editor"><div><strong>{label}</strong><small>{help}</small></div><div className="hr-recipient-chips">{emails.map((email) => <span key={email}>{email}<button type="button" aria-label={`Remove ${email}`} onClick={() => onChange(emails.filter((item) => item !== email))}><X size={13} /></button></span>)}</div><div className="hr-recipient-add"><input type="email" value={draft} placeholder="name@example.com" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); add(); } }} /><button type="button" className="button secondary compact" disabled={!emailPattern.test(draft.trim())} onClick={add}><Plus size={15} />Add</button></div></div>;
+}
 
 const emptySignatureForm = (employeeName = ""): SignatureForm => ({
   outcome: "acknowledged", employee_name: employeeName, employee_statement: "", employee_consented: false,
@@ -228,7 +242,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
         ? supabase.from("team_member_status_history").select("id,member_id,store_id,from_status,to_status,effective_date,changed_at,exclude_from_turnover").order("effective_date")
         : Promise.resolve({ data: [], error: null }),
       profile.role === "admin"
-        ? supabase.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients,live_to_recipients,live_cc_recipients").eq("id", true).maybeSingle()
+        ? supabase.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients,live_to_recipients,live_cc_recipients,copy_assigned_supervisors").eq("id", true).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
       supabase.from("hr_disciplinary_action_acknowledgments").select("id,action_id,record_version,document_sha256,outcome,employee_name,employee_signature_data,employee_statement,employee_consented,employee_signed_at,manager_name,manager_signature_data,manager_signed_at,witness_name,witness_signature_data,witness_signed_at,created_at"),
     ]);
@@ -518,11 +532,15 @@ export default function HumanResources({ profile }: { profile: Profile }) {
   const saveNotificationSettings = async () => {
     if (!supabase || profile.role !== "admin" || !notificationSettings) return;
     setSaving(true); setMessage("");
-    const recipients = notificationSettings.test_recipients.map((email) => email.trim().toLowerCase()).filter(Boolean);
-    const { error } = await supabase.from("hr_notification_settings").update({ test_recipients: recipients, updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", true);
+    const testRecipients = normalizeEmails(notificationSettings.test_recipients);
+    const toRecipients = normalizeEmails(notificationSettings.live_to_recipients);
+    const ccRecipients = normalizeEmails(notificationSettings.live_cc_recipients).filter((email) => !toRecipients.includes(email));
+    if (notificationSettings.delivery_mode === "live" && !toRecipients.length) { setSaving(false); setMessage("Add at least one primary HR recipient before saving live delivery settings."); return; }
+    const nextSettings = { ...notificationSettings, test_recipients: testRecipients, live_recipients: toRecipients, live_to_recipients: toRecipients, live_cc_recipients: ccRecipients };
+    const { error } = await supabase.from("hr_notification_settings").update({ test_recipients: testRecipients, live_recipients: toRecipients, live_to_recipients: toRecipients, live_cc_recipients: ccRecipients, copy_assigned_supervisors: notificationSettings.copy_assigned_supervisors, updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", true);
     setSaving(false);
-    setNotificationSettings({ ...notificationSettings, test_recipients: recipients });
-    setMessage(error ? error.message : notificationSettings.delivery_mode === "live" ? "Test-recipient fallback saved. Live HR delivery remains active." : "Test termination recipients saved.");
+    setNotificationSettings(nextSettings);
+    setMessage(error ? error.message : "HR notification recipients saved. Future termination notices will use this list.");
   };
 
   const togglePolicyCategory = (category: string) => {
@@ -645,9 +663,10 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     </section>}
 
     {profile.role === "admin" && notificationSettings && <section className="panel hr-notification-settings">
-      <div className="panel-heading"><div><p className="eyebrow">Termination delivery settings</p><h2><Mail size={21} /> HR notifications</h2><p>{notificationSettings.delivery_mode === "live" ? `Live delivery goes to ${notificationSettings.live_to_recipients.join(", ")} with ${notificationSettings.live_cc_recipients.join(", ")} and the assigned Area Supervisor copied.` : "Only the test recipients below receive termination alerts."}</p></div><span className={`status-pill ${notificationSettings.delivery_mode === "live" ? "completed" : "monitoring"}`}>{notificationSettings.delivery_mode.toUpperCase()} MODE</span></div>
-      <label>Test recipient emails <small>Separate multiple addresses with commas</small><textarea rows={2} value={notificationSettings.test_recipients.join(", ")} onChange={(event) => setNotificationSettings({ ...notificationSettings, test_recipients: event.target.value.split(",") })} /></label>
-      <div className="hr-form-actions"><button className="button secondary" disabled={saving} onClick={() => void saveNotificationSettings()}><Save size={17} />Save test recipients</button></div>
+      <div className="panel-heading"><div><p className="eyebrow">Administrator-only termination delivery settings</p><h2><Mail size={21} /> HR notification recipients</h2><p>Only DASH administrators can view or change this list. Changes apply to future termination notices.</p></div><span className={`status-pill ${notificationSettings.delivery_mode === "live" ? "completed" : "monitoring"}`}>{notificationSettings.delivery_mode.toUpperCase()} MODE</span></div>
+      {notificationSettings.delivery_mode === "live" ? <div className="hr-recipient-grid"><RecipientEditor label="Primary recipients" help="Termination notices are sent directly to these addresses." emails={notificationSettings.live_to_recipients} onChange={(emails) => setNotificationSettings({ ...notificationSettings, live_to_recipients: emails })} /><RecipientEditor label="Copied recipients (CC)" help="These addresses receive a copy of every live termination notice." emails={notificationSettings.live_cc_recipients} onChange={(emails) => setNotificationSettings({ ...notificationSettings, live_cc_recipients: emails })} /></div> : <RecipientEditor label="Test recipients" help="Only these addresses receive notices while test mode is active." emails={notificationSettings.test_recipients} onChange={(emails) => setNotificationSettings({ ...notificationSettings, test_recipients: emails })} />}
+      <label className="check-row"><input type="checkbox" checked={notificationSettings.copy_assigned_supervisors} onChange={(event) => setNotificationSettings({ ...notificationSettings, copy_assigned_supervisors: event.target.checked })} /><span><strong>Automatically copy the assigned Area Supervisor</strong><small>Uses current store assignments, so supervisor changes do not require editing this email list.</small></span></label>
+      <div className="hr-form-actions"><button className="button primary" disabled={saving} onClick={() => void saveNotificationSettings()}><Save size={17} />{saving ? "Saving…" : "Save recipient list"}</button></div>
     </section>}
 
     {selected && !showForm && <section className="panel hr-detail-panel">

@@ -30,7 +30,7 @@ Deno.serve(async (req: Request) => {
       db.from("profiles").select("id,role,active,full_name,store_id").eq("id", auth.data.user.id).maybeSingle(),
       db.from("hr_disciplinary_actions").select("id,store_id,member_id,employee_name,incident_date,incident_summary,action_type,submitted_by,submitted_by_name,termination_hire_date,last_date_worked,termination_date,employee_home_address,employee_position,separation_reason,separation_classification,separation_reasons,separation_description,manager_signature,manager_signed_at").eq("id", actionId).maybeSingle(),
       db.from("labor_team_members").select("id,store_id,display_name").eq("id", memberId).maybeSingle(),
-      db.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients,live_to_recipients,live_cc_recipients").eq("id", true).maybeSingle(),
+      db.from("hr_notification_settings").select("delivery_mode,test_recipients,live_recipients,live_to_recipients,live_cc_recipients,copy_assigned_supervisors").eq("id", true).maybeSingle(),
     ]);
     const profile = profileResult.data as any;
     const action = actionResult.data as any;
@@ -65,11 +65,12 @@ Deno.serve(async (req: Request) => {
     const deliveryMode = settings?.delivery_mode === "live" ? "live" : "test";
     const toRecipients = uniqueEmails(deliveryMode === "live" ? (settings?.live_to_recipients?.length ? settings.live_to_recipients : settings?.live_recipients ?? []) : (settings?.test_recipients ?? []));
     if (!toRecipients.length) return json({ ok: true, roster_updated: true, sent: 0, warning: "No HR notification recipients are configured." });
-    const [assignmentResult, supervisorResult] = deliveryMode === "live" ? await Promise.all([
+    const copyAssignedSupervisors = deliveryMode === "live" && settings?.copy_assigned_supervisors !== false;
+    const [assignmentResult, supervisorResult] = copyAssignedSupervisors ? await Promise.all([
       db.from("profile_store_assignments").select("profile_id").eq("store_id", member.store_id),
       db.from("profiles").select("id,email,store_id").eq("role", "supervisor").eq("active", true),
     ]) : [{ data: [], error: null }, { data: [], error: null }];
-    if (assignmentResult.error || supervisorResult.error) throw new Error("The assigned District Manager could not be resolved for the HR notification.");
+    if (assignmentResult.error || supervisorResult.error) throw new Error("The assigned Area Supervisor could not be resolved for the HR notification.");
     const assignedSupervisorIds = new Set((assignmentResult.data ?? []).map((row: any) => row.profile_id));
     const supervisorEmails = (supervisorResult.data ?? []).filter((row: any) => row.store_id === member.store_id || assignedSupervisorIds.has(row.id)).map((row: any) => row.email);
     const primarySet = new Set(toRecipients);
