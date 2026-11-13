@@ -11,8 +11,9 @@ export type Entry = {
   position: string; new_position: string; new_name: string; new_address: string;
   amount: string; hours: string; acknowledged: boolean; details: string;
   attachment_path: string; attachment_name: string; attachment_type: string;
+  source_request_id: string;
 };
-const textKeys = ["section","type","employee","employee_id","effective_date","end_date","day_portion","position","new_position","new_name","new_address","amount","hours","details","attachment_path","attachment_name","attachment_type"] as const;
+const textKeys = ["section","type","employee","employee_id","effective_date","end_date","day_portion","position","new_position","new_name","new_address","amount","hours","details","attachment_path","attachment_name","attachment_type","source_request_id"] as const;
 const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value;
 const required = (condition: unknown, message: string) => { if (!condition) throw Error(message); };
 const positive = (value: string, label: string) => required(value && Number.isFinite(Number(value)) && Number(value) > 0, `${label} must be greater than zero.`);

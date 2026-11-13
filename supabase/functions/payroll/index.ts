@@ -67,12 +67,54 @@ export async function handlePayroll(req: Request) {
     if(!p?.active || !["manager","supervisor","admin"].includes(p.role))return json({error:"Payroll is available to GMs and above."},403);
     const assignments=await db.from("profile_store_assignments").select("store_id").eq("profile_id",p.id);check(assignments);
     const assigned=new Set([p.store_id,...(assignments.data??[]).map(a=>a.store_id)].filter(Boolean));
-    const canSeeRequest=(r:any)=>r.requester_id===p.id || p.role==="admin" || (p.role==="supervisor" && r.requester_role==="manager" && assigned.has(r.store_id));
+    if(body.action==="leave_load"){
+      const benefitYear=Number(body.benefit_year);
+      const storeId=String(body.store_id??"");
+      if(!Number.isInteger(benefitYear)||benefitYear<2026||benefitYear>2100)return json({error:"Choose a valid benefit year."},400);
+      if(!/^[0-9a-f-]{36}$/i.test(storeId)||(p.role!=="admin"&&!assigned.has(storeId)))return json({error:"Store access denied"},403);
+      const [memberResult,balanceResult,requestResult,leadershipResult]=await Promise.all([
+        db.from("labor_team_members").select("id,store_id,profile_id,display_name,qualified_roles,employment_status,management_level").eq("store_id",storeId).eq("active",true).contains("qualified_roles",["manager"]).in("employment_status",["active","borrowed"]).order("display_name"),
+        db.from("team_leave_balances").select("member_id,profile_id,pto_hours,vacation_hours").eq("benefit_year",benefitYear),
+        db.from("payroll_time_off").select("id,requester_id,requester_name,requester_role,store_id,kind,start_date,end_date,hours,note,status,review_note,reviewed_by,member_id,beneficiary_profile_id,day_portion,unavailable_start,unavailable_end,approval_mode,created_at").gte("start_date",`${benefitYear}-01-01`).lte("start_date",`${benefitYear}-12-31`).order("created_at",{ascending:false}),
+        ["supervisor","admin"].includes(p.role)
+          ? db.from("profiles").select("id,full_name,role").eq("active",true).in("role",["supervisor","admin"]).order("full_name")
+          : Promise.resolve({data:[],error:null}),
+      ]);
+      [memberResult,balanceResult,requestResult,leadershipResult].forEach(check);
+      const balances=balanceResult.data??[];
+      const requests=requestResult.data??[];
+      const usage=(memberId:string|null,profileId:string|null,kind:"PTO"|"Vacation",status:"pending"|"approved")=>
+        requests.filter(r=>r.kind===kind&&r.status===status&&((memberId&&r.member_id===memberId)||(profileId&&r.beneficiary_profile_id===profileId))).reduce((sum,r)=>sum+Number(r.hours||0),0);
+      const withBalance=(item:any,subject:"member"|"profile")=>{
+        const memberId=subject==="member"?item.id:null,profileId=subject==="profile"?item.id:null;
+        const balance=balances.find(b=>subject==="member"?b.member_id===item.id:b.profile_id===item.id);
+        const ptoAllocated=Number(balance?.pto_hours||0),vacationAllocated=Number(balance?.vacation_hours||0);
+        const ptoReserved=usage(memberId,profileId,"PTO","pending"),ptoUsed=usage(memberId,profileId,"PTO","approved");
+        const vacationReserved=usage(memberId,profileId,"Vacation","pending"),vacationUsed=usage(memberId,profileId,"Vacation","approved");
+        return {...item,subject,pto_allocated:ptoAllocated,pto_reserved:ptoReserved,pto_used:ptoUsed,pto_available:ptoAllocated-ptoReserved-ptoUsed,vacation_allocated:vacationAllocated,vacation_reserved:vacationReserved,vacation_used:vacationUsed,vacation_available:vacationAllocated-vacationReserved-vacationUsed};
+      };
+      const members=(memberResult.data??[]).map((member:any)=>({...withBalance(member,"member"),can_auto_approve:p.role==="admin"||(p.role==="supervisor"&&assigned.has(member.store_id))||(p.role==="manager"&&assigned.has(member.store_id)&&member.management_level!=="General Manager"&&member.profile_id!==p.id)}));
+      const leadership=(leadershipResult.data??[]).filter((leader:any)=>p.role==="admin"||leader.id===p.id).map((leader:any)=>withBalance(leader,"profile"));
+      const visibleRequests=requests.filter((request:any)=>request.store_id===storeId||(!request.store_id&&(p.role==="admin"||request.beneficiary_profile_id===p.id||request.requester_id===p.id))).map((request:any)=>{
+        const member=members.find((item:any)=>item.id===request.member_id);
+        const canReview=request.status==="pending"&&(p.role==="admin"||(request.store_id&&p.role==="supervisor"&&assigned.has(request.store_id))||(request.store_id&&p.role==="manager"&&assigned.has(request.store_id)&&member?.management_level!=="General Manager"&&member?.profile_id!==p.id));
+        return {...request,can_review:canReview,can_cancel:["pending","approved"].includes(request.status)&&(request.requester_id===p.id||canReview||p.role==="admin")};
+      });
+      return json({ok:true,benefit_year:benefitYear,can_manage_balances:p.role==="admin",members,leadership,requests:visibleRequests});
+    }
+    if(["leave_save_level","leave_save_balance","leave_request","leave_review","leave_cancel"].includes(body.action)){
+      const actionMap:Record<string,string>={leave_save_level:"save_level",leave_save_balance:"save_balance",leave_request:"request",leave_review:"review",leave_cancel:"cancel"};
+      const result=await db.rpc("leave_action",{actor:p.id,action:actionMap[body.action],payload:body});
+      if(result.error)return json({error:result.error.message},400);
+      return json(result.data);
+    }
+    const canSeeRequest=(r:any)=>r.requester_id===p.id || p.role==="admin" || (r.store_id&&assigned.has(r.store_id)&&["manager","supervisor"].includes(p.role));
     const canReviewRequest=(r:any)=>r.requester_id!==p.id && r.status==="pending" && (p.role==="admin" || (p.role==="supervisor" && r.requester_role==="manager" && assigned.has(r.store_id)));
     if(body.action==="calendar"){
       if(!/^\d{4}-\d{2}-\d{2}$/.test(body.start??"") || !/^\d{4}-\d{2}-\d{2}$/.test(body.end??""))return json({error:"Invalid calendar dates"},400);
       const requests=await db.from("payroll_time_off").select("*").lte("start_date",body.end).gte("end_date",body.start).in("status",["pending","approved"]);check(requests);
-      return json({ok:true,requests:(requests.data??[]).filter(canSeeRequest).map(({id,requester_name,store_id,kind,start_date,end_date,status}:any)=>({id,requester_name,store_id,kind,start_date,end_date,status}))});
+      const canSeeCalendarRequest=(r:any)=>r.requester_id===p.id||p.role==="admin"||(r.store_id&&assigned.has(r.store_id)&&["manager","supervisor"].includes(p.role));
+      return json({ok:true,requests:(requests.data??[]).filter(canSeeCalendarRequest).map(({id,requester_name,store_id,kind,start_date,end_date,status,day_portion,unavailable_start,unavailable_end,hours}:any)=>({id,requester_name,store_id,kind,start_date,end_date,status,day_portion,unavailable_start,unavailable_end,hours}))});
     }
     if(!validCycle(body.due_date??""))return json({error:"Choose a valid payroll Monday."},400);
     if(body.action==="email_health"){

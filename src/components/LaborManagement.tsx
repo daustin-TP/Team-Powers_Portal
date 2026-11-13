@@ -14,15 +14,17 @@ import {
   Settings2,
   Trash2,
   Upload,
+  Umbrella,
   Users,
   X,
 } from "lucide-react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import type { Profile } from "../types";
+import LeaveManagement from "./LeaveManagement";
 
 type LaborRole = "manager" | "insider" | "driver";
 type EmploymentStatus = "active" | "on_leave" | "borrowed" | "terminated" | "archived";
-type View = "builder" | "employees" | "availability" | "events" | "settings" | "imports";
+type View = "builder" | "employees" | "leave" | "availability" | "events" | "settings" | "imports";
 type Store = { id: string; name: string };
 type TeamMember = {
   id: string;
@@ -134,7 +136,7 @@ type Settings = {
   opening_driver_through_rush: boolean;
   late_driver_rule: "hour_before_close" | "until_close" | "second_closer";
 };
-type Availability = { id?: string; member_id: string; day_of_week: number; start_time: string; end_time: string; available: boolean; kind: "standard" | "rto"; week_start?: string; reason?: string };
+type Availability = { id?: string; member_id: string; day_of_week: number; start_time: string; end_time: string; available: boolean; kind: "standard" | "rto"; week_start?: string; reason?: string; source_time_off_request_id?: string | null };
 type SchedulingEvent = {
   id: string;
   scope: "company" | "store";
@@ -405,7 +407,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         supabase.from("labor_store_hours").select("day_of_week,open_time,close_time").eq("store_id", storeId).order("day_of_week"),
         supabase.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle(),
         supabase.from("labor_standard_availability").select("id,member_id,day_of_week,start_time,end_time,available").eq("store_id", storeId),
-        supabase.from("labor_time_off").select("id,member_id,week_start,day_of_week,start_time,end_time,reason").eq("store_id", storeId).eq("week_start", weekStart),
+        supabase.from("labor_time_off").select("id,member_id,week_start,day_of_week,start_time,end_time,reason,source_time_off_request_id").eq("store_id", storeId).eq("week_start", weekStart),
         supabase.from("labor_scheduling_events").select("*").lte("start_date", addIsoDays(weekStart, 90)).gte("end_date", addIsoDays(weekStart, -420)).order("start_date"),
         supabase.from("demand_forecast_runs").select("id,confidence_score,confidence_level,confidence_reasons,weekly_projection,method_version,created_at").eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true).maybeSingle(),
       ]);
@@ -721,6 +723,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const saveAvailability = async () => {
     if (!availabilityForm.member_id) { setError("Select an employee first."); return; }
     const isStandard = availabilityForm.kind === "standard";
+    const approvedLeave = !isStandard && availability.some((item) => item.kind === "rto" && item.member_id === availabilityForm.member_id && item.day_of_week === availabilityForm.day_of_week && Boolean(item.source_time_off_request_id));
+    if (approvedLeave) { setError("Approved PTO / Vacation already controls this employee’s availability for that day. Manage it from the PTO & Vacation tab."); return; }
     const allDay = isStandard ? availabilityForm.standard_status !== "limited" : availabilityForm.all_day;
     const startTime = allDay ? "00:00" : availabilityForm.start_time;
     const endTime = allDay ? "23:59" : availabilityForm.end_time;
@@ -737,7 +741,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       if (insertError) { setError(insertError.message); return; }
       setAvailability((current) => [...current.filter((item) => !(item.member_id === baseEntry.member_id && item.day_of_week === baseEntry.day_of_week && item.kind === "standard")), { ...data, kind: "standard" } as Availability]);
     } else {
-      const { error: deleteError } = await supabase.from("labor_time_off").delete().eq("store_id", storeId).eq("member_id", baseEntry.member_id).eq("week_start", weekStart).eq("day_of_week", baseEntry.day_of_week);
+      const { error: deleteError } = await supabase.from("labor_time_off").delete().eq("store_id", storeId).eq("member_id", baseEntry.member_id).eq("week_start", weekStart).eq("day_of_week", baseEntry.day_of_week).is("source_time_off_request_id", null);
       if (deleteError) { setError(deleteError.message); return; }
       const { data, error: insertError } = await supabase.from("labor_time_off").insert({ store_id: storeId, member_id: baseEntry.member_id, week_start: weekStart, day_of_week: baseEntry.day_of_week, start_time: startTime, end_time: endTime, reason: availabilityForm.reason.trim() }).select("id,member_id,week_start,day_of_week,start_time,end_time,reason").single();
       if (insertError) { setError(insertError.message); return; }
@@ -749,9 +753,11 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const clearAvailability = async () => {
     if (!availabilityForm.member_id) return;
     const isStandard = availabilityForm.kind === "standard";
+    const selectedEntry = availability.find((item) => item.member_id === availabilityForm.member_id && item.day_of_week === availabilityForm.day_of_week && item.kind === availabilityForm.kind);
+    if(selectedEntry?.source_time_off_request_id){setError("Approved PTO / Vacation must be changed from the PTO & Vacation tab.");return;}
     if (supabase && storeId !== demoStore.id) {
       let query = supabase.from(isStandard ? "labor_standard_availability" : "labor_time_off").delete().eq("store_id", storeId).eq("member_id", availabilityForm.member_id).eq("day_of_week", availabilityForm.day_of_week);
-      if (!isStandard) query = query.eq("week_start", weekStart);
+      if (!isStandard) query = query.eq("week_start", weekStart).is("source_time_off_request_id", null);
       const { error: deleteError } = await query;
       if (deleteError) { setError(deleteError.message); return; }
     }
@@ -760,8 +766,16 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   };
   const chooseAvailability = (memberId: string, day: number, kind: "standard" | "rto") => {
     const entry = availability.find((item) => item.member_id === memberId && item.day_of_week === day && item.kind === kind);
+    if(entry?.source_time_off_request_id){setMessage("This restriction came from approved PTO / Vacation. Manage it from the PTO & Vacation tab.");return;}
     const fullDay = !entry || (entry.start_time.slice(0, 5) === "00:00" && entry.end_time.slice(0, 5) === "23:59");
     setAvailabilityForm((current) => ({ ...current, member_id: memberId, day_of_week: day, kind, standard_status: !entry ? "available" : !entry.available ? "unavailable" : fullDay ? "available" : "limited", all_day: fullDay, start_time: entry?.start_time.slice(0, 5) || "10:00", end_time: entry?.end_time.slice(0, 5) || "23:00", reason: entry?.reason || "" }));
+  };
+  const refreshApprovedLeave = async () => {
+    if(!supabase||!storeId||storeId===demoStore.id)return;
+    const {data,error:refreshError}=await supabase.from("labor_time_off").select("id,member_id,week_start,day_of_week,start_time,end_time,reason,source_time_off_request_id").eq("store_id",storeId).eq("week_start",weekStart);
+    if(refreshError){setError(refreshError.message);return;}
+    const rto=(data??[]).map(item=>({...item,available:false,kind:"rto" as const}));
+    setAvailability(current=>[...current.filter(item=>item.kind==="standard"),...rto]);
   };
   const resetAssignments = async () => {
     if (!window.confirm("Clear every employee assignment for this week? Shift times will remain.")) return;
@@ -892,7 +906,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (!eventForm.name.trim()) { setError("Enter an event name."); return; }
     if (eventForm.end_date < eventForm.start_date) { setError("The event end date cannot be before its start date."); return; }
     if (eventForm.scope === "store" && !eventForm.store_id) { setError("Choose the store affected by this event."); return; }
-    if (eventForm.scope === "company" && !canCreateCompanyEvent) { setError("Only District Managers and administrators can create company-wide events."); return; }
+    if (eventForm.scope === "company" && !canCreateCompanyEvent) { setError("Only Area Supervisors and administrators can create company-wide events."); return; }
     const lift = (value: string) => value.trim() === "" ? null : Number(value);
     const payload = {
       scope: eventForm.scope,
@@ -1071,6 +1085,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       <div className="labor-nav" role="tablist">
         <button className={view === "builder" ? "active" : ""} onClick={() => setView("builder")}><CalendarClock />Schedule builder</button>
         <button className={view === "employees" ? "active" : ""} onClick={() => setView("employees")}><Users />Employees</button>
+        <button className={view === "leave" ? "active" : ""} onClick={() => setView("leave")}><Umbrella />PTO &amp; Vacation</button>
         <button className={view === "availability" ? "active" : ""} onClick={() => setView("availability")}><Clock3 />Availability</button>
         <button className={view === "events" ? "active" : ""} onClick={() => setView("events")}><CalendarDays />Event calendar</button>
         <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><Settings2 />Settings</button>
@@ -1172,15 +1187,17 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
           {positionMemberId && <div className="modal-backdrop" onClick={() => setPositionMemberId("")}><section className="ticket-modal roster-position-editor" onClick={(event) => event.stopPropagation()}><button type="button" className="icon-button modal-close" onClick={() => setPositionMemberId("")}><X /></button><p className="eyebrow">Position-specific compensation</p><h2>{members.find((item) => item.id === positionMemberId)?.display_name}</h2><p>Add one entry for each payroll position. Updating an evaluation can later create a payroll change request without overwriting this history.</p><label>Payroll position<input value={positionDraft.position_name} onChange={(event) => setPositionDraft({ ...positionDraft, position_name: event.target.value })} placeholder="Assistant Manager, CSR, Driver…" /></label><div className="roster-date-fields"><label>Current hourly rate<input type="number" min="0" step="0.01" value={positionDraft.hourly_rate} onChange={(event) => setPositionDraft({ ...positionDraft, hourly_rate: event.target.value })} placeholder="Optional" /></label><label>Effective date<input type="date" value={positionDraft.effective_date} onChange={(event) => setPositionDraft({ ...positionDraft, effective_date: event.target.value })} /></label></div><div className="calendar-editor-actions"><button type="button" className="button secondary" onClick={() => setPositionMemberId("")}>Close</button><button type="button" className="button primary" onClick={() => void addPosition()}><Plus size={16}/>Add position</button></div></section></div>}
           {statusMember && <div className="modal-backdrop" onClick={() => setStatusMember(null)}><section className="ticket-modal roster-status-editor" onClick={(event) => event.stopPropagation()}><button type="button" className="icon-button modal-close" onClick={() => setStatusMember(null)}><X /></button><p className="eyebrow">Permanent roster history</p><h2>{statusMember.display_name}</h2><p>On-leave and terminated employees disappear from normal scheduling lists. Reactivating them preserves every prior status change.</p><label>Roster status<select value={statusDraft.status} onChange={(event) => setStatusDraft({ ...statusDraft, status: event.target.value as EmploymentStatus })}><option value="active">Active</option><option value="on_leave">On leave</option><option value="borrowed">Borrowed from another store</option><option value="terminated">Terminated</option><option value="archived">Archived / prior record</option></select></label><label>Effective date<input type="date" value={statusDraft.effective_date} onChange={(event) => setStatusDraft({ ...statusDraft, effective_date: event.target.value })} /></label>{statusDraft.status === "on_leave" && <label>Leave reason<select value={statusDraft.reason} onChange={(event) => setStatusDraft({ ...statusDraft, reason: event.target.value })}><option value="">Select reason</option><option value="Away at school">Away at school</option><option value="Medical leave">Medical</option><option value="Other leave">Other</option></select></label>}{statusDraft.status === "borrowed" && <label>Home store<select value={statusDraft.home_store_id} onChange={(event) => setStatusDraft({ ...statusDraft, home_store_id: event.target.value })}><option value="">Select home store</option>{stores.filter((store) => store.id !== storeId).map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}{statusDraft.status === "terminated" && <><label>Termination report <small>Required</small><select value={statusDraft.hr_action_id} onChange={(event) => { const record = terminationRecords.find((item) => item.id === event.target.value); setStatusDraft({ ...statusDraft, hr_action_id: event.target.value, reason: record?.incident_summary || statusDraft.reason }); }}><option value="">Select completed HR Action Log</option>{terminationRecords.map((record) => <option key={record.id} value={record.id}>{record.incident_date} · {record.employee_name}</option>)}</select></label><label>Termination reason<textarea rows={3} value={statusDraft.reason} onChange={(event) => setStatusDraft({ ...statusDraft, reason: event.target.value })} /></label></>}{statusDraft.status !== "terminated" && statusDraft.status !== "on_leave" && <label>Reason <small>Optional</small><input value={statusDraft.reason} onChange={(event) => setStatusDraft({ ...statusDraft, reason: event.target.value })} /></label>}<label>Notes <small>Optional</small><textarea rows={3} value={statusDraft.notes} onChange={(event) => setStatusDraft({ ...statusDraft, notes: event.target.value })} /></label><div className="calendar-editor-actions"><button type="button" className="button secondary" onClick={() => setStatusMember(null)}>Cancel</button><button type="button" className="button primary" onClick={() => void saveEmploymentStatus()}><Save size={16}/>Save status</button></div></section></div>}
         </div>
+      ) : view === "leave" ? (
+        <LeaveManagement profile={profile} storeId={storeId} onAvailabilityChanged={refreshApprovedLeave} />
       ) : view === "availability" ? (
         <div className="availability-layout">
           <section className="panel availability-editor"><div><p className="eyebrow">Availability entry</p><h2>{availabilityForm.kind === "standard" ? "Recurring standard availability" : "Requested time off"}</h2><p>{availabilityForm.kind === "standard" ? "This repeats every week until it is changed." : `This applies only to the week of ${formatWeek(weekStart)}.`}</p></div><label>Employee<select value={availabilityForm.member_id} onChange={(event) => chooseAvailability(event.target.value, availabilityForm.day_of_week, availabilityForm.kind)}><option value="">Select employee</option>{members.map((member) => <option key={member.id} value={member.id}>{member.display_name}</option>)}</select></label><label>Entry type<select value={availabilityForm.kind} onChange={(event) => chooseAvailability(availabilityForm.member_id, availabilityForm.day_of_week, event.target.value as "standard" | "rto")}><option value="standard">Standard availability · repeats</option><option value="rto">Requested time off · this week</option></select></label><label>Day<select value={availabilityForm.day_of_week} onChange={(event) => chooseAvailability(availabilityForm.member_id, Number(event.target.value), availabilityForm.kind)}>{days.map((day, index) => <option key={day} value={index}>{day}</option>)}</select></label>
             {availabilityForm.kind === "standard" ? <label>Status<select value={availabilityForm.standard_status} onChange={(event) => setAvailabilityForm({ ...availabilityForm, standard_status: event.target.value as typeof availabilityForm.standard_status })}><option value="available">Available all day</option><option value="limited">Available only during set times</option><option value="unavailable">Not available</option></select></label> : <label className="checkbox-line"><input type="checkbox" checked={availabilityForm.all_day} onChange={(event) => setAvailabilityForm({ ...availabilityForm, all_day: event.target.checked })} />Entire day requested off</label>}
             {((availabilityForm.kind === "standard" && availabilityForm.standard_status === "limited") || (availabilityForm.kind === "rto" && !availabilityForm.all_day)) && <div className="availability-time-row"><label>Starts<input type="time" step="900" value={availabilityForm.start_time} onChange={(event) => setAvailabilityForm({ ...availabilityForm, start_time: event.target.value })} /></label><label>Ends<input type="time" step="900" value={availabilityForm.end_time} onChange={(event) => setAvailabilityForm({ ...availabilityForm, end_time: event.target.value })} /></label></div>}
             {availabilityForm.kind === "rto" && <label>Reason or note <span className="optional-label">Optional</span><input value={availabilityForm.reason} onChange={(event) => setAvailabilityForm({ ...availabilityForm, reason: event.target.value })} placeholder="Appointment, vacation, school event…" /></label>}
-            <div className="button-row"><button className="button primary" onClick={() => void saveAvailability()}><Save size={17} />Save {availabilityForm.kind === "standard" ? "availability" : "request"}</button>{selectedAvailabilityEntry && <button className="button secondary danger" onClick={() => void clearAvailability()}><Trash2 size={17} />Clear entry</button>}</div>
+            <div className="button-row"><button className="button primary" onClick={() => void saveAvailability()}><Save size={17} />Save {availabilityForm.kind === "standard" ? "availability" : "request"}</button>{selectedAvailabilityEntry && !selectedAvailabilityEntry.source_time_off_request_id && <button className="button secondary danger" onClick={() => void clearAvailability()}><Trash2 size={17} />Clear entry</button>}</div>
           </section>
-          <section className="panel availability-week-panel"><div className="table-toolbar"><div><p className="eyebrow">Week at a glance</p><h2>Standard availability + requests</h2><p>Click any employee/day cell to edit it. Blue is recurring availability; orange/red is requested time off for this selected week.</p></div></div>{members.length === 0 ? <div className="activity-empty">Add employees to the roster before recording availability.</div> : <div className="responsive-table"><table className="availability-table"><thead><tr><th>Employee</th>{days.map((day, dayIndex) => <th key={day}>{day.slice(0, 3)}<small>{formatScheduleDate(weekStart, dayIndex, true)}</small></th>)}</tr></thead><tbody>{members.map((member) => <tr key={member.id}><td><strong>{member.display_name}</strong></td>{days.map((_, day) => { const standard = availability.find((item) => item.member_id === member.id && item.day_of_week === day && item.kind === "standard"); const rto = availability.find((item) => item.member_id === member.id && item.day_of_week === day && item.kind === "rto"); const standardAllDay = !standard || (standard.start_time.slice(0, 5) === "00:00" && standard.end_time.slice(0, 5) === "23:59" && standard.available); return <td key={day}><button className={`availability-cell-button ${rto ? "has-rto" : standard && !standard.available ? "unavailable" : standardAllDay ? "available" : "limited"}`} onClick={() => chooseAvailability(member.id, day, rto ? "rto" : "standard")}><span>{standard && !standard.available ? "⛔ Not available" : standardAllDay ? "✓ Available" : `⚠ ${displayTime(standard!.start_time)}–${displayTime(standard!.end_time)}`}</span>{rto && <strong>{rto.start_time.slice(0, 5) === "00:00" && rto.end_time.slice(0, 5) === "23:59" ? "RTO · all day" : `RTO · ${displayTime(rto.start_time)}–${displayTime(rto.end_time)}`}</strong>}</button></td>; })}</tr>)}</tbody></table></div>}</section>
+          <section className="panel availability-week-panel"><div className="table-toolbar"><div><p className="eyebrow">Week at a glance</p><h2>Standard availability + requests</h2><p>Click any employee/day cell to edit it. Blue is recurring availability; orange/red is requested time off for this selected week. Approved paid leave is controlled from PTO &amp; Vacation.</p></div></div>{members.length === 0 ? <div className="activity-empty">Add employees to the roster before recording availability.</div> : <div className="responsive-table"><table className="availability-table"><thead><tr><th>Employee</th>{days.map((day, dayIndex) => <th key={day}>{day.slice(0, 3)}<small>{formatScheduleDate(weekStart, dayIndex, true)}</small></th>)}</tr></thead><tbody>{members.map((member) => <tr key={member.id}><td><strong>{member.display_name}</strong></td>{days.map((_, day) => { const standard = availability.find((item) => item.member_id === member.id && item.day_of_week === day && item.kind === "standard"); const rto = availability.find((item) => item.member_id === member.id && item.day_of_week === day && item.kind === "rto"); const standardAllDay = !standard || (standard.start_time.slice(0, 5) === "00:00" && standard.end_time.slice(0, 5) === "23:59" && standard.available); return <td key={day}><button className={`availability-cell-button ${rto ? "has-rto" : standard && !standard.available ? "unavailable" : standardAllDay ? "available" : "limited"}`} onClick={() => chooseAvailability(member.id, day, rto ? "rto" : "standard")}><span>{standard && !standard.available ? "⛔ Not available" : standardAllDay ? "✓ Available" : `⚠ ${displayTime(standard!.start_time)}–${displayTime(standard!.end_time)}`}</span>{rto && <strong>{rto.source_time_off_request_id ? "✓ Approved paid leave" : "RTO"} · {rto.start_time.slice(0, 5) === "00:00" && rto.end_time.slice(0, 5) === "23:59" ? "all day" : `${displayTime(rto.start_time)}–${displayTime(rto.end_time)}`}</strong>}</button></td>; })}</tr>)}</tbody></table></div>}</section>
         </div>
       ) : view === "events" ? (
         <div className="labor-event-layout">

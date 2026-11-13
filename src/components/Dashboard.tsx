@@ -32,7 +32,7 @@ const actionCatalog: {
 }[] = [
   { title: "Smart Scheduler", detail: "Create the minimum data-guided staffing plan and assign the team.", icon: CalendarClock, section: "labor", tone: "blue" },
   { title: "KPI Dashboard", detail: "Compare results, commitments, trajectories, and store goals.", icon: Gauge, section: "kpi", tone: "red" },
-  { title: "Team Calendar", detail: "Review company events, meetings, training, and District Manager visits.", icon: CalendarDays, section: "calendar", tone: "blue" },
+  { title: "Team Calendar", detail: "Review company events, meetings, training, and Area Supervisor visits.", icon: CalendarDays, section: "calendar", tone: "blue" },
   { title: "Payroll Submission", detail: "Complete payroll changes, reimbursements, and time-off requests.", icon: CreditCard, section: "payroll", tone: "silver" },
   { title: "DM Visit Logs", detail: "Start or review a structured store-visit record.", icon: ClipboardList, section: "visit-log", tone: "red" },
   { title: "HR Action Logs", detail: "Create and securely review disciplinary documentation.", icon: ShieldAlert, section: "hr", tone: "red" },

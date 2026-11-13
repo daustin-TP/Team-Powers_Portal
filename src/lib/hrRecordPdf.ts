@@ -270,7 +270,7 @@ export async function buildHrRecordPdf(data: HrRecordPdfData, images: BrandImage
     pdf.text("The fingerprint verifies the exact record and signature packet preserved by DASH-OS.", margin + 10, y + 57);
     y += 82;
   } else {
-    const signatureRows = ["Employee signature", "Manager signature", "Witness / District Manager"];
+    const signatureRows = ["Employee signature", "Manager signature", "Witness / Area Supervisor"];
     signatureRows.forEach((label, index) => {
       const rowY = y + 27 + index * 31;
       pdf.setFontSize(6.5); pdf.text(label.toUpperCase(), margin, rowY);

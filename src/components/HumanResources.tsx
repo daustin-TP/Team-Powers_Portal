@@ -629,7 +629,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
       </div>
     </section>
 
-    <div className="hr-security-banner"><LockKeyhole size={22} /><div><strong>Restricted and permanent</strong><span>Managers see only records they submitted. District Managers and administrators have oversight and are the only roles permitted to edit. Records cannot be deleted.</span></div></div>
+    <div className="hr-security-banner"><LockKeyhole size={22} /><div><strong>Restricted and permanent</strong><span>Managers see only records they submitted. Area Supervisors and administrators have oversight and are the only roles permitted to edit. Records cannot be deleted.</span></div></div>
     {message && <div className="form-message" role="status">{message}</div>}
 
     <section className="panel hr-records-panel">
@@ -645,7 +645,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     </section>}
 
     {profile.role === "admin" && notificationSettings && <section className="panel hr-notification-settings">
-      <div className="panel-heading"><div><p className="eyebrow">Termination delivery settings</p><h2><Mail size={21} /> HR notifications</h2><p>{notificationSettings.delivery_mode === "live" ? `Live delivery goes to ${notificationSettings.live_to_recipients.join(", ")} with ${notificationSettings.live_cc_recipients.join(", ")} and the assigned District Manager copied.` : "Only the test recipients below receive termination alerts."}</p></div><span className={`status-pill ${notificationSettings.delivery_mode === "live" ? "completed" : "monitoring"}`}>{notificationSettings.delivery_mode.toUpperCase()} MODE</span></div>
+      <div className="panel-heading"><div><p className="eyebrow">Termination delivery settings</p><h2><Mail size={21} /> HR notifications</h2><p>{notificationSettings.delivery_mode === "live" ? `Live delivery goes to ${notificationSettings.live_to_recipients.join(", ")} with ${notificationSettings.live_cc_recipients.join(", ")} and the assigned Area Supervisor copied.` : "Only the test recipients below receive termination alerts."}</p></div><span className={`status-pill ${notificationSettings.delivery_mode === "live" ? "completed" : "monitoring"}`}>{notificationSettings.delivery_mode.toUpperCase()} MODE</span></div>
       <label>Test recipient emails <small>Separate multiple addresses with commas</small><textarea rows={2} value={notificationSettings.test_recipients.join(", ")} onChange={(event) => setNotificationSettings({ ...notificationSettings, test_recipients: event.target.value.split(",") })} /></label>
       <div className="hr-form-actions"><button className="button secondary" disabled={saving} onClick={() => void saveNotificationSettings()}><Save size={17} />Save test recipients</button></div>
     </section>}
@@ -660,7 +660,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
     </section>}
 
     {showForm && <section className="panel hr-form-panel">
-      <div className="panel-heading"><div><p className="eyebrow">{amendingActionId ? "Linked amendment" : selected ? "District Manager edit" : "Permanent submission"}</p><h2>{amendingActionId ? `Amend ${form.employee_name}` : selected ? `Update ${selected.employee_name}` : "Document disciplinary action"}</h2><p>{amendingActionId ? "This creates a new linked record. The signed original will remain permanently unchanged." : selected ? "Saving creates an immutable revision. Store and submitter ownership cannot be changed." : "Review carefully before submitting. Managers cannot edit a record after it is saved."}</p></div><AlertTriangle size={28} /></div>
+      <div className="panel-heading"><div><p className="eyebrow">{amendingActionId ? "Linked amendment" : selected ? "Area Supervisor edit" : "Permanent submission"}</p><h2>{amendingActionId ? `Amend ${form.employee_name}` : selected ? `Update ${selected.employee_name}` : "Document disciplinary action"}</h2><p>{amendingActionId ? "This creates a new linked record. The signed original will remain permanently unchanged." : selected ? "Saving creates an immutable revision. Store and submitter ownership cannot be changed." : "Review carefully before submitting. Managers cannot edit a record after it is saved."}</p></div><AlertTriangle size={28} /></div>
       <div className="hr-form-grid">
         <label>Store<select value={form.store_id} disabled={Boolean(selected)} onChange={(event) => field("store_id", event.target.value)}><option value="">Select store</option>{stores.map((store) => <option key={store.id} value={store.id}>{storeName(store.id)}</option>)}</select></label>
         <label className={form.action_type === "termination" && !form.member_id ? "hr-required-missing" : undefined}>Roster employee <small>{form.action_type === "termination" ? "Required for termination" : "Recommended"}</small><select value={form.member_id} onChange={(event) => selectRosterMember(event.target.value)}><option value="">Enter name manually</option>{members.filter((member) => member.store_id === form.store_id && member.employment_status !== "terminated" && member.employment_status !== "archived").map((member) => <option key={member.id} value={member.id}>{member.display_name}{member.employment_status !== "active" ? ` · ${member.employment_status.replace("_", " ")}` : ""}</option>)}</select></label>
@@ -693,7 +693,7 @@ export default function HumanResources({ profile }: { profile: Profile }) {
           <label>Acknowledgment<select value={form.acknowledgment_status} onChange={(event) => field("acknowledgment_status", event.target.value as Acknowledgment)}><option value="pending">Pending</option><option value="acknowledged">Acknowledged</option><option value="declined">Employee declined</option><option value="not_required">Not required</option></select></label>
           <label>Record status<select value={form.status} onChange={(event) => field("status", event.target.value as HrStatus)}><option value="open">Open</option><option value="monitoring">Monitoring</option><option value="completed">Completed</option></select></label>
         </>}
-        <label className="wide">Confidential District Manager notes <small>Optional</small><textarea rows={3} value={form.confidential_notes} onChange={(event) => field("confidential_notes", event.target.value)} /></label>
+        <label className="wide">Confidential Area Supervisor notes <small>Optional</small><textarea rows={3} value={form.confidential_notes} onChange={(event) => field("confidential_notes", event.target.value)} /></label>
       </div>
       <div className="hr-form-actions"><button className="button secondary" onClick={() => { setShowForm(false); setAmendingActionId(null); }}>Cancel</button><button className="button primary" disabled={saving} onClick={() => void (selected ? saveEdit() : submit())}><Save size={17} />{saving ? "Saving securely…" : selected ? "Save revision" : amendingActionId ? "Submit linked amendment" : "Submit permanent record"}</button></div>
     </section>}

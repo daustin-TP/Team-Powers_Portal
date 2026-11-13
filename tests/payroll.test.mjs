@@ -84,13 +84,13 @@ function handlerFor(role,active=true){
 }
 const calendarRequest=()=>new Request('https://example.test',{method:'POST',headers:{Authorization:'Bearer user-token','Content-Type':'application/json'},body:JSON.stringify({action:'calendar',start:'2026-11-01',end:'2026-11-04'})});
 test('time-off calendar uses hierarchy and omits private notes',async()=>{
-  for(const [role,ids] of [['manager',['own']],['supervisor',['own','gm-a']],['admin',['own','gm-a','gm-b','sup-a']]]){
+  for(const [role,ids] of [['manager',['own','gm-a','sup-a']],['supervisor',['own','gm-a','sup-a']],['admin',['own','gm-a','gm-b','sup-a']]]){
     const response=await handlerFor(role)(calendarRequest());assert.equal(response.status,200);
     const result=await response.json();assert.deepEqual(result.requests.map(r=>r.id),ids);
     assert.equal(result.requests.some(r=>'note' in r),false);
   }
 });
-test('time-off approvals follow administrator and District Manager hierarchy',async()=>{
+test('time-off approvals follow administrator and Area Supervisor hierarchy',async()=>{
   const review=(id,status='approved')=>new Request('https://example.test',{method:'POST',headers:{Authorization:'Bearer user-token','Content-Type':'application/json'},body:JSON.stringify({action:'time_off_review',due_date:'2026-11-02',id,status})});
   assert.equal((await handlerFor('admin')(review('gm-b'))).status,200);
   const districtApproval=await handlerFor('supervisor')(review('gm-a'));

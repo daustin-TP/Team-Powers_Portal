@@ -408,7 +408,7 @@ export default function App() {
           <div className="avatar">{profile.fullName.slice(0, 1)}</div>
           <div>
             <strong>{profile.fullName}</strong>
-            <span>{profile.role === "supervisor" ? "District Manager" : profile.role === "admin" ? "Administrator" : profile.role.charAt(0).toUpperCase() + profile.role.slice(1)} · {profile.location}</span>
+            <span>{profile.role === "supervisor" ? "Area Supervisor" : profile.role === "admin" ? "Administrator" : profile.role.charAt(0).toUpperCase() + profile.role.slice(1)} · {profile.location}</span>
           </div>
           <button className="icon-button" aria-label="Sign out" onClick={signOut}>
             <LogOut size={18} />
