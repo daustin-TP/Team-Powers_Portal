@@ -120,6 +120,7 @@ textarea { resize: vertical; }
 .page-heading h1 { font-size: clamp(2.4rem, 5vw, 3.9rem); }
 .page-heading > p:last-child { font-size: 1.05rem; max-width: 660px; }
 .heading-with-action { max-width: none; display: flex; justify-content: space-between; align-items: flex-end; gap: 2rem; }
+.support-heading-actions{display:flex;align-items:center;justify-content:flex-end;gap:.65rem;flex-wrap:wrap;flex:0 0 auto}.equipment-records-page .equipment-panel{margin-bottom:0}
 .welcome { padding: 2.2rem 2.4rem; border-radius: 20px; background:linear-gradient(118deg,#020408 0%,#0b1625 58%,#092d4e 100%); color: white; display: flex; justify-content: space-between; align-items: center; margin-bottom: 3rem; overflow: hidden; position: relative; border:1px solid rgba(7,135,245,.35); box-shadow:0 18px 45px rgba(3,12,24,.18); }
 .welcome::before { content:""; position:absolute; inset:0; background:linear-gradient(105deg,rgba(240,9,44,.22),transparent 28%,transparent 65%,rgba(7,135,245,.2)); pointer-events:none; }
 .welcome::after { content:""; position: absolute; width: 260px; height: 260px; right: -80px; bottom: -160px; border: 1px solid rgba(255,255,255,.12); border-radius: 50%; box-shadow: 0 0 0 35px rgba(7,135,245,.07), 0 0 0 70px rgba(240,9,44,.04); }
@@ -423,6 +424,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .status-pill { font-size: 0; width: 10px; height: 10px; padding: 0; }
   .heading-with-action { align-items: stretch; flex-direction: column; gap: .5rem; }
   .heading-with-action .button { align-self: flex-start; }
+  .support-heading-actions{justify-content:flex-start}.support-heading-actions .button{flex:1 1 190px;justify-content:center}
   .calendar-form-row{grid-template-columns:1fr}.calendar-editor-actions{align-items:stretch;flex-direction:column}.calendar-editor-actions .button,.calendar-editor-actions .danger{width:100%;margin:0}.calendar-heading .button-row{width:100%}.calendar-heading .button-row .button{flex:1}
   .product-row { grid-template-columns: auto 1fr auto; }
   .product-row .price { display: none; }

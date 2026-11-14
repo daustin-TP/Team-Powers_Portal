@@ -34,6 +34,9 @@ test("each equipment item exposes its dated maintenance history immediately",()=
   assert.match(equipment,/maintenance_equipment_service_logs\(id,service_date,work_performed/);
 });
 
-test("the equipment registry appears only at the top of maintenance requests",()=>{
-  assert.match(maintenance,/area==="maintenance"&&<EquipmentInventory/);
+test("equipment records open as a separate maintenance page",()=>{
+  assert.match(maintenance,/Equipment records/);
+  assert.match(maintenance,/showEquipment/);
+  assert.match(maintenance,/setShowEquipment\(true\)/);
+  assert.doesNotMatch(maintenance,/area==="maintenance"&&<EquipmentInventory/);
 });
