@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const migration = read("../supabase/migrations/20261112004847_pto_vacation_management.sql");
+const balanceFix = read("../supabase/migrations/20261113123000_fix_leave_balance_year_ambiguity.sql");
 const edge = read("../supabase/functions/payroll/index.ts");
 const leaveUi = read("../src/components/LeaveManagement.tsx");
 const scheduler = read("../src/components/LaborManagement.tsx");
@@ -40,4 +41,11 @@ test("approved requests enter payroll once using their source request id", () =>
 test("direct database access to leave actions is service-only", () => {
   assert.match(migration, /revoke all on function public\.leave_action\(uuid,text,jsonb\) from public,anon,authenticated/i);
   assert.match(migration, /grant execute on function public\.leave_action\(uuid,text,jsonb\) to service_role/i);
+});
+
+test("future benefit years save through an unambiguous dedicated balance action", () => {
+  assert.match(balanceFix, /target_benefit_year/);
+  assert.doesNotMatch(balanceFix, /declare[\s\S]*?\n\s*benefit_year integer;/i);
+  assert.match(edge, /db\.rpc\("leave_save_balance"/);
+  assert.match(leaveUi, /response\.clone\(\)\.json\(\)/);
 });

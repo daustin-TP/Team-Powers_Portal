@@ -102,7 +102,12 @@ export async function handlePayroll(req: Request) {
       });
       return json({ok:true,benefit_year:benefitYear,can_manage_balances:p.role==="admin",members,leadership,requests:visibleRequests});
     }
-    if(["leave_save_level","leave_save_balance","leave_request","leave_review","leave_cancel"].includes(body.action)){
+    if(body.action==="leave_save_balance"){
+      const result=await db.rpc("leave_save_balance",{actor:p.id,payload:body});
+      if(result.error)return json({error:result.error.message},400);
+      return json(result.data);
+    }
+    if(["leave_save_level","leave_request","leave_review","leave_cancel"].includes(body.action)){
       const actionMap:Record<string,string>={leave_save_level:"save_level",leave_save_balance:"save_balance",leave_request:"request",leave_review:"review",leave_cancel:"cancel"};
       const result=await db.rpc("leave_action",{actor:p.id,action:actionMap[body.action],payload:body});
       if(result.error)return json({error:result.error.message},400);

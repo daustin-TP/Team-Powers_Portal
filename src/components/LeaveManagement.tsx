@@ -40,7 +40,14 @@ export default function LeaveManagement({profile,storeId,onAvailabilityChanged}:
   const invoke=useCallback(async(action:string,payload:Record<string,unknown>={})=>{
     if(!supabase)throw Error("DASH database is not configured.");
     const {data:result,error:invokeError}=await supabase.functions.invoke("payroll",{body:{action,store_id:storeId,benefit_year:year,...payload}});
-    if(invokeError||result?.error)throw Error(result?.error||invokeError?.message||"The PTO / Vacation request could not be completed.");
+    if(invokeError||result?.error){
+      let detail=result?.error as string|undefined;
+      const response=(invokeError as {context?:Response}|null)?.context;
+      if(!detail&&response){
+        try{detail=(await response.clone().json() as {error?:string})?.error;}catch{/* Keep the transport error below. */}
+      }
+      throw Error(detail||invokeError?.message||"The PTO / Vacation request could not be completed.");
+    }
     return result;
   },[storeId,year]);
 
