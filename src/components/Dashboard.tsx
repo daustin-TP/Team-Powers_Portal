@@ -42,7 +42,7 @@ const actionCatalog: {
   { title: "Smallwares Requests", detail: "Request approved tools, supplies, and store equipment.", icon: ShoppingBag, section: "smallwares", tone: "silver" },
   { title: "Maintenance Requests", detail: "Report a store repair and track its progress.", icon: Wrench, section: "maintenance", tone: "red" },
   { title: "Technology Requests", detail: "Report a system or equipment issue.", icon: MonitorCog, section: "technology", tone: "blue" },
-  { title: "DM Card Receipts", detail: "Upload and categorize a corporate-card purchase.", icon: Receipt, section: "receipts", tone: "blue" },
+  { title: "Company Credit Charges", detail: "Upload a company-card receipt and assign its store billing.", icon: Receipt, section: "receipts", tone: "blue" },
   { title: "Review approvals", detail: "See requests waiting for your attention.", icon: ClipboardCheck, section: "approvals", tone: "red" },
   { title: "Reconciliation", detail: "Review and reconcile company purchasing records.", icon: CreditCard, section: "reconciliation", tone: "silver" },
   { title: "Team Access", detail: "Manage portal users, roles, names, and store assignments.", icon: Users, section: "team", tone: "blue" },
@@ -108,7 +108,7 @@ export default function Dashboard({
         combined.push({ id: `order-${order.id}`, title: order.category === "smallware" ? "Smallwares order" : "Uniform order", detail: `${order.store_name || "Store"} · $${Number(order.total).toFixed(2)}`, status: activityStatus(rawStatus), date: relativeDate(order.created_at), timestamp: order.created_at, section: "approvals" });
       }
       for (const receipt of receipts.data ?? []) {
-        combined.push({ id: `receipt-${receipt.id}`, title: "Corporate card receipt", detail: `${receipt.vendor} · $${Number(receipt.amount).toFixed(2)}`, status: activityStatus(receipt.status), date: relativeDate(receipt.created_at), timestamp: receipt.created_at, section: "receipts" });
+        combined.push({ id: `receipt-${receipt.id}`, title: "Company credit charge", detail: `${receipt.vendor} · $${Number(receipt.amount).toFixed(2)}`, status: activityStatus(receipt.status), date: relativeDate(receipt.created_at), timestamp: receipt.created_at, section: "receipts" });
       }
       for (const ticket of tickets.data ?? []) {
         const store = Array.isArray(ticket.stores) ? ticket.stores[0]?.name : (ticket.stores as { name?: string } | null)?.name;

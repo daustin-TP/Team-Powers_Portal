@@ -59,7 +59,7 @@ const navigation: {
   { id: "labor", label: "Smart Scheduler", icon: CalendarClock, roles: ["manager", "supervisor", "admin"] },
   { id: "calendar", label: "Team Calendar", icon: CalendarDays },
   { id: "visit-log", label: "DM Visit Logs", icon: ClipboardList, roles: ["supervisor", "admin"] },
-  { id: "receipts", label: "DM Card Receipts", icon: Receipt },
+  { id: "receipts", label: "Company Credit Charges", icon: Receipt, roles: ["supervisor", "admin"] },
   { id: "hr", label: "HR Action Logs", icon: ShieldAlert, roles: ["manager", "supervisor", "admin"] },
   { id: "evaluations", label: "Team Evaluations", icon: ClipboardCheck, roles: ["manager", "supervisor", "admin"] },
   { id: "payroll", label: "Payroll Submission", icon: CreditCard, roles: ["manager", "supervisor", "admin"] },
