@@ -39,7 +39,7 @@ test('regional report flags poor outliers and missed goals, never missing values
 });
 function handler(profile,plan,history=[]) {
  const tables={profiles:[profile,{id:'reviewer',role:'admin',active:true}],kpi_regional_plans:[plan],kpi_weekly_results:history};
- const client={auth:{getUser:async()=>({data:{user:{id:profile.id}}})},from(name){let rows=tables[name],patch=null,single=false;return {select(){return this},eq(k,v){rows=rows.filter(r=>r[k]===v);return this},in(k,v){rows=rows.filter(r=>v.includes(r[k]));return this},gt(k,v){rows=rows.filter(r=>r[k]>v);return this},gte(k,v){rows=rows.filter(r=>r[k]>=v);return this},lte(k,v){rows=rows.filter(r=>r[k]<=v);return this},order(){return this},limit(){return this},single(){single=true;return this},maybeSingle(){single=true;return this},update(p){patch=p;return this},then(resolve){if(patch)rows.forEach(r=>Object.assign(r,patch));resolve({data:single?rows[0]??null:rows,error:null});}};}};
+ const client={auth:{getUser:async()=>({data:{user:{id:profile.id}}})},from(name){const source=tables[name];let rows=source,patch=null,single=false,deleting=false;return {select(){return this},eq(k,v){rows=rows.filter(r=>r[k]===v);return this},in(k,v){rows=rows.filter(r=>v.includes(r[k]));return this},gt(k,v){rows=rows.filter(r=>r[k]>v);return this},gte(k,v){rows=rows.filter(r=>r[k]>=v);return this},lte(k,v){rows=rows.filter(r=>r[k]<=v);return this},order(){return this},limit(){return this},single(){single=true;return this},maybeSingle(){single=true;return this},update(p){patch=p;return this},delete(){deleting=true;return this},then(resolve){if(deleting){const removed=new Set(rows);tables[name]=source.filter(r=>!removed.has(r));resolve({data:null,error:null});return;}if(patch)rows.forEach(r=>Object.assign(r,patch));resolve({data:single?rows[0]??null:rows,error:null});}};}};
  return load('../supabase/functions/kpi-plans/index.ts',{require:n=>n.includes('analytics')?analytics:n.includes('goals')?goals:n.includes('planning')?planning:{createClient:()=>client},Deno:{env:{get:()=>''},serve(){}},Response,console}).handlePlans;
 }
 const request=body=>new Request('https://example.test',{method:'POST',headers:{Authorization:'Bearer test','Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -51,6 +51,17 @@ test('supervisors cannot read another region, unreleased drafts, or create repor
  p.status='released';p.supervisor_id='other';
  assert.equal((await h(request({action:'results',id:'p'}))).status,403);
  const list=await (await h(request({action:'list'}))).json();assert.equal(list.plans.length,0);
+});
+test('only administrators can permanently delete a regional plan',async()=>{
+ const supervisorPlan=makePlan();supervisorPlan.status='released';
+ const supervisorHandler=handler({id:'sup',role:'supervisor',active:true},supervisorPlan);
+ assert.equal((await supervisorHandler(request({action:'delete',id:'p'}))).status,403);
+ assert.equal((await supervisorHandler(request({action:'results',id:'p'}))).status,200);
+ const adminPlan=makePlan();
+ const adminHandler=handler({id:'reviewer',role:'admin',active:true},adminPlan);
+ const response=await adminHandler(request({action:'delete',id:'p'}));
+ assert.equal(response.status,200);assert.equal((await response.json()).id,'p');
+ assert.equal((await adminHandler(request({action:'results',id:'p'}))).status,404);
 });
 test('only assigned director releases; release requires instructions, not owners; stale versions cannot overwrite',async()=>{
  const p=makePlan();

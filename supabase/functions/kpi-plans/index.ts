@@ -56,6 +56,12 @@ export async function handlePlans(req:Request) {
   if(existing.error||!existing.data) return json({error:'Report not found.'},404);
   const plan=existing.data;
   if(!admin&&(plan.supervisor_id!==profile.id||!['released','closed'].includes(plan.status))) return json({error:'Report not available.'},403);
+  if(body.action==='delete') {
+   if(!admin) return json({error:'Only administrators can delete regional plans.'},403);
+   const removed=await db.from('kpi_regional_plans').delete().eq('id',plan.id);
+   if(removed.error) throw removed.error;
+   return json({ok:true,id:plan.id});
+  }
   if(body.action==='results') {
    const result=await db.from('kpi_weekly_results').select('store_id,week_end,metrics').in('store_id',plan.snapshot.stores.map(s=>s.id)).gte('week_end',addDays(plan.week_end,-77)).lte('week_end',addDays(plan.followup_date,6)).order('week_end');
    if(result.error) throw result.error;
