@@ -2,6 +2,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.110.9';
 import { isIndividualStore } from '../kpi-dashboard/analytics.ts';
 import { automaticGoals, addDays, planningWeek } from '../kpi-dashboard/goals.ts';
 import { regionSnapshot, suggestedActions, validateActions } from '../kpi-dashboard/planning.ts';
+import { notifyRegionalPlanReleased } from './notifications.ts';
 const headers={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type','Access-Control-Allow-Methods':'POST, OPTIONS','Content-Type':'application/json'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers});
 export async function handlePlans(req:Request) {
@@ -85,7 +86,10 @@ export async function handlePlans(req:Request) {
   const saved=await db.from('kpi_regional_plans').update(patch).eq('id',plan.id).eq('version',body.version).select().maybeSingle();
   if(saved.error) throw saved.error;
   if(!saved.data) return json({error:'Someone updated this report. Reload it before saving your changes.'},409);
-  return json({ok:true,plan:saved.data});
+  const notification=body.status==='released'&&plan.status==='director_review'
+   ? await notifyRegionalPlanReleased(db,saved.data)
+   : undefined;
+  return json({ok:true,plan:saved.data,notification});
  } catch(error) {console.error(error);return json({error:'Could not update regional plans. Please retry.'},500);}
 }
 Deno.serve(handlePlans);

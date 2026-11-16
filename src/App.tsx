@@ -89,7 +89,7 @@ const externalSites = [
   { label: "Individual Uniforms", href: "https://uniforms.powerspizza.com", icon: Shirt },
 ];
 
-type RequestBadgeSection = "technology" | "maintenance" | "approvals";
+type RequestBadgeSection = "technology" | "maintenance" | "approvals" | "kpi";
 type RequestBadges = Partial<Record<RequestBadgeSection, number>>;
 
 async function loadProfile(userId: string, email: string): Promise<Profile | null> {
@@ -213,7 +213,7 @@ export default function App() {
       const canRespondMaintenance = profile.role === "admin" || assigned.has("maintenance");
       const canReviewOrders = ["supervisor", "accounting", "admin"].includes(profile.role);
 
-      const [technology, maintenance, approvals] = await Promise.all([
+      const [technology, maintenance, approvals, kpiFollowup] = await Promise.all([
         canRespondTechnology
           ? client.from("support_tickets").select("id", { count: "exact", head: true }).eq("area", "technology").neq("status", "completed")
           : Promise.resolve({ count: null }),
@@ -223,6 +223,9 @@ export default function App() {
         canReviewOrders
           ? client.from("portal_orders").select("id", { count: "exact", head: true }).in("category", ["smallware", "uniform"]).eq("status", "submitted")
           : Promise.resolve({ count: null }),
+        ["admin", "supervisor"].includes(profile.role)
+          ? client.functions.invoke("kpi-plans", { body: { action: "list" } })
+          : Promise.resolve({ data: null }),
       ]);
 
       if (!active) return;
@@ -230,12 +233,14 @@ export default function App() {
         ...(canRespondTechnology ? { technology: technology.count ?? 0 } : {}),
         ...(canRespondMaintenance ? { maintenance: maintenance.count ?? 0 } : {}),
         ...(canReviewOrders ? { approvals: approvals.count ?? 0 } : {}),
+        ...(["admin", "supervisor"].includes(profile.role) ? { kpi: (kpiFollowup.data?.plans ?? []).filter((plan: { status: string; actions: Array<{ status: string }> }) => plan.status === "released" && plan.actions.some((action) => action.status !== "done")).length } : {}),
       });
     };
 
     const refresh = () => void loadRequestBadges();
     void loadRequestBadges();
     window.addEventListener("dashos:requests-changed", refresh);
+    window.addEventListener("dashos:kpi-followup-changed", refresh);
     window.addEventListener("focus", refresh);
     const timer = window.setInterval(refresh, 60_000);
     const channel = client
@@ -247,6 +252,7 @@ export default function App() {
     return () => {
       active = false;
       window.removeEventListener("dashos:requests-changed", refresh);
+      window.removeEventListener("dashos:kpi-followup-changed", refresh);
       window.removeEventListener("focus", refresh);
       window.clearInterval(timer);
       void client.removeChannel(channel);
