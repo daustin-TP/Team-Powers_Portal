@@ -77,7 +77,7 @@ export async function handleSupportNotification(req: Request) {
 
     const ticketResult = await db
       .from("support_tickets")
-      .select("id,area,status,severity,description,steps_taken,external_ticket_number,image_path,created_at,submitted_by,stores(name),profiles!support_tickets_submitted_by_fkey(full_name),support_ticket_updates(status,image_path,created_at)")
+      .select("id,area,status,severity,description,steps_taken,external_ticket_number,image_path,created_at,submitted_by,technology_equipment_type,technology_equipment!support_tickets_technology_equipment_id_fkey(label),stores(name),profiles!support_tickets_submitted_by_fkey(full_name),support_ticket_updates(status,image_path,created_at)")
       .eq("id", body.ticket_id)
       .maybeSingle();
     if (ticketResult.error || !ticketResult.data) return json({ error: "Request not found" }, 404);
@@ -106,6 +106,7 @@ export async function handleSupportNotification(req: Request) {
 
     const store = Array.isArray(ticket.stores) ? ticket.stores[0] : ticket.stores;
     const submitter = Array.isArray(ticket.profiles) ? ticket.profiles[0] : ticket.profiles;
+    const technologyEquipment = Array.isArray(ticket.technology_equipment) ? ticket.technology_equipment[0] : ticket.technology_equipment;
     const photoDelivery = await ticketAttachments(db, ticket, event);
     const attachments = photoDelivery.attachments;
     const copy = supportNotificationCopy({
@@ -118,6 +119,8 @@ export async function handleSupportNotification(req: Request) {
       actedBy: profileResult.data.full_name ?? "DASH-OS responder",
       stepsTaken: ticket.steps_taken ?? "",
       externalTicketNumber: ticket.external_ticket_number ?? "",
+      equipmentType: ticket.technology_equipment_type ?? "",
+      equipmentLabel: technologyEquipment?.label ?? "",
       createdAt: ticket.created_at,
       photoAttached: attachments.length > 0,
       photoAvailableInDash: photoDelivery.storedPhotoCount > attachments.length,

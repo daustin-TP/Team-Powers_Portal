@@ -1,0 +1,4 @@
+create index if not exists technology_equipment_created_by_idx on public.technology_equipment(created_by);
+create index if not exists technology_equipment_updated_by_idx on public.technology_equipment(updated_by);
+create index if not exists technology_troubleshooting_guides_created_by_idx on public.technology_troubleshooting_guides(created_by);
+create index if not exists technology_troubleshooting_guides_updated_by_idx on public.technology_troubleshooting_guides(updated_by);

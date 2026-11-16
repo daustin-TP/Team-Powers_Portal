@@ -36,7 +36,7 @@ test("each equipment item exposes its dated maintenance history immediately",()=
 
 test("equipment records open as a separate maintenance page",()=>{
   assert.match(maintenance,/Equipment records/);
-  assert.match(maintenance,/showEquipment/);
-  assert.match(maintenance,/setShowEquipment\(true\)/);
+  assert.match(maintenance,/maintenance-equipment/);
+  assert.match(maintenance,/setSubpage\("maintenance-equipment"\)/);
   assert.doesNotMatch(maintenance,/area==="maintenance"&&<EquipmentInventory/);
 });

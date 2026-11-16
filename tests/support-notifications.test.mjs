@@ -9,11 +9,13 @@ vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../supabase/function
 const model=context.exports;
 
 test('support email identifies the request, store, and lifecycle event',()=>{
-  const submitted=model.supportNotificationCopy({event:'submitted',area:'technology',storeName:'Smithville 5491',severity:'red',description:'Internet is down <script>alert(1)</script>',stepsTaken:'Restarted equipment',externalTicketNumber:'ISP-123',photoAttached:true,photoAvailableInDash:true,submittedBy:'Store Manager',actedBy:'Responder',portalUrl:'https://dash.example/'});
+  const submitted=model.supportNotificationCopy({event:'submitted',area:'technology',storeName:'Smithville 5491',severity:'red',description:'Internet is down <script>alert(1)</script>',stepsTaken:'Restarted equipment',externalTicketNumber:'ISP-123',equipmentType:'Powers Router',equipmentLabel:'Office Router',photoAttached:true,photoAvailableInDash:true,submittedBy:'Store Manager',actedBy:'Responder',portalUrl:'https://dash.example/'});
   assert.equal(submitted.subject,'[Technology] New request — Smithville 5491');
   assert.match(submitted.text,/Submitted by: Store Manager/);
   assert.match(submitted.text,/Internet is down/);
   assert.match(submitted.text,/ISP-123/);
+  assert.match(submitted.text,/Powers Router/);
+  assert.match(submitted.html,/Office Router/);
   assert.match(submitted.html,/DASH-OS/);
   assert.match(submitted.html,/submitted photo is attached/i);
   assert.match(submitted.html,/too large to attach/i);

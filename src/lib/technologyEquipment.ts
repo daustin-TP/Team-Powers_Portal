@@ -1,0 +1,27 @@
+export const technologyEquipmentTypes = [
+  "Modem",
+  "Powers Router",
+  "Dominos Router",
+  "24 Port Meraki Switch",
+  "Turbo King Router",
+  "Caller ID Box",
+  "Security Cameras",
+  "Back Office Computer",
+  "Front Counter Computer",
+  "Makeline Computer",
+  "Dispatch Computer",
+  "Cut Table Tech Computer",
+  "Touchscreens",
+  "TV's",
+  "Computer Monitors (non-touchscreen)",
+  "Credit Card Machines (Customer Facing)",
+  "Credit Card Machines (Manual Entry, wired)",
+  "Credit Card Machines (Manual Entry Wireless)",
+  "Store Laptop",
+  "Office Printer",
+  "Receipt Printer (CTT)",
+  "Receipt Printer (Dispatch)",
+  "Other",
+] as const;
+
+export type TechnologyEquipmentType = typeof technologyEquipmentTypes[number];

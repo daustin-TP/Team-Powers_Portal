@@ -19,6 +19,8 @@ function brandedEmail(input: {
   description: string;
   stepsTaken?: string;
   externalTicketNumber?: string;
+  equipmentType?: string;
+  equipmentLabel?: string;
   createdAt?: string;
   photoAttached?: boolean;
   photoAvailableInDash?: boolean;
@@ -45,7 +47,7 @@ function brandedEmail(input: {
 <h1 style="margin:8px 0 6px;font-size:25px;line-height:1.25;color:#071a33">${escapeHtml(input.title)}</h1>
 <p style="margin:0 0 22px;color:#52657b;font-size:15px">${escapeHtml(input.storeName)}</p>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f7fafc;border:1px solid #e3eaf2;border-radius:10px;margin-bottom:20px"><tr><td style="padding:14px 16px"><table role="presentation" cellspacing="0" cellpadding="0">
-${detail("Store", input.storeName)}${detail("Activity", input.actionLine)}${created ? detail("Submitted", `${created} CT`) : ""}${input.externalTicketNumber ? detail("Related ticket", input.externalTicketNumber) : ""}
+${detail("Store", input.storeName)}${detail("Activity", input.actionLine)}${input.equipmentType ? detail("Equipment type", input.equipmentType) : ""}${input.equipmentLabel ? detail("Registered device", input.equipmentLabel) : ""}${created ? detail("Submitted", `${created} CT`) : ""}${input.externalTicketNumber ? detail("Related ticket", input.externalTicketNumber) : ""}
 </table><span style="display:inline-block;margin-top:8px;padding:5px 10px;border-radius:999px;background:${colors.background};color:${colors.color};font-size:12px;font-weight:800;text-transform:uppercase">${escapeHtml(input.severity)} priority</span></td></tr></table>
 <div style="font-size:12px;color:#64748b;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:7px">Request details</div>
 <div style="padding:16px;background:#f8fbfe;border-left:4px solid #168fff;border-radius:4px;color:#10233d;font-size:15px;line-height:1.55;white-space:pre-wrap">${escapeHtml(input.description)}</div>
@@ -69,6 +71,8 @@ export function supportNotificationCopy(input: {
   portalUrl: string;
   stepsTaken?: string;
   externalTicketNumber?: string;
+  equipmentType?: string;
+  equipmentLabel?: string;
   createdAt?: string;
   photoAttached?: boolean;
   photoAvailableInDash?: boolean;
@@ -85,6 +89,8 @@ export function supportNotificationCopy(input: {
     `Store: ${input.storeName}`,
     `Severity: ${input.severity.charAt(0).toUpperCase()}${input.severity.slice(1)}`,
     actionLine,
+    ...(input.equipmentType ? [`Equipment type: ${input.equipmentType}`] : []),
+    ...(input.equipmentLabel ? [`Registered device: ${input.equipmentLabel}`] : []),
     ...(input.createdAt ? [`Submitted: ${new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", dateStyle: "medium", timeStyle: "short" }).format(new Date(input.createdAt))} CT`] : []),
     ...(input.externalTicketNumber ? [`Related ticket: ${input.externalTicketNumber}`] : []),
     "",
@@ -105,6 +111,8 @@ export function supportNotificationCopy(input: {
     description: input.description,
     stepsTaken: input.stepsTaken,
     externalTicketNumber: input.externalTicketNumber,
+    equipmentType: input.equipmentType,
+    equipmentLabel: input.equipmentLabel,
     createdAt: input.createdAt,
     photoAttached: input.photoAttached,
     photoAvailableInDash: input.photoAvailableInDash,
