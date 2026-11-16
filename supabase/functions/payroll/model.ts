@@ -72,7 +72,7 @@ export function validateEntries(entries: unknown, complete = true, due = "", rol
   });
 }
 function entryText(e: Entry) {
-  const facts = [e.effective_date&&`Date: ${e.effective_date}`,e.end_date&&e.end_date!==e.effective_date&&`Through: ${e.end_date}`,e.day_portion&&`Usage: ${e.day_portion}`,e.position&&`Position: ${e.position}`,e.new_position&&`New position: ${e.new_position}`,e.new_name&&`New legal name: ${e.new_name}`,e.new_address&&`New address: ${e.new_address}`,e.amount&&`Amount / rate: $${Number(e.amount).toFixed(2)}`,e.hours&&`Hours: ${e.hours}`,e.acknowledged&&"Required documentation: confirmed emailed",e.attachment_name&&`Attachment: ${e.attachment_name}`].filter(Boolean).join(" | ");
+  const facts = [e.effective_date&&`Date: ${e.effective_date}`,e.end_date&&e.end_date!==e.effective_date&&`Through: ${e.end_date}`,e.type==="PTO / Vacation"&&e.day_portion&&`Usage: ${e.day_portion}`,e.position&&`Position: ${e.position}`,e.new_position&&`New position: ${e.new_position}`,e.new_name&&`New legal name: ${e.new_name}`,e.new_address&&`New address: ${e.new_address}`,e.amount&&`Amount / rate: $${Number(e.amount).toFixed(2)}`,e.hours&&`Hours: ${e.hours}`,e.acknowledged&&"Required documentation: confirmed emailed",e.attachment_name&&`Attachment: ${e.attachment_name}`].filter(Boolean).join(" | ");
   const employee = e.employee ? ` — ${e.employee}${e.employee_id ? ` (${e.employee_id})` : ""}` : "";
   const detailLabel = e.type === "Additional Payroll Update" ? "Description" : "Notes";
   return `${e.type}${employee}\n${facts||"No additional fields"}${e.details?`\n${detailLabel}: ${e.details}`:""}`;
