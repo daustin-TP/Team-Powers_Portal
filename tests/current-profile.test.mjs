@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const migration = readFileSync(new URL("../supabase/migrations/202611130001_atomic_current_profile.sql", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const supabaseClient = readFileSync(new URL("../src/lib/supabase.ts", import.meta.url), "utf8");
 
 test("current profile lookup is atomic and limited to the signed-in user", () => {
   assert.match(migration, /where p\.id = auth\.uid\(\) and p\.active = true/i);
@@ -26,4 +27,9 @@ test("rapid sign-out and sign-in cannot let an older profile request win", () =>
   assert.match(app, /request !== authRequestId\.current/);
   assert.match(app, /onAuthStateChange\(\s*\(event, nextSession\) =>/);
   assert.doesNotMatch(app, /onAuthStateChange\(\s*async \(event, nextSession\)/);
+});
+
+test("production builds cannot silently fall back to Smithville demo data", () => {
+  assert.match(supabaseClient, /https:\/\/mrtihimklvztdpwjfvtz\.supabase\.co/);
+  assert.match(supabaseClient, /sb_publishable_/);
 });
