@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
-import { addDays, currentCycle, sections, type Entry } from "../../supabase/functions/payroll/model";
+import { addDays, currentCycle, sections, validateEntries, type Entry } from "../../supabase/functions/payroll/model";
 
 type Store={id:string;name:string};
 type Submission={id:string;store_id:string;store_name:string;entries:Entry[];confirmed_sections:string[];status:string;review_note:string;submitted_at:string|null};
@@ -16,6 +16,13 @@ export default function PayrollCenter({profile}:{profile:Profile}){
   const [due,setDue]=useState(currentCycle),[store,setStore]=useState(""),[data,setData]=useState<Data|null>(null);
   const [entries,setEntries]=useState<Entry[]>([]),[confirmed,setConfirmed]=useState<string[]>([]),[dirty,setDirty]=useState(false);
   const [noChanges,setNoChanges]=useState(false);
+  const [attempted,setAttempted]=useState(false),[submissionError,setSubmissionError]=useState("");
+  const errorSummary=useRef<HTMLDivElement>(null);
+  const entryErrors=entries.map(entry=>{if(!attempted)return "";try{validateEntries([entry],true,due,profile.role);return "";}catch(error){return (error as Error).message;}});
+  const sectionHasError=(key:string)=>attempted&&(!confirmed.includes(key)||entries.some((entry,index)=>entry.section===key&&entryErrors[index]));
+  function showSubmissionError(detail:string){setSubmissionError(detail);requestAnimationFrame(()=>{errorSummary.current?.scrollIntoView({behavior:"smooth",block:"center"});errorSummary.current?.focus();});}
+  useEffect(()=>{setAttempted(false);setSubmissionError("");},[store,due]);
+
   const [autoSaveState,setAutoSaveState]=useState<AutoSaveState>("idle");
   const [tab,setTab]=useState("submission"),[busy,setBusy]=useState(false),[loading,setLoading]=useState(false),[message,setMessage]=useState(""),[review,setReview]=useState("");
   const [leave,setLeave]=useState({kind:"PTO",start_date:"",end_date:"",hours:"",note:""});
@@ -70,7 +77,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
   async function mutate(payload:Record<string,unknown>,success:string){
     setBusy(true);setMessage("");
     try{await call(payload);setDirty(false);await load();setMessage(success);}
-    catch(e){setMessage((e as Error).message);}
+    catch(e){if(payload.action==="save"&&payload.status==="submitted")showSubmissionError((e as Error).message);else setMessage((e as Error).message);}
     finally{setBusy(false);}
   }
   async function flushAutoSave(){
@@ -158,6 +165,10 @@ export default function PayrollCenter({profile}:{profile:Profile}){
     setMessage("");
   }
   function submitPayroll(){
+    setAttempted(true);setSubmissionError("");
+    const invalid=entries.some(entry=>{try{validateEntries([entry],true,due,profile.role);return false;}catch{return true;}});
+    if(invalid||requiredSectionKeys.some(key=>!confirmed.includes(key))){showSubmissionError("Correct the forms marked with a red asterisk and confirm each section before submitting.");return;}
+    if(!entries.length&&!noChanges){showSubmissionError("Add payroll changes or select No Payroll Changes this Period.");return;}
     if(noChanges){
       const storeName=data?.stores.find(item=>item.id===store)?.name??"this store";
       const confirmedNoChanges=window.confirm(`Please confirm one more time:\n\n${storeName} has NO payroll changes for ${addDays(due,-14)} through ${addDays(due,-1)}.\n\nSubmit this no-change payroll?`);
@@ -179,23 +190,25 @@ export default function PayrollCenter({profile}:{profile:Profile}){
       {!data.email_ready&&<p className="inline-message">Email delivery is not connected yet. Submissions and requests are saved, but reminders and approved payroll emails cannot be delivered until the sender is configured.</p>}
       <div className="payroll-tabs" role="tablist" aria-label="Payroll area">{[["submission","Store submission"],["review","Review & cycle status"]].map(([id,label])=><button role="tab" aria-selected={tab===id} className={`button ${tab===id?"primary":"secondary"}`} key={id} onClick={()=>setTab(id)}>{label}</button>)}</div>
       {tab==="submission"&&<section className="panel payroll-form">
+        {submissionError&&<div ref={errorSummary} tabIndex={-1} role="alert" style={{border:"2px solid #b91c1c",background:"#fff1f2",color:"#991b1b",padding:16,borderRadius:8,marginBottom:16}}><strong>* Payroll was NOT submitted.</strong><p>{submissionError}</p><p>Fix the highlighted forms below, then click Submit payroll again.</p></div>}
         <label>Store<select value={store} disabled={busy} onChange={e=>{if(leaveDraft())setStore(e.target.value);}}>{data.stores.map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label>
         {!data.stores.length?<p>No store is assigned to this account. An admin can assign stores in Team access.</p>:<>
           <p>Status: <strong>{selected?.status??(autoSaveState==="saved"?"draft":"Not started")}</strong>{autoSaveState!=="idle"&&<span className={`payroll-autosave ${autoSaveState}`}>{autoSaveState==="pending"?"Changes pending…":autoSaveState==="saving"?"Saving draft…":autoSaveState==="saved"?"Draft saved automatically":"Auto-save needs attention — use Save draft"}</span>}</p>
           {selected?.submitted_at&&<p>Submitted {new Date(selected.submitted_at).toLocaleString("en-US",{timeZone:"America/Chicago"})} Central</p>}
           {selected?.review_note&&<p className="inline-message">Review note: {selected.review_note}</p>}
           <p>Confirm every section, even when there are no changes. For direct deposit, record that the secure update was completed; do not enter bank account or routing numbers here.</p>
-          {visibleSections.map(section=><fieldset key={section.key} disabled={locked||busy}>
-            <legend>{section.title}</legend>
+          {visibleSections.map(section=><fieldset key={section.key} disabled={locked||busy} style={sectionHasError(section.key)?{border:"2px solid #b91c1c"}:undefined}>
+            <legend>{sectionHasError(section.key)&&<span style={{color:"#b91c1c"}} aria-label="Error">* </span>}{section.title}</legend>
             {section.key==="recognition"&&<div className="payroll-security-note"><strong>Management bonus reminder</strong><span>All bonuses are reviewed before submission. Enter bonuses here only as a reminder to payroll when they are due. For OA or Food Safety bonuses, include the Manager in Charge at the time of the evaluation.</span></div>}
-            {entries.map((entry,index)=>entry.section!==section.key?null:<div className="payroll-entry" key={index}>
+            {entries.map((entry,index)=>entry.section!==section.key?null:<div className="payroll-entry" key={index} style={entryErrors[index]?{border:"2px solid #b91c1c",padding:16,borderRadius:8}:undefined} aria-invalid={Boolean(entryErrors[index])}>
+              {entryErrors[index]&&<p role="alert" style={{color:"#b91c1c",fontWeight:700}}>* {entry.type}{entry.employee?` — ${entry.employee}`:""}: {entryErrors[index]}</p>}
               {entryFields(entry,index)}
               <button type="button" className="button secondary" onClick={()=>{setEntries(es=>es.filter((_,i)=>i!==index));setDirty(true);}}>Remove entry</button>
             </div>)}
             <button className="button secondary" onClick={()=>{setNoChanges(false);setEntries(es=>[...es,blank(section.key,due)]);setDirty(true);}}>Add entry</button>
-            <label className="check-row"><input type="checkbox" checked={confirmed.includes(section.key)} onChange={e=>{setConfirmed(c=>e.target.checked?[...c,section.key]:c.filter(k=>k!==section.key));setDirty(true);}}/><span>I reviewed this section; all changes are entered, or there are no changes.</span></label>
+            {attempted&&!confirmed.includes(section.key)&&<p style={{color:"#b91c1c",fontWeight:700}}>* Confirm that you reviewed this section.</p>}<label className="check-row"><input type="checkbox" checked={confirmed.includes(section.key)} onChange={e=>{setConfirmed(c=>e.target.checked?[...c,section.key]:c.filter(k=>k!==section.key));setDirty(true);}}/><span>I reviewed this section; all changes are entered, or there are no changes.</span></label>
           </fieldset>)}
-          {!locked&&<div className="payroll-submit-row"><label className={`check-row payroll-no-changes ${noChanges?"selected":""}`}><input type="checkbox" checked={noChanges} disabled={busy||entries.length>0} onChange={e=>toggleNoChanges(e.target.checked)}/><span><strong>No Payroll Changes this Period.</strong><small>{entries.length?"Remove all entries to use this option.":"Checking this confirms every payroll section has been reviewed."}</small></span></label><div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"draft"},"Draft saved.")}>Save draft</button><button className="button primary" disabled={busy||requiredSectionKeys.some(key=>!confirmed.includes(key))||(entries.length===0&&!noChanges)} onClick={submitPayroll}>Submit payroll</button></div></div>}
+          {!locked&&<div className="payroll-submit-row"><label className={`check-row payroll-no-changes ${noChanges?"selected":""}`}><input type="checkbox" checked={noChanges} disabled={busy||entries.length>0} onChange={e=>toggleNoChanges(e.target.checked)}/><span><strong>No Payroll Changes this Period.</strong><small>{entries.length?"Remove all entries to use this option.":"Checking this confirms every payroll section has been reviewed."}</small></span></label><div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void mutate({action:"save",store_id:store,entries,confirmed_sections:leadership?confirmed:[...new Set([...confirmed,"recognition"])],status:"draft"},"Draft saved.")}>Save draft</button><button className="button primary" disabled={busy} onClick={submitPayroll}>Submit payroll</button></div></div>}
           {admin&&data.cycle.status==="open"&&["submitted","approved"].includes(selected?.status??"")&&<div className="payroll-review"><label>Review / correction note<textarea value={review} onChange={e=>setReview(e.target.value)}/></label><div className="button-row"><button className="button secondary" disabled={busy||!review.trim()} onClick={()=>void mutate({action:"review",store_id:store,status:"returned",review_note:review},"Returned to the GM for correction.")}>Return for correction</button><button className="button primary" disabled={busy||selected?.status==="approved"} onClick={()=>void mutate({action:"review",store_id:store,status:"approved",review_note:review},"Store approved. The cycle email waits for final approval.")}>Approve store</button></div></div>}
         </>}
       </section>}
