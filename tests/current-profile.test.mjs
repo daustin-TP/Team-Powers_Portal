@@ -20,3 +20,10 @@ test("the application loads identity and permissions in one request", () => {
   assert.match(app, /rpc\("portal_current_profile"\)/);
   assert.match(app, /permissions: row\.permissions \?\? \[\]/);
 });
+
+test("rapid sign-out and sign-in cannot let an older profile request win", () => {
+  assert.match(app, /const authRequestId = useRef\(0\)/);
+  assert.match(app, /request !== authRequestId\.current/);
+  assert.match(app, /onAuthStateChange\(\s*\(event, nextSession\) =>/);
+  assert.doesNotMatch(app, /onAuthStateChange\(\s*async \(event, nextSession\)/);
+});

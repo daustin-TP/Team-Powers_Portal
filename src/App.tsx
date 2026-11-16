@@ -127,12 +127,14 @@ export default function App() {
   const [recentSections, setRecentSections] = useState<PortalSection[]>([]);
   const [requestBadges, setRequestBadges] = useState<RequestBadges>({});
   const restoredProfileId = useRef<string | null>(null);
+  const authRequestId = useRef(0);
 
   useEffect(() => {
     if (!supabase) return;
     const client = supabase;
     let active = true;
     client.auth.getSession().then(async ({ data }) => {
+      const request = ++authRequestId.current;
       if (!active) return;
       if (data.session?.user) {
         // Browser storage can outlive a revoked server session. Verify it
@@ -140,20 +142,19 @@ export default function App() {
         const verified = await client.auth.getUser();
         if (verified.error || !verified.data.user) {
           await client.auth.signOut({ scope: "local" });
-          if (!active) return;
+          if (!active || request !== authRequestId.current) return;
           setSession(null);
           setProfile(null);
           setLoading(false);
           return;
         }
+        const resolvedProfile = await loadProfile(verified.data.user.id, verified.data.user.email ?? "")
+          ?? await new Promise<Profile | null>((resolve) => window.setTimeout(() => void loadProfile(verified.data.user.id, verified.data.user.email ?? "").then(resolve), 250));
+        if (!active || request !== authRequestId.current) return;
         setSession(data.session);
-        setProfile(
-          await loadProfile(
-            verified.data.user.id,
-            verified.data.user.email ?? "",
-          ),
-        );
+        setProfile(resolvedProfile);
       } else {
+        if (request !== authRequestId.current) return;
         setSession(null);
         setProfile(null);
       }
@@ -161,18 +162,26 @@ export default function App() {
     });
 
     const { data: listener } = client.auth.onAuthStateChange(
-      async (event, nextSession) => {
+      (event, nextSession) => {
         if (event === "INITIAL_SESSION") return;
+        const request = ++authRequestId.current;
         setSession(nextSession);
-        setProfile(
-          nextSession?.user
-            ? await loadProfile(
-                nextSession.user.id,
-                nextSession.user.email ?? "",
-              )
-            : null,
-        );
-        setLoading(false);
+        if (!nextSession?.user) {
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+        setLoading(true);
+        // Keep the auth callback synchronous. Supabase serializes auth events;
+        // awaiting another Supabase call inside this callback can race a newer event.
+        void (async () => {
+          const user = nextSession.user;
+          const resolvedProfile = await loadProfile(user.id, user.email ?? "")
+            ?? await new Promise<Profile | null>((resolve) => window.setTimeout(() => void loadProfile(user.id, user.email ?? "").then(resolve), 250));
+          if (!active || request !== authRequestId.current) return;
+          setProfile(resolvedProfile);
+          setLoading(false);
+        })();
       },
     );
     return () => {
@@ -277,6 +286,7 @@ export default function App() {
   }, [profile, visibleNavigation]);
 
   const signOut = async () => {
+    authRequestId.current += 1;
     if (supabase) await supabase.auth.signOut();
     restoredProfileId.current = null;
     setSection("home");
