@@ -47,6 +47,21 @@ test('missing demand rows still produce closing and late-driver coverage', () =>
   assert.ok(shifts.some((shift) => shift.end_time === '22:00:00'));
 });
 
+test('no required late driver keeps only ordinary business-demand coverage', () => {
+  const intervals = [];
+  for (let time = 600; time < 1320; time += 15) {
+    intervals.push({ day_of_week: 0, interval_start: clock(time), required_insiders: 0, required_drivers: 1 });
+  }
+  const shifts = buildSuggestedShifts('test', intervals, new Map([[0, { open: '10:00', close: '22:00' }]]), {
+    minimum_shift_hours: 3, max_shift_hours: 9, driver_postclose_minutes: 60,
+    late_driver_rule: 'none', opening_driver_through_rush: true,
+  }).filter((shift) => shift.role === 'driver').map((shift) => ({ start: minute(shift.start_time), end: minute(shift.end_time) }));
+  assert.ok(shifts.some((shift) => shift.end === 1380), 'final driver still covers configured cleanup');
+  for (let time = 1140; time < 1380; time += 15) {
+    assert.equal(shifts.filter((shift) => shift.start <= time && time < shift.end).length, 1, `no extra late driver at ${clock(time)}`);
+  }
+});
+
 for (const rule of ['hour_before_close', 'until_close', 'second_closer']) {
   for (const close of [22 * 60, 24 * 60, 25 * 60]) {
     for (const clean of [0, 15, 60, 120]) {

@@ -622,7 +622,7 @@ export function buildSuggestedShifts(
         windowEnd = closeMinute + Math.max(0, Number(settings.driver_postclose_minutes) || 0);
         const lateDriverEnd = settings.late_driver_rule === "hour_before_close" ? closeMinute - 60
           : settings.late_driver_rule === "second_closer" ? windowEnd : closeMinute;
-        const lateDriverStart = Math.max(openMinute, lateDriverEnd - minimum);
+        const lateDriverStart = settings.late_driver_rule === "none" ? lateDriverEnd : Math.max(openMinute, lateDriverEnd - minimum);
         for (let minute = windowStart; minute < windowEnd; minute += 15) {
           const minimumDrivers = minute >= lateDriverStart && minute < lateDriverEnd ? 2 : 1;
           const existing = points.find((point) => point.minute === minute);
