@@ -46,6 +46,7 @@ import HumanResources from "./components/HumanResources";
 import PayrollCenter from "./components/PayrollCenter";
 import OperationsCalendar from "./components/OperationsCalendar";
 import SupervisorVisitLog from "./components/SupervisorVisitLog";
+import AreaSupervisorDashboard from "./components/AreaSupervisorDashboard";
 import TeamEvaluations from "./components/TeamEvaluations";
 
 const navigation: {
@@ -58,6 +59,7 @@ const navigation: {
   { id: "kpi", label: "KPI Dashboard", icon: Gauge },
   { id: "labor", label: "Smart Scheduler", icon: CalendarClock, roles: ["manager", "supervisor", "admin"] },
   { id: "calendar", label: "Team Calendar", icon: CalendarDays },
+  { id: "supervisor-dashboard", label: "Area Supervisor Dashboard", icon: ClipboardCheck, roles: ["supervisor", "admin"] },
   { id: "visit-log", label: "DM Visit Logs", icon: ClipboardList, roles: ["supervisor", "admin"] },
   { id: "receipts", label: "Company Credit Charges", icon: Receipt, roles: ["supervisor", "admin"] },
   { id: "hr", label: "HR Action Logs", icon: ShieldAlert, roles: ["manager", "supervisor", "admin"] },
@@ -347,6 +349,7 @@ export default function App() {
     kpi: <KPITracker profile={profile} />,
     labor: <LaborManagement profile={profile} />,
     calendar: <OperationsCalendar profile={profile} onOpenVisitLog={(scheduleId)=>{window.sessionStorage.setItem('dashos:visit-schedule',scheduleId);selectSection('visit-log');}} />,
+    "supervisor-dashboard": <AreaSupervisorDashboard profile={profile} onOpenVisitLog={(scheduleId)=>{window.sessionStorage.setItem('dashos:visit-schedule',scheduleId);selectSection('visit-log');}} />,
     "visit-log": <SupervisorVisitLog profile={profile} initialScheduleId={window.sessionStorage.getItem('dashos:visit-schedule')} />,
     hr: <HumanResources profile={profile} />,
     evaluations: <TeamEvaluations profile={profile} />,

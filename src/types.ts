@@ -17,6 +17,7 @@ export type PortalSection =
   | "kpi"
   | "labor"
   | "calendar"
+  | "supervisor-dashboard"
   | "visit-log"
   | "hr"
   | "evaluations"
