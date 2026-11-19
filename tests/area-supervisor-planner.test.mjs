@@ -59,3 +59,26 @@ test("visits can be planned instantly by day and saved together", () => {
   assert.match(component, /15\) % \(24 \* 60\)/);
   assert.match(component, /Complete visit log/);
 });
+
+test("all visit types are restricted to the Area Supervisor's assigned stores", () => {
+  assert.match(component, /const storesForVisit = \(_purpose: string, currentStoreId\?: string\) => stores\.filter/);
+  assert.match(component, /assignedStoreIds\.includes\(store\.id\)/);
+  assert.doesNotMatch(component, /\/training\/i\.test\(purpose\)[\s\S]{0,80}\? stores/);
+});
+
+test("the weekly board owns schedule editing and visit completion status", () => {
+  for (const label of ["Visit completed", "Draft", "Planned", "Save schedule updates", "Save visit changes"]) assert.match(component, new RegExp(label));
+  assert.match(component, /visitLogStatuses\[visit\.id\]/);
+  assert.match(component, /openScheduledVisitLog/);
+});
+
+test("scheduled visits prefill their linked form and provide a printable recap", () => {
+  const log = readFileSync(new URL("../src/components/SupervisorVisitLog.tsx", import.meta.url), "utf8");
+  const print = readFileSync(new URL("../src/components/VisitPrintRecap.tsx", import.meta.url), "utf8");
+  assert.match(log, /scheduledTemplateData/);
+  assert.match(log, /store_id,visit_date,start_time,end_time,purpose/);
+  assert.match(log, /Print one-page recap/);
+  assert.match(log, /Full visit recap/);
+  assert.match(print, /Generated from the permanent DASH visit record/);
+  assert.match(print, /team-powers-logo\.png/);
+});

@@ -11,6 +11,7 @@ import {
   FilePenLine,
   ImagePlus,
   Plus,
+  Printer,
   Save,
   ShieldCheck,
   Trash2,
@@ -19,6 +20,7 @@ import {
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import { templateCompletion, templateForVisit, VisitTemplateSectionForm, type TemplateData } from "./VisitTemplateForm";
+import VisitPrintRecap from "./VisitPrintRecap";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Rating = "" | "yes" | "no" | "na";
@@ -221,6 +223,13 @@ const formStats = (form: VisitForm, storeId: string) => {
 
 const formatDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 const formatTime = (value: string | null) => value ? new Date(`2000-01-01T${value}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "Time not entered";
+const scheduledTemplateData = (visitType: string, startTime: string, endTime: string): TemplateData => {
+  const start = startTime.slice(0, 5); const end = endTime.slice(0, 5);
+  if (visitType === "Rush observation") return { rush_start: start, rush_end: end };
+  if (visitType === "Opening visit") return { supervisor_arrival: start, lunch_to: end };
+  if (visitType === "Closing visit") return { closing_arrival: start, closing_departure: end };
+  return {};
+};
 
 export default function SupervisorVisitLog({ profile, initialScheduleId }: { profile: Profile; initialScheduleId?: string | null }) {
   const [stores, setStores] = useState<Store[]>([]);
@@ -320,11 +329,11 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     window.sessionStorage.removeItem('dashos:visit-schedule');
     const linked=logs.find(log=>log.schedule_id===initialScheduleId);
     if(linked){void openLog(linked);return;}
-    void supabase.from('supervisor_visit_schedules').select('id,supervisor_id,store_id,visit_date,start_time,purpose').eq('id',initialScheduleId).maybeSingle().then(({data,error})=>{
+    void supabase.from('supervisor_visit_schedules').select('id,supervisor_id,store_id,visit_date,start_time,end_time,purpose').eq('id',initialScheduleId).maybeSingle().then(({data,error})=>{
       if(error||!data){setMessage(error?.message||'This calendar visit is not available.');return;}
       if(profile.role==='admin'){setMessage('No DM Visit Form has been started for this scheduled visit yet. The assigned Area Supervisor can open it from their calendar.');return;}
       const visitType = templateForVisit(data.purpose) ? data.purpose : "General Area Supervisor visit";
-      setSelected(null);setLogId(null);setScheduleId(data.id);setStoreId(data.store_id);setForm({...emptyForm(),visitType,visitDate:data.visit_date,visitTime:data.start_time.slice(0,5)});setPhotos([]);setStepIndex(0);setShowEditor(true);setMessage(`This new ${visitType} form is linked to the selected calendar visit.`);
+      setSelected(null);setLogId(null);setScheduleId(data.id);setStoreId(data.store_id);setForm({...emptyForm(),visitType,visitDate:data.visit_date,visitTime:data.start_time.slice(0,5),templateData:scheduledTemplateData(visitType,data.start_time,data.end_time)});setPhotos([]);setStepIndex(0);setShowEditor(true);setMessage(`Store, date, scheduled time, and visit type were filled from the weekly plan. You can adjust them in this form if the visit changed.`);
     });
   },[initialScheduleId,loading,logs,profile.role]);
 
@@ -487,19 +496,41 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
       <section className="visit-review-summary"><article><span>Manager</span><strong>{form.managerName || "Not entered"}</strong></article><article><span>Visit time</span><strong>{form.visitTime ? formatTime(form.visitTime) : "Not entered"}</strong></article><article><span>Issues found</span><strong>{stats.issues}</strong></article><article><span>Photo evidence</span><strong>{photos.length}</strong></article></section>
       {(form.goals.needsAdjustment || form.goals.onTrack) && <div className="visit-review-notes"><section><h4>Goals needing adjustment</h4><p>{form.goals.needsAdjustment || "None noted"}</p></section><section><h4>Goals on track</h4><p>{form.goals.onTrack || "None noted"}</p></section></div>}
       {(form.keyWins.some(Boolean) || form.opportunities.some(Boolean)) && <div className="visit-review-notes"><section><h4>Key wins</h4>{form.keyWins.filter(Boolean).map((item, index) => <p key={index}>{item}</p>)}</section><section><h4>Opportunities</h4>{form.opportunities.filter(Boolean).map((item, index) => <p key={index}>{item}</p>)}</section></div>}
+      <section className="visit-review-full"><header><div><p className="eyebrow">Full visit recap</p><h4>{activeTemplate?.title ?? "Area Supervisor visit"}</h4></div><span>Everything entered in this visit</span></header>{activeTemplate ? <div>{activeTemplate.sections.map((section) => <article key={section.key}><h5>{section.label}</h5>{section.fields.map((field) => <p key={field.key}><b>{field.label}</b><span>{form.templateData[field.key]?.trim() || "—"}</span></p>)}</article>)}</div> : <div><article><h5>Completed checks and product review</h5>{genericPrintRows.filter((row) => row.value !== "—").map((row) => <p key={row.label}><b>{row.label}</b><span>{row.value}</span></p>)}</article></div>}</section>
     </div>;
+  };
+
+  const genericPrintRows = [
+    ...allChecks.map(([key, label]) => ({ label, value: [form.checks[key]?.rating?.toUpperCase(), form.checks[key]?.comment].filter(Boolean).join(" · ") || "—" })),
+    ...productItems.map((label, index) => ({ label, value: [form.products[`product_${index}`]?.rating, form.products[`product_${index}`]?.comment].filter(Boolean).join(" · ") || "—" })),
+  ];
+  const printVisit = () => {
+    const source = document.querySelector<HTMLElement>(".visit-print-sheet");
+    if (!source) return;
+    const portal = document.createElement("div");
+    portal.className = "visit-print-portal";
+    portal.appendChild(source.cloneNode(true));
+    const pageStyle = document.createElement("style");
+    pageStyle.dataset.visitPrintPage = "true";
+    pageStyle.textContent = "@page { size: letter portrait; margin: 0.25in; }";
+    document.body.appendChild(portal); document.head.appendChild(pageStyle); document.body.classList.add("printing-visit-recap");
+    let cleaned = false;
+    const cleanup = () => { if (cleaned) return; cleaned = true; document.body.classList.remove("printing-visit-recap"); portal.remove(); pageStyle.remove(); };
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print(); window.setTimeout(cleanup, 60000);
   };
 
   const visibleLogs = logs.filter((log) => (statusFilter === "all" || log.status === statusFilter) && (storeFilter === "all" || log.store_id === storeFilter));
   const storeName = (id: string) => { const store = stores.find((item) => item.id === id); return store ? `${store.name}${store.store_number ? ` ${store.store_number}` : ""}` : "Store"; };
 
   if (showEditor) return <div className="page-stack visit-log-page">
-    <header className="page-header"><div><button className="link-button" type="button" onClick={() => { setShowEditor(false); setSelected(null); }}><ArrowLeft size={16} />Back to visit log</button><p className="eyebrow">Area Supervisor visit</p><h1>{activeTemplate?.title ?? (readOnly ? "Visit record" : logId ? "Continue visit draft" : "New store visit")}</h1><p>{activeTemplate?.subtitle ?? (readOnly ? "Submitted records are preserved as a read-only store visit history." : "Move through sections in any order. Save now and finish later if the visit does not require every section.")}</p></div><div className="visit-header-status"><span className={`visit-status ${readOnly ? "submitted" : "draft"}`}>{readOnly ? "Submitted" : "Draft"}</span><strong>{stats.percent}% complete</strong></div></header>
+    <header className={`page-header visit-branded-heading visit-heading-${form.visitType.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}><div><button className="link-button" type="button" onClick={() => { setShowEditor(false); setSelected(null); }}><ArrowLeft size={16} />Back to visit log</button><p className="eyebrow">Area Supervisor visit</p><h1>{activeTemplate?.title ?? (readOnly ? "Visit record" : logId ? "Continue visit draft" : "New store visit")}</h1><p>{activeTemplate?.subtitle ?? (readOnly ? "Submitted records are preserved as a read-only store visit history." : "Move through sections in any order. Save now and finish later if the visit does not require every section.")}</p></div><div className="visit-header-status"><span className={`visit-status ${readOnly ? "submitted" : "draft"}`}>{readOnly ? "Submitted" : "Draft"}</span><strong>{stats.percent}% complete</strong><button type="button" className="button secondary compact" onClick={printVisit}><Printer size={16}/>Print one-page recap</button></div></header>
     {message && <div className="notice">{message}</div>}
     <nav className="visit-step-nav" aria-label="Visit form sections">{activeSteps.map((step, index) => <button type="button" key={step.key} className={index === stepIndex ? "active" : ""} onClick={() => setStepIndex(index)}><span>{index + 1}</span>{step.short}</button>)}</nav>
     <section className={`panel visit-form-panel ${activeTemplate ? "templated" : ""}`}><div className="visit-section-heading"><div><p className="eyebrow">Section {stepIndex + 1} of {activeSteps.length}</p><h2>{activeStep.label}</h2></div>{!readOnly && <small>All fields may be skipped</small>}</div>{renderStep()}{photoArea}
       <footer className="visit-form-actions"><button className="button secondary" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((value) => value - 1)}><ArrowLeft size={17} />Previous</button><div>{!readOnly && <button className="button secondary" type="button" disabled={saving} onClick={() => void persist("draft")}><Save size={17} />{saving ? "Saving…" : "Save draft"}</button>}{stepIndex < activeSteps.length - 1 ? <button className="button primary" type="button" onClick={() => setStepIndex((value) => value + 1)}>Next<ArrowRight size={17} /></button> : !readOnly ? <button className="button primary" type="button" disabled={saving} onClick={() => void submitVisit()}><ClipboardCheck size={17} />Submit visit</button> : null}</div></footer>
     </section>
+    <VisitPrintRecap form={form} store={storeName(storeId)} supervisor={selected?.supervisor_name ?? profile.fullName} status={readOnly ? "Submitted" : "Draft"} completion={stats.percent} photoCount={photos.length} genericRows={genericPrintRows}/>
   </div>;
 
   return <div className="page-stack visit-log-page">

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Pencil, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import SupervisorVisitLog from "./SupervisorVisitLog";
@@ -41,6 +41,7 @@ type WeeklyPlan = {
 };
 type KpiRow = { store_id: string; week_end: string; metrics: Record<string, unknown> };
 type KpiData = { history?: KpiRow[]; results?: KpiRow[] };
+type VisitLogStatus = { schedule_id: string; status: "draft" | "submitted"; completion_percent: number };
 type WorkspaceView = "current" | "history" | "visits" | "expectations";
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -99,8 +100,10 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
   const [plan, setPlan] = useState<WeeklyPlan | null>(null);
   const [draft, setDraft] = useState(() => blankPlan(profile.id, monday()));
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [visitLogStatuses, setVisitLogStatuses] = useState<Record<string, VisitLogStatus>>({});
   const [kpi, setKpi] = useState<KpiData>({});
   const [editorOpen, setEditorOpen] = useState(false);
+  const [editingVisitId, setEditingVisitId] = useState<string | null>(null);
   const [newVisit, setNewVisit] = useState({ store_id: "", visit_date: monday(), start_time: "09:00", end_time: "12:00", purpose: "Training visit", notes: "" });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -116,9 +119,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
   const weekEnd = addIsoDays(weekStart, 6);
   const storeMap = useMemo(() => new Map(stores.map((store) => [store.id, store])), [stores]);
   const assignedStores = useMemo(() => stores.filter((store) => assignedStoreIds.includes(store.id)), [stores, assignedStoreIds]);
-  const storesForVisit = (purpose: string, currentStoreId?: string) => /training/i.test(purpose)
-    ? stores
-    : stores.filter((store) => assignedStoreIds.includes(store.id) || store.id === currentStoreId);
+  const storesForVisit = (_purpose: string, currentStoreId?: string) => stores.filter((store) => assignedStoreIds.includes(store.id) || store.id === currentStoreId);
   const supervisorName = supervisors.find((item) => item.id === supervisorId)?.full_name ?? profile.fullName;
   const visibleVisits = useMemo(() => visits.filter((visit) => !visit._deleted), [visits]);
   const pendingVisitCount = visits.filter((visit) => visit._draft || visit._dirty || visit._deleted).length;
@@ -137,15 +138,16 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     if (!supabase || !supervisorId) return;
     if (showLoading) setLoading(true);
     const selectedSupervisor = supervisors.find((item) => item.id === supervisorId);
-    const [storeResult, assignmentResult, planResult, visitResult, historyResult, kpiResult] = await Promise.all([
+    const [storeResult, assignmentResult, planResult, visitResult, visitLogResult, historyResult, kpiResult] = await Promise.all([
       supabase.from("stores").select("id,name,store_number").eq("active", true).order("name"),
       supabase.from("profile_store_assignments").select("store_id").eq("profile_id", supervisorId),
       supabase.from("supervisor_weekly_plans").select("id,supervisor_id,week_start,days_off,hours_by_day,rush_shifts,top_priorities,store_checklist,notes,status,updated_by,updated_at").eq("supervisor_id", supervisorId).eq("week_start", weekStart).maybeSingle(),
       supabase.from("supervisor_visit_schedules").select("id,supervisor_id,store_id,visit_date,start_time,end_time,purpose,notes,status,weekly_plan_id,edited_from_original,last_change_reason").eq("supervisor_id", supervisorId).gte("visit_date", weekStart).lte("visit_date", weekEnd).neq("status", "cancelled").order("visit_date").order("start_time"),
+      supabase.from("supervisor_visit_logs").select("schedule_id,status,completion_percent").eq("supervisor_id", supervisorId).gte("visit_date", weekStart).lte("visit_date", weekEnd).not("schedule_id", "is", null),
       supabase.from("supervisor_weekly_plans").select("id,supervisor_id,week_start,days_off,hours_by_day,rush_shifts,top_priorities,store_checklist,notes,status,updated_by,updated_at").eq("supervisor_id", supervisorId).order("week_start", { ascending: false }).limit(52),
       supabase.functions.invoke("kpi-dashboard", { body: { week_end: addIsoDays(weekStart, -1) } }),
     ]);
-    const firstError = [storeResult.error, assignmentResult.error, planResult.error, visitResult.error, historyResult.error].find(Boolean);
+    const firstError = [storeResult.error, assignmentResult.error, planResult.error, visitResult.error, visitLogResult.error, historyResult.error].find(Boolean);
     if (firstError) { setMessage(firstError.message); setLoading(false); return; }
     const nextStores = ((storeResult.data ?? []) as Store[]).filter((store) => !isAllStores(store));
     const assigned = new Set((assignmentResult.data ?? []).map((row) => row.store_id));
@@ -156,6 +158,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     setPlan(savedPlan);
     setDraft(savedPlan ?? blankPlan(supervisorId, weekStart));
     setVisits((visitResult.data ?? []) as Visit[]);
+    setVisitLogStatuses(Object.fromEntries(((visitLogResult.data ?? []) as VisitLogStatus[]).map((item) => [item.schedule_id, item])));
     setPastPlans((historyResult.data ?? []) as WeeklyPlan[]);
     setKpi((kpiResult.data?.ok ? kpiResult.data : {}) as KpiData);
     const firstStore = nextStores.find((store) => assigned.has(store.id));
@@ -174,6 +177,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     const channel = client.channel(`area-supervisor-planner-${supervisorId}-${weekStart}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "supervisor_weekly_plans" }, () => { if (!dirty && !visitDirty) void load(false); })
       .on("postgres_changes", { event: "*", schema: "public", table: "supervisor_visit_schedules" }, () => { if (!dirty && !visitDirty) void load(false); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "supervisor_visit_logs" }, () => { if (!dirty && !visitDirty) void load(false); })
       .subscribe();
     return () => { void client.removeChannel(channel); };
   }, [dirty, load, supervisorId, visitDirty, weekStart]);
@@ -200,16 +204,32 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
 
   const openAddVisit = (purpose = "Training visit", visitDate = weekStart) => {
     const eligibleStores = storesForVisit(purpose);
+    setEditingVisitId(null);
     setNewVisit((current) => ({ ...current, purpose, visit_date: visitDate, store_id: eligibleStores.some((store) => store.id === current.store_id) ? current.store_id : (eligibleStores[0]?.id ?? "") }));
+    setEditorOpen(true);
+  };
+  const openEditVisit = (visit: Visit) => {
+    setEditingVisitId(visit.id);
+    setNewVisit({ store_id: visit.store_id, visit_date: visit.visit_date, start_time: visit.start_time.slice(0, 5), end_time: visit.end_time.slice(0, 5), purpose: visit.purpose, notes: visit.notes ?? "" });
     setEditorOpen(true);
   };
   const addVisit = () => {
     if (!newVisit.store_id || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)) return;
+    if (editingVisitId) {
+      const original = visits.find((visit) => visit.id === editingVisitId);
+      const changed = Boolean(original && ["store_id", "visit_date", "start_time", "end_time", "purpose", "notes"].some((key) => String(original[key as keyof Visit] ?? "").slice(0, key.includes("time") ? 5 : undefined) !== String(newVisit[key as keyof typeof newVisit] ?? "")));
+      const reason = original && !original._draft && changed ? window.prompt("Why did the planned visit change? (optional)") ?? "" : original?.last_change_reason ?? "";
+      editVisit(editingVisitId, { ...newVisit, last_change_reason: reason });
+      setEditorOpen(false);
+      setEditingVisitId(null);
+      setMessage("Visit updated on the weekly board. Select Save all updates when the plan is ready.");
+      return;
+    }
     const stagedVisit: Visit = { id: crypto.randomUUID(), ...newVisit, supervisor_id: supervisorId, weekly_plan_id: plan?.id ?? null, status: "tentative", edited_from_original: false, last_change_reason: null, _draft: true, _dirty: true };
     setVisits((current) => [...current, stagedVisit].sort((left, right) => left.visit_date.localeCompare(right.visit_date) || scheduleMinutes(left.start_time) - scheduleMinutes(right.start_time)));
     setVisitDirty(true);
     setEditorOpen(false);
-    setMessage("Visit added to the working plan. Select Save updates when the week is ready.");
+    setMessage("Visit added to the weekly board. Select Save schedule updates when the week is ready.");
   };
   const editVisit = (visitId: string, patch: Partial<Visit>) => {
     setVisits((current) => current.map((item) => item.id === visitId ? { ...item, ...patch, _dirty: true } : item));
@@ -220,6 +240,14 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     if (!connectedLogTypes.has(purpose)) return;
     setMessage(`${purpose} has a connected visit log. Save the schedule, then use Complete visit log after the visit.`);
   };
+  const openScheduledVisitLog = (visit: Visit) => {
+    if (visit._draft || visit._dirty) {
+      setMessage("Save the scheduled visit first so its log can stay linked to the weekly plan.");
+      return;
+    }
+    onOpenVisitLog(visit.id);
+    setWorkspaceView("visits");
+  };
   const cancelVisit = (visit: Visit) => {
     if (!window.confirm("Remove this visit from the working week? Saved visits remain in the audit history after updates are saved.")) return;
     if (visit._draft) {
@@ -229,7 +257,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     }
     const reason = window.prompt("Why did the plan change? (optional)") ?? "";
     editVisit(visit.id, { _deleted: true, last_change_reason: reason });
-    setMessage("Visit removed from the working plan. Select Save updates to confirm the change.");
+    setMessage("Visit removed from the weekly board. Select Save schedule updates to confirm the change.");
   };
   const saveVisitUpdates = async () => {
     if (!supabase || (!visitDirty && !dirty)) return;
@@ -309,7 +337,23 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
 
       <section className="panel weekly-planner-sheet">
         <header className="weekly-planner-title"><div><p className="eyebrow">Team Powers weekly checklist</p><h2>{supervisorName} · {dateLabel(weekStart)}–{dateLabel(weekEnd)}</h2></div><span className={`status-pill ${draft.status}`}>{draft.status === "complete" ? "Week complete" : "Live plan"}</span></header>
-        <div className="supervisor-week-board">{days.map((day, index) => { const visitDate = addIsoDays(weekStart, index); const dayVisits = visibleVisits.filter((visit) => visit.visit_date === visitDate).sort((left, right) => scheduleMinutes(left.start_time) - scheduleMinutes(right.start_time)); return <section key={day} className="supervisor-day-card" onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("drag-over"); }} onDragLeave={(event) => event.currentTarget.classList.remove("drag-over")} onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("drag-over"); const purpose = event.dataTransfer.getData("text/visit-purpose"); if (purpose) openAddVisit(purpose, visitDate); }}><header><div><strong>{day}</strong><small>{dateLabel(visitDate)}</small></div><button className="icon-button" type="button" aria-label={`Add visit on ${day}`} onClick={() => openAddVisit("Training visit", visitDate)}><Plus size={16}/></button></header><label>Planned hours<input value={draft.hours_by_day[day] ?? ""} onChange={(event) => changeDraft({ hours_by_day: { ...draft.hours_by_day, [day]: event.target.value } })} placeholder="Hours / time" /></label><div className="day-visit-list">{dayVisits.map((visit) => <button type="button" key={visit.id} className={visit._draft || visit._dirty ? "pending" : ""} onClick={() => document.getElementById(`visit-${visit.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}><b>{timeLabel(visit.start_time)}</b><span>{visit.purpose}</span><small>{storeMap.get(visit.store_id)?.name ?? "Store"}</small></button>)}{!dayVisits.length && <button className="day-drop-zone" type="button" onClick={() => openAddVisit("Training visit", visitDate)}>Drop a visit here or tap +</button>}</div></section>; })}</div>
+        <div className="supervisor-week-board">{days.map((day, index) => {
+          const visitDate = addIsoDays(weekStart, index);
+          const dayVisits = visibleVisits.filter((visit) => visit.visit_date === visitDate).sort((left, right) => scheduleMinutes(left.start_time) - scheduleMinutes(right.start_time));
+          return <section key={day} className="supervisor-day-card" onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("drag-over"); }} onDragLeave={(event) => event.currentTarget.classList.remove("drag-over")} onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("drag-over"); const purpose = event.dataTransfer.getData("text/visit-purpose"); if (purpose) openAddVisit(purpose, visitDate); }}>
+            <header><div><strong>{day}</strong><small>{dateLabel(visitDate)}</small></div><button className="icon-button" type="button" aria-label={`Add visit on ${day}`} onClick={() => openAddVisit("Training visit", visitDate)}><Plus size={16}/></button></header>
+            <label>Planned hours<input value={draft.hours_by_day[day] ?? ""} onChange={(event) => changeDraft({ hours_by_day: { ...draft.hours_by_day, [day]: event.target.value } })} placeholder="Hours / time" /></label>
+            <div className="day-visit-list">{dayVisits.map((visit) => {
+              const log = visitLogStatuses[visit.id];
+              const state = visit._draft || visit._dirty ? "unsaved" : log?.status === "submitted" ? "completed" : log?.status === "draft" ? "started" : "planned";
+              return <article key={visit.id} className={`day-visit-card ${state}`}>
+                <button type="button" className="day-visit-main" onClick={() => openScheduledVisitLog(visit)}><b>{timeLabel(visit.start_time)}-{timeLabel(visit.end_time)}</b><span>{visit.purpose}</span><small>{storeMap.get(visit.store_id)?.name ?? "Store"}</small><em>{state === "completed" ? "Visit completed" : state === "started" ? `Draft ${log.completion_percent}%` : state === "unsaved" ? "Unsaved change" : "Planned"}</em></button>
+                <div><button type="button" aria-label={`Edit ${visit.purpose}`} onClick={() => openEditVisit(visit)}><Pencil size={13}/>Edit</button>{connectedLogTypes.has(visit.purpose) && <button type="button" onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={13}/>{state === "completed" ? "Review" : "Log"}</button>}<button type="button" aria-label={`Remove ${visit.purpose}`} onClick={() => cancelVisit(visit)}><Trash2 size={13}/>Remove</button></div>
+              </article>;
+            })}{!dayVisits.length && <button className="day-drop-zone" type="button" onClick={() => openAddVisit("Training visit", visitDate)}>Drop a visit here or tap +</button>}</div>
+          </section>;
+        })}</div>
+        <div className="weekly-board-save"><div>{pendingVisitCount > 0 ? <strong>{pendingVisitCount} unsaved schedule change{pendingVisitCount === 1 ? "" : "s"}</strong> : <span>Schedule and visit completion stay together on this board.</span>}</div><button className="button primary" disabled={busy || (!visitDirty && !dirty)} onClick={() => void saveVisitUpdates()}><Save size={16}/>{busy ? "Saving…" : "Save schedule updates"}</button></div>
         <label className="supervisor-days-off">Days off<input value={draft.days_off} onChange={(event) => changeDraft({ days_off: event.target.value })} placeholder="Example: Thursday and Sunday" /></label>
 
         <div className="weekly-checklist-grid">
@@ -326,6 +370,14 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
       <section className="panel supervisor-week-notes"><label>Weekly notes<textarea rows={5} value={draft.notes} onChange={(event) => changeDraft({ notes: event.target.value })} placeholder="Changes, outcomes, follow-up, or context for the Director…"/></label><div><small>{plan ? `Last saved ${new Date(plan.updated_at).toLocaleString()} by ${planUpdatedBy}` : "This week has not been saved yet."}</small><div className="button-row"><button className="button secondary" disabled={busy || draft.status === "live"} onClick={() => void savePlan("live")}><RotateCcw size={16}/>Return to live</button><button className="button secondary" disabled={busy} onClick={() => void savePlan("complete")}><CheckCircle2 size={16}/>Mark week complete</button><button className="button primary" disabled={busy || (!dirty && !visitDirty)} onClick={() => void saveVisitUpdates()}><Save size={16}/>{busy ? "Saving…" : "Save all updates"}</button></div></div></section>
     </>}
 
-    {editorOpen && <div className="modal-backdrop" onClick={() => setEditorOpen(false)}><section className="ticket-modal supervisor-visit-editor" onClick={(event) => event.stopPropagation()}><p className="eyebrow">Working weekly schedule</p><h2>Add an Area Supervisor visit</h2><div className="calendar-form-row"><label>Date<input type="date" min={weekStart} max={weekEnd} value={newVisit.visit_date} onChange={(event) => setNewVisit({ ...newVisit, visit_date: event.target.value })}/></label><label>Store<select value={newVisit.store_id} onChange={(event) => setNewVisit({ ...newVisit, store_id: event.target.value })}>{storesForVisit(newVisit.purpose, newVisit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label></div><div className="calendar-form-row"><label>Start<select value={newVisit.start_time} onChange={(event) => setNewVisit({ ...newVisit, start_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>End<select value={newVisit.end_time} onChange={(event) => setNewVisit({ ...newVisit, end_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label></div><label>Visit type<select value={newVisit.purpose} onChange={(event) => setNewVisit({ ...newVisit, purpose: event.target.value })}>{visitOptions.map((option) => <option key={option}>{option}</option>)}</select></label>{/training/i.test(newVisit.purpose) && <small>Training visits may be scheduled at any active Team Powers store.</small>}<label>Notes <small>(optional)</small><textarea rows={3} value={newVisit.notes} onChange={(event) => setNewVisit({ ...newVisit, notes: event.target.value })}/></label><p className="visit-editor-preview">{newVisit.visit_date ? `${dateLabel(newVisit.visit_date)} · ${timeLabel(newVisit.start_time)}–${timeLabel(newVisit.end_time)}` : "Choose a date and time"}</p><div className="button-row"><button className="button secondary" onClick={() => setEditorOpen(false)}>Cancel</button><button className="button primary" disabled={!newVisit.store_id || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)} onClick={addVisit}><Plus size={16}/>Add to working week</button></div></section></div>}
+    {editorOpen && <div className="modal-backdrop" onClick={() => { setEditorOpen(false); setEditingVisitId(null); }}><section className="ticket-modal supervisor-visit-editor" onClick={(event) => event.stopPropagation()}>
+      <p className="eyebrow">Weekly visit schedule</p><h2>{editingVisitId ? "Edit planned visit" : "Add an Area Supervisor visit"}</h2>
+      <div className="calendar-form-row"><label>Date<input type="date" min={weekStart} max={weekEnd} value={newVisit.visit_date} onChange={(event) => setNewVisit({ ...newVisit, visit_date: event.target.value })}/></label><label>Store<select value={newVisit.store_id} onChange={(event) => setNewVisit({ ...newVisit, store_id: event.target.value })}>{storesForVisit(newVisit.purpose, newVisit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label></div>
+      <div className="calendar-form-row"><label>Start<select value={newVisit.start_time} onChange={(event) => setNewVisit({ ...newVisit, start_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>End<select value={newVisit.end_time} onChange={(event) => setNewVisit({ ...newVisit, end_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label></div>
+      <label>Visit type<select value={newVisit.purpose} onChange={(event) => { const purpose = event.target.value; const eligible = storesForVisit(purpose, newVisit.store_id); setNewVisit({ ...newVisit, purpose, store_id: eligible.some((store) => store.id === newVisit.store_id) ? newVisit.store_id : (eligible[0]?.id ?? "") }); }}>{visitOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+      <small>Only stores assigned to this Area Supervisor are available.</small>
+      <label>Notes <small>(optional)</small><textarea rows={3} value={newVisit.notes} onChange={(event) => setNewVisit({ ...newVisit, notes: event.target.value })}/></label><p className="visit-editor-preview">{newVisit.visit_date ? `${dateLabel(newVisit.visit_date)} · ${timeLabel(newVisit.start_time)}–${timeLabel(newVisit.end_time)}` : "Choose a date and time"}</p>
+      <div className="button-row"><button className="button secondary" onClick={() => { setEditorOpen(false); setEditingVisitId(null); }}>Cancel</button><button className="button primary" disabled={!newVisit.store_id || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)} onClick={addVisit}>{editingVisitId ? <Save size={16}/> : <Plus size={16}/>} {editingVisitId ? "Save visit changes" : "Add to weekly board"}</button></div>
+    </section></div>}
   </div>;
 }
