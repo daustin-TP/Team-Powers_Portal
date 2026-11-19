@@ -35,3 +35,12 @@ test("the per-store checklist excludes the synthetic All Stores record", () => {
   assert.match(component, /function isAllStores/);
   assert.match(component, /filter\(\(store\) => !isAllStores\(store\)\)/);
 });
+
+test("visits can be planned instantly by day and saved together", () => {
+  assert.match(component, /draggable/);
+  assert.match(component, /text\/visit-purpose/);
+  assert.match(component, /Drop a visit here or tap \+/);
+  assert.match(component, /Save updates/);
+  assert.match(component, /15\) % \(24 \* 60\)/);
+  assert.match(component, /Complete visit log/);
+});
