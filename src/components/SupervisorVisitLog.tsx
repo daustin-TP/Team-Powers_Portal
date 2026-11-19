@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
+import { templateCompletion, templateForVisit, VisitTemplateSectionForm, type TemplateData } from "./VisitTemplateForm";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Rating = "" | "yes" | "no" | "na";
@@ -30,6 +31,8 @@ type UrgentItem = { item: string; assignedTo: string; completionTime: string };
 type FollowUp = { item: string; owner: string; dueDate: string; completed: boolean };
 
 type VisitForm = {
+  visitType: string;
+  templateData: TemplateData;
   managerName: string;
   visitDate: string;
   visitTime: string;
@@ -144,6 +147,8 @@ const centralDate = () => {
 };
 
 const emptyForm = (): VisitForm => ({
+  visitType: "General Area Supervisor visit",
+  templateData: {},
   managerName: "",
   visitDate: centralDate(),
   visitTime: "",
@@ -159,6 +164,8 @@ const emptyForm = (): VisitForm => ({
 const normalizeForm = (value?: Partial<VisitForm> | null): VisitForm => ({
   ...emptyForm(),
   ...(value ?? {}),
+  visitType: value?.visitType ?? "General Area Supervisor visit",
+  templateData: value?.templateData ?? {},
   checks: value?.checks ?? {},
   products: value?.products ?? {},
   goals: value?.goals ?? { posted: "", needsAdjustment: "", onTrack: "" },
@@ -170,6 +177,19 @@ const normalizeForm = (value?: Partial<VisitForm> | null): VisitForm => ({
 
 const allChecks = Object.values(checkGroups).flat();
 const formStats = (form: VisitForm, storeId: string) => {
+  const template = templateForVisit(form.visitType);
+  if (template) {
+    const templateStats = templateCompletion(template, form.templateData);
+    const commonComplete = Number(Boolean(storeId)) + Number(Boolean(form.managerName.trim())) + Number(Boolean(form.visitDate));
+    const expected = templateStats.total + 3;
+    const complete = templateStats.complete + commonComplete;
+    return {
+      percent: expected ? Math.round((complete / expected) * 100) : 0,
+      missing: expected - complete,
+      sections: template.sections.filter((section) => section.fields.some((field) => Boolean(form.templateData[field.key]?.trim()))).length + Number(Boolean(storeId || form.managerName || form.visitTime)),
+      issues: templateStats.issues,
+    };
+  }
   const expected = 4 + allChecks.length + productItems.length;
   let complete = Number(Boolean(storeId)) + Number(Boolean(form.managerName.trim())) + Number(Boolean(form.visitDate));
   complete += allChecks.filter(([key]) => Boolean(form.checks[key]?.rating)).length;
@@ -223,7 +243,15 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
   const openedSchedule=useRef<string|null>(null);
 
   const readOnly = selected?.status === "submitted" || Boolean(selected && selected.supervisor_id !== profile.id);
+  const activeTemplate = useMemo(() => templateForVisit(form.visitType), [form.visitType]);
+  const activeSteps = useMemo<Step[]>(() => activeTemplate ? [
+    steps[0],
+    ...activeTemplate.sections.map((section) => ({ key: section.key, label: section.label, short: section.label })),
+    steps[steps.length - 1],
+  ] : steps, [activeTemplate]);
   const stats = useMemo(() => formStats(form, storeId), [form, storeId]);
+
+  useEffect(() => { if (stepIndex >= activeSteps.length) setStepIndex(0); }, [activeSteps.length, stepIndex]);
 
   const load = async () => {
     if (!supabase) { setLoading(false); return; }
@@ -273,11 +301,13 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
   };
 
   const openLog = async (log: VisitLog) => {
+    const normalized = normalizeForm(log.form_data);
+    const template = templateForVisit(normalized.visitType);
     setSelected(log);
     setLogId(log.id);
     setStoreId(log.store_id);
-    setForm(normalizeForm(log.form_data));
-    setStepIndex(log.status === "submitted" ? 9 : 0);
+    setForm(normalized);
+    setStepIndex(log.status === "submitted" ? (template ? template.sections.length + 1 : 9) : 0);
     setShowEditor(true);
     setMessage("");
     setScheduleId(log.schedule_id);
@@ -290,10 +320,11 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     window.sessionStorage.removeItem('dashos:visit-schedule');
     const linked=logs.find(log=>log.schedule_id===initialScheduleId);
     if(linked){void openLog(linked);return;}
-    void supabase.from('supervisor_visit_schedules').select('id,supervisor_id,store_id,visit_date,start_time').eq('id',initialScheduleId).maybeSingle().then(({data,error})=>{
+    void supabase.from('supervisor_visit_schedules').select('id,supervisor_id,store_id,visit_date,start_time,purpose').eq('id',initialScheduleId).maybeSingle().then(({data,error})=>{
       if(error||!data){setMessage(error?.message||'This calendar visit is not available.');return;}
       if(profile.role==='admin'){setMessage('No DM Visit Form has been started for this scheduled visit yet. The assigned Area Supervisor can open it from their calendar.');return;}
-      setSelected(null);setLogId(null);setScheduleId(data.id);setStoreId(data.store_id);setForm({...emptyForm(),visitDate:data.visit_date,visitTime:data.start_time.slice(0,5)});setPhotos([]);setStepIndex(0);setShowEditor(true);setMessage('This new visit form is linked to the selected calendar visit.');
+      const visitType = templateForVisit(data.purpose) ? data.purpose : "General Area Supervisor visit";
+      setSelected(null);setLogId(null);setScheduleId(data.id);setStoreId(data.store_id);setForm({...emptyForm(),visitType,visitDate:data.visit_date,visitTime:data.start_time.slice(0,5)});setPhotos([]);setStepIndex(0);setShowEditor(true);setMessage(`This new ${visitType} form is linked to the selected calendar visit.`);
     });
   },[initialScheduleId,loading,logs,profile.role]);
 
@@ -351,7 +382,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
       const linked = await supabase.from("supervisor_visit_log_photos").insert({
         visit_log_id: id,
         uploaded_by: profile.id,
-        section_key: steps[stepIndex].key,
+        section_key: activeSteps[stepIndex]?.key ?? "details",
         storage_path: path,
         original_name: file.name,
       }).select("id").single();
@@ -406,9 +437,10 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     </article>)}
   </section>;
 
-  const sectionPhotos = photos.filter((photo) => photo.section_key === steps[stepIndex].key);
-  const photoArea = stepIndex > 0 && stepIndex < 9 ? <section className="visit-photo-area">
-    <div><Camera size={21} /><div><strong>{steps[stepIndex].key === "goals" ? "Photo of the posted goals" : "Photos for this section"}</strong><small>{steps[stepIndex].key === "goals" ? "Add a current photo of the in-store goal board or posted goals." : "Add supporting photos from the phone camera or photo library."}</small></div></div>
+  const activeStep = activeSteps[stepIndex] ?? activeSteps[0];
+  const sectionPhotos = photos.filter((photo) => photo.section_key === activeStep.key);
+  const photoArea = stepIndex > 0 && stepIndex < activeSteps.length - 1 ? <section className="visit-photo-area">
+    <div><Camera size={21} /><div><strong>{activeStep.key === "goals" ? "Photo of the posted goals" : "Optional photos for this section"}</strong><small>{activeStep.key === "goals" ? "Add a current photo of the in-store goal board or posted goals." : "Use the phone camera or photo library when a photo improves the visit record."}</small></div></div>
     {!readOnly && <label className="button secondary visit-photo-button"><ImagePlus size={17} />{uploading ? "Uploading…" : "Add photos"}<input type="file" accept="image/*,.heic,.heif" multiple disabled={uploading} onChange={(event) => void uploadPhotos(event.target.files)} /></label>}
     {sectionPhotos.length > 0 && <div className="visit-photo-grid">{sectionPhotos.map((photo) => <article key={photo.id}>
       {photo.url ? <img src={photo.url} alt={photo.caption || photo.original_name} /> : <div className="visit-photo-placeholder">Photo</div>}
@@ -418,14 +450,19 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
   </section> : null;
 
   const renderStep = () => {
-    const key = steps[stepIndex].key;
+    const key = activeStep.key;
     if (key === "details") return <div className="visit-details-grid">
+      <label>Visit form<select value={form.visitType} onChange={(event) => { setForm((current) => ({ ...current, visitType: event.target.value, templateData: {} })); setStepIndex(0); }} disabled={readOnly}>
+        <option>General Area Supervisor visit</option><option>Game Day visit</option><option>Opening visit</option><option>Closing visit</option><option>Rush observation</option>
+      </select></label>
       <label>Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)} disabled={readOnly}><option value="">Select store</option>{stores.map((store) => <option value={store.id} key={store.id}>{store.name} {store.store_number ?? ""}</option>)}</select></label>
       <label>Date<input type="date" value={form.visitDate} onChange={(event) => setForm((current) => ({ ...current, visitDate: event.target.value }))} disabled={readOnly} /></label>
       <label>Visit time <span className="optional-label">Optional</span><input type="time" value={form.visitTime} onChange={(event) => setForm((current) => ({ ...current, visitTime: event.target.value }))} disabled={readOnly} /></label>
       <label>Manager on duty<input value={form.managerName} onChange={(event) => setForm((current) => ({ ...current, managerName: event.target.value }))} placeholder="First and last name" disabled={readOnly} /></label>
       <div className="visit-owner-card"><ShieldCheck /><div><small>Visited by</small><strong>{profile.fullName}</strong><span>{profile.role === "admin" ? "Administrator" : "Area Supervisor"}</span></div></div>
     </div>;
+    const templateSection = activeTemplate?.sections.find((section) => section.key === key);
+    if (templateSection) return <VisitTemplateSectionForm section={templateSection} data={form.templateData} disabled={readOnly} onChange={(fieldKey, value) => setForm((current) => ({ ...current, templateData: { ...current.templateData, [fieldKey]: value } }))}/>;
     if (key === "carry") return renderCheckGroup("Carry-out experience", checkGroups.carry);
     if (key === "product") return <section className="visit-check-group"><h3>Product evaluation</h3>{productItems.map((label, index) => {
       const itemKey = `product_${index}`; const item = form.products[itemKey] ?? { rating: "", comment: "" };
@@ -445,7 +482,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     if (key === "recap") return <div className="visit-recap">{renderCheckGroup("Overall image", checkGroups.overall)}<div className="visit-recap-columns"><section><h3>Key wins</h3>{form.keyWins.map((value, index) => <textarea key={index} rows={2} value={value} onChange={(event) => setForm((current) => ({ ...current, keyWins: current.keyWins.map((entry, i) => i === index ? event.target.value : entry) }))} placeholder={`Win ${index + 1}`} disabled={readOnly} />)}</section><section><h3>Opportunities & coaching points</h3>{form.opportunities.map((value, index) => <textarea key={index} rows={2} value={value} onChange={(event) => setForm((current) => ({ ...current, opportunities: current.opportunities.map((entry, i) => i === index ? event.target.value : entry) }))} placeholder={`Opportunity ${index + 1}`} disabled={readOnly} />)}</section></div><section className="visit-line-items follow-up"><h3>Follow-up</h3>{form.followUps.map((item, index) => <article key={index}><label>Item<input value={item.item} onChange={(event) => setForm((current) => ({ ...current, followUps: current.followUps.map((entry, i) => i === index ? { ...entry, item: event.target.value } : entry) }))} disabled={readOnly} /></label><label>Owner<input value={item.owner} onChange={(event) => setForm((current) => ({ ...current, followUps: current.followUps.map((entry, i) => i === index ? { ...entry, owner: event.target.value } : entry) }))} disabled={readOnly} /></label><label>Due date<input type="date" value={item.dueDate} onChange={(event) => setForm((current) => ({ ...current, followUps: current.followUps.map((entry, i) => i === index ? { ...entry, dueDate: event.target.value } : entry) }))} disabled={readOnly} /></label><label className="visit-complete-toggle"><input type="checkbox" checked={item.completed} onChange={(event) => setForm((current) => ({ ...current, followUps: current.followUps.map((entry, i) => i === index ? { ...entry, completed: event.target.checked } : entry) }))} disabled={readOnly} />Completed</label></article>)}</section></div>;
     return <div className="visit-review">
       <div className={`visit-completion-ring ${stats.percent === 100 ? "complete" : ""}`}><strong>{stats.percent}%</strong><span>complete</span></div>
-      <div><p className="eyebrow">Ready for review</p><h3>{stores.find((store) => store.id === storeId)?.name ?? "Store not selected"} · {formatDate(form.visitDate)}</h3><p>{stats.sections} sections touched · {stats.issues} items need attention · {photos.length} photos attached</p></div>
+      <div><p className="eyebrow">{form.visitType}</p><h3>{stores.find((store) => store.id === storeId)?.name ?? "Store not selected"} · {formatDate(form.visitDate)}</h3><p>{stats.sections} sections touched · {stats.issues} items need attention · {photos.length} photos attached</p></div>
       {stats.percent < 100 && <div className="visit-warning"><AlertTriangle /><div><strong>This visit is not fully completed.</strong><span>{stats.missing} expected answers are blank. You may still submit it after confirming.</span></div></div>}
       <section className="visit-review-summary"><article><span>Manager</span><strong>{form.managerName || "Not entered"}</strong></article><article><span>Visit time</span><strong>{form.visitTime ? formatTime(form.visitTime) : "Not entered"}</strong></article><article><span>Issues found</span><strong>{stats.issues}</strong></article><article><span>Photo evidence</span><strong>{photos.length}</strong></article></section>
       {(form.goals.needsAdjustment || form.goals.onTrack) && <div className="visit-review-notes"><section><h4>Goals needing adjustment</h4><p>{form.goals.needsAdjustment || "None noted"}</p></section><section><h4>Goals on track</h4><p>{form.goals.onTrack || "None noted"}</p></section></div>}
@@ -457,11 +494,11 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
   const storeName = (id: string) => { const store = stores.find((item) => item.id === id); return store ? `${store.name}${store.store_number ? ` ${store.store_number}` : ""}` : "Store"; };
 
   if (showEditor) return <div className="page-stack visit-log-page">
-    <header className="page-header"><div><button className="link-button" type="button" onClick={() => { setShowEditor(false); setSelected(null); }}><ArrowLeft size={16} />Back to visit log</button><p className="eyebrow">Area Supervisor visit</p><h1>{readOnly ? "Visit record" : logId ? "Continue visit draft" : "New store visit"}</h1><p>{readOnly ? "Submitted records are preserved as a read-only store visit history." : "Move through sections in any order. Save now and finish later if the visit does not require every section."}</p></div><div className="visit-header-status"><span className={`visit-status ${readOnly ? "submitted" : "draft"}`}>{readOnly ? "Submitted" : "Draft"}</span><strong>{stats.percent}% complete</strong></div></header>
+    <header className="page-header"><div><button className="link-button" type="button" onClick={() => { setShowEditor(false); setSelected(null); }}><ArrowLeft size={16} />Back to visit log</button><p className="eyebrow">Area Supervisor visit</p><h1>{activeTemplate?.title ?? (readOnly ? "Visit record" : logId ? "Continue visit draft" : "New store visit")}</h1><p>{activeTemplate?.subtitle ?? (readOnly ? "Submitted records are preserved as a read-only store visit history." : "Move through sections in any order. Save now and finish later if the visit does not require every section.")}</p></div><div className="visit-header-status"><span className={`visit-status ${readOnly ? "submitted" : "draft"}`}>{readOnly ? "Submitted" : "Draft"}</span><strong>{stats.percent}% complete</strong></div></header>
     {message && <div className="notice">{message}</div>}
-    <nav className="visit-step-nav" aria-label="Visit form sections">{steps.map((step, index) => <button type="button" key={step.key} className={index === stepIndex ? "active" : ""} onClick={() => setStepIndex(index)}><span>{index + 1}</span>{step.short}</button>)}</nav>
-    <section className="panel visit-form-panel"><div className="visit-section-heading"><div><p className="eyebrow">Section {stepIndex + 1} of {steps.length}</p><h2>{steps[stepIndex].label}</h2></div>{!readOnly && <small>All fields may be skipped</small>}</div>{renderStep()}{photoArea}
-      <footer className="visit-form-actions"><button className="button secondary" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((value) => value - 1)}><ArrowLeft size={17} />Previous</button><div>{!readOnly && <button className="button secondary" type="button" disabled={saving} onClick={() => void persist("draft")}><Save size={17} />{saving ? "Saving…" : "Save draft"}</button>}{stepIndex < steps.length - 1 ? <button className="button primary" type="button" onClick={() => setStepIndex((value) => value + 1)}>Next<ArrowRight size={17} /></button> : !readOnly ? <button className="button primary" type="button" disabled={saving} onClick={() => void submitVisit()}><ClipboardCheck size={17} />Submit visit</button> : null}</div></footer>
+    <nav className="visit-step-nav" aria-label="Visit form sections">{activeSteps.map((step, index) => <button type="button" key={step.key} className={index === stepIndex ? "active" : ""} onClick={() => setStepIndex(index)}><span>{index + 1}</span>{step.short}</button>)}</nav>
+    <section className={`panel visit-form-panel ${activeTemplate ? "templated" : ""}`}><div className="visit-section-heading"><div><p className="eyebrow">Section {stepIndex + 1} of {activeSteps.length}</p><h2>{activeStep.label}</h2></div>{!readOnly && <small>All fields may be skipped</small>}</div>{renderStep()}{photoArea}
+      <footer className="visit-form-actions"><button className="button secondary" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((value) => value - 1)}><ArrowLeft size={17} />Previous</button><div>{!readOnly && <button className="button secondary" type="button" disabled={saving} onClick={() => void persist("draft")}><Save size={17} />{saving ? "Saving…" : "Save draft"}</button>}{stepIndex < activeSteps.length - 1 ? <button className="button primary" type="button" onClick={() => setStepIndex((value) => value + 1)}>Next<ArrowRight size={17} /></button> : !readOnly ? <button className="button primary" type="button" disabled={saving} onClick={() => void submitVisit()}><ClipboardCheck size={17} />Submit visit</button> : null}</div></footer>
     </section>
   </div>;
 
@@ -473,7 +510,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     <section className="panel visit-records-panel"><div className="table-toolbar visit-log-toolbar"><div><h2>Visits by date</h2><p>{profile.role === "admin" ? "All Area Supervisor visit records" : "Your private visit history"}</p></div><div className="hr-filters"><select value={storeFilter} onChange={(event) => setStoreFilter(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number ?? ""}</option>)}</select><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="all">All statuses</option><option value="draft">Drafts</option><option value="submitted">Submitted</option></select></div></div>
       {loading ? <div className="empty-state">Loading visit records…</div> : visibleLogs.length === 0 ? <div className="empty-state"><ClipboardCheck size={34} /><h3>No visit logs yet</h3><p>Start a visit from a phone or desktop and save it at any point.</p></div> : <div className="visit-record-list">{visibleLogs.map((log) => <button type="button" key={log.id} onClick={() => void openLog(log)}>
         <div className="visit-record-date"><strong>{new Date(`${log.visit_date}T12:00:00`).toLocaleDateString("en-US", { day: "numeric" })}</strong><span>{new Date(`${log.visit_date}T12:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" })}</span></div>
-        <div className="visit-record-main"><div><strong>{storeName(log.store_id)}</strong><span>{formatTime(log.visit_time)} · Manager: {log.manager_name || "Not entered"}</span></div>{profile.role === "admin" && <small>Visited by {log.supervisor_name}</small>}</div>
+        <div className="visit-record-main"><div><strong>{storeName(log.store_id)}</strong><span>{log.form_data.visitType ?? "General Area Supervisor visit"} · {formatTime(log.visit_time)} · Manager: {log.manager_name || "Not entered"}</span></div>{profile.role === "admin" && <small>Visited by {log.supervisor_name}</small>}</div>
         <div className="visit-record-facts"><span><b>{log.completion_percent}%</b> complete</span><span><b>{log.issues_found}</b> flagged</span><span><b>{photoCounts[log.id] ?? 0}</b> photos</span></div>
         <span className={`visit-status ${log.status}`}>{log.status}</span><Eye size={18} />
       </button>)}</div>}

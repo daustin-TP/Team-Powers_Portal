@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import SupervisorVisitLog from "./SupervisorVisitLog";
+import AreaSupervisorExpectations from "./AreaSupervisorExpectations";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Supervisor = { id: string; full_name: string; store_id: string | null };
@@ -40,7 +41,7 @@ type WeeklyPlan = {
 };
 type KpiRow = { store_id: string; week_end: string; metrics: Record<string, unknown> };
 type KpiData = { history?: KpiRow[]; results?: KpiRow[] };
-type WorkspaceView = "current" | "history" | "visits";
+type WorkspaceView = "current" | "history" | "visits" | "expectations";
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const storeChecks = [
@@ -56,10 +57,11 @@ const visitRequirements = [
   { key: "closing", label: "Closing visit", target: 1, match: (purpose: string) => purpose === "Closing visit", add: "Closing visit" },
   { key: "closed", label: "Closed visit", target: 1, match: (purpose: string) => purpose === "Closed visit", add: "Closed visit" },
   { key: "rush", label: "Rush observation", target: 1, match: (purpose: string) => purpose === "Rush observation", add: "Rush observation" },
+  { key: "game-day", label: "Game Day visits", target: "per-store" as const, match: (purpose: string) => purpose === "Game Day visit", add: "Game Day visit" },
   { key: "feel-good", label: "Feel-good visit", target: 1, match: (purpose: string) => purpose === "Feel-good visit", add: "Feel-good visit" },
   { key: "cut-test", label: "Cut test", target: 1, match: (purpose: string) => purpose === "Cut test", add: "Cut test" },
 ];
-const visitOptions = ["Training visit", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Cut test", "KPI / goal follow-up", "Operations review", "Schedule review", "Other"];
+const visitOptions = ["Training visit", "Game Day visit", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Cut test", "KPI / goal follow-up", "Operations review", "Schedule review", "Other"];
 const connectedLogTypes = new Set(visitOptions.filter((option) => option !== "Other"));
 const timeOptions = Array.from({ length: 88 }, (_, index) => {
   const totalMinutes = (6 * 60 + index * 15) % (24 * 60);
@@ -107,7 +109,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
   const [message, setMessage] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => {
     const saved = window.sessionStorage.getItem("dashos:supervisor-workspace-view");
-    return saved === "history" || saved === "visits" ? saved : "current";
+    return saved === "history" || saved === "visits" || saved === "expectations" ? saved : "current";
   });
   const [pastPlans, setPastPlans] = useState<WeeklyPlan[]>([]);
 
@@ -293,9 +295,10 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
       <button className={workspaceView === "current" ? "active" : ""} onClick={() => setWorkspaceView("current")}><CalendarClock size={18}/>Current week</button>
       <button className={workspaceView === "history" ? "active" : ""} onClick={() => setWorkspaceView("history")}><History size={18}/>Past weeks</button>
       <button className={workspaceView === "visits" ? "active" : ""} onClick={() => setWorkspaceView("visits")}><ClipboardCheck size={18}/>Visit logs</button>
+      <button className={workspaceView === "expectations" ? "active" : ""} onClick={() => setWorkspaceView("expectations")}><BookOpenCheck size={18}/>Expectations</button>
     </nav>
     {message && <p className="inline-message">{message}</p>}
-    {workspaceView === "visits" ? <div className="supervisor-workspace-embedded"><SupervisorVisitLog profile={profile} initialScheduleId={window.sessionStorage.getItem("dashos:visit-schedule")}/></div> : workspaceView === "history" ? <section className="panel supervisor-plan-history">
+    {workspaceView === "expectations" ? <AreaSupervisorExpectations/> : workspaceView === "visits" ? <div className="supervisor-workspace-embedded"><SupervisorVisitLog profile={profile} initialScheduleId={window.sessionStorage.getItem("dashos:visit-schedule")}/></div> : workspaceView === "history" ? <section className="panel supervisor-plan-history">
       <div className="table-toolbar"><div><p className="eyebrow">Weekly planner history</p><h2>{supervisorName}’s prior weeks</h2><p>Open any saved week to review it or continue making updates.</p></div></div>
       {pastPlans.length ? <div className="supervisor-history-list">{pastPlans.map((item) => <article key={item.id}><div><strong>{dateLabel(item.week_start)}–{dateLabel(addIsoDays(item.week_start, 6))}</strong><span className={`status-pill ${item.status}`}>{item.status === "complete" ? "Complete" : "Live"}</span></div><p>{item.top_priorities || item.notes || "No priorities or notes were entered."}</p><small>Updated {new Date(item.updated_at).toLocaleString()}</small><button className="button secondary compact" onClick={() => { setWeekStart(item.week_start); setWorkspaceView("current"); }}>Open week</button></article>)}</div> : <div className="activity-empty">No saved weekly plans yet.</div>}
     </section> : loading ? <section className="panel activity-empty">Loading {supervisorName}’s weekly planner…</section> : <>
@@ -310,7 +313,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
         <label className="supervisor-days-off">Days off<input value={draft.days_off} onChange={(event) => changeDraft({ days_off: event.target.value })} placeholder="Example: Thursday and Sunday" /></label>
 
         <div className="weekly-checklist-grid">
-          <section><div className="section-title"><div><p className="eyebrow">Area visits</p><h3>Required visit mix</h3><small>Drag a visit onto a day, or tap Add.</small></div><button className="button secondary compact" onClick={() => openAddVisit()}><Plus size={15}/>Add visit</button></div><div className="visit-requirements">{visitRequirements.map((requirement) => { const completed = visibleVisits.filter((visit) => requirement.match(visit.purpose)).length; return <div draggable className={completed >= requirement.target ? "met draggable-visit" : "open draggable-visit"} key={requirement.key} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/visit-purpose", requirement.add); }}><span>{completed >= requirement.target ? <CheckCircle2 /> : <CalendarClock />}</span><div><b>{requirement.label}</b><small>{completed} of {requirement.target} planned</small></div>{completed < requirement.target && <button onClick={() => openAddVisit(requirement.add)}>Add</button>}</div>; })}</div></section>
+          <section><div className="section-title"><div><p className="eyebrow">Area visits</p><h3>Required visit mix</h3><small>Drag a visit onto a day, or tap Add.</small></div><button className="button secondary compact" onClick={() => openAddVisit()}><Plus size={15}/>Add visit</button></div><div className="visit-requirements">{visitRequirements.map((requirement) => { const completed = visibleVisits.filter((visit) => requirement.match(visit.purpose)).length; const target = requirement.target === "per-store" ? assignedStores.length : requirement.target; return <div draggable className={completed >= target ? "met draggable-visit" : "open draggable-visit"} key={requirement.key} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/visit-purpose", requirement.add); }}><span>{completed >= target ? <CheckCircle2 /> : <CalendarClock />}</span><div><b>{requirement.label}</b><small>{completed} of {target} planned{requirement.target === "per-store" ? " · one per store" : ""}</small></div>{completed < target && <button onClick={() => openAddVisit(requirement.add)}>Add</button>}</div>; })}</div></section>
           <section><p className="eyebrow">Weekly rush shifts</p><h3>Required rush coverage</h3><div className="rush-requirements"><label className="check-row"><input type="checkbox" checked={Boolean(draft.rush_shifts.weeknight_done)} onChange={(event) => changeDraft({ rush_shifts: { ...draft.rush_shifts, weeknight_done: event.target.checked } })}/><span>One weeknight rush shift</span></label><input value={draft.rush_shifts.weeknight_day ?? ""} onChange={(event) => changeDraft({ rush_shifts: { ...draft.rush_shifts, weeknight_day: event.target.value } })} placeholder="Planned day"/><label className="check-row"><input type="checkbox" checked={Boolean(draft.rush_shifts.weekend_done)} onChange={(event) => changeDraft({ rush_shifts: { ...draft.rush_shifts, weekend_done: event.target.checked } })}/><span>Friday or Saturday night rush</span></label><input value={draft.rush_shifts.weekend_day ?? ""} onChange={(event) => changeDraft({ rush_shifts: { ...draft.rush_shifts, weekend_day: event.target.value } })} placeholder="Planned day"/></div><label className="priorities-field">Top priorities this week<textarea rows={5} value={draft.top_priorities} onChange={(event) => changeDraft({ top_priorities: event.target.value })} placeholder="Bottom-store focus, KPI actions, training priorities…"/></label></section>
           <section className="schedule-deadlines"><p className="eyebrow">Schedule deadlines</p><h3>Weekly handoff</h3><p><b>Wednesday by 8 PM</b><span>GMs submit schedules</span></p><p><b>Friday by 10 AM</b><span>Schedules are published</span></p><p><b>Sunday by 8 PM</b><span>Area Supervisors submit their schedules to the Director</span></p></section>
         </div>

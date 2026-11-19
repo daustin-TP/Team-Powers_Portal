@@ -7,7 +7,7 @@ const migration = readFileSync(new URL("../supabase/migrations/20261119001707_ar
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 test("the Director checklist is represented in the live weekly workspace", () => {
-  for (const label of ["Training visits", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Cut test", "One weeknight rush shift", "Friday or Saturday night rush", "Last week’s deposits checked", "GM schedule submitted", "Schedule published"]) {
+  for (const label of ["Training visits", "Game Day visits", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Cut test", "One weeknight rush shift", "Friday or Saturday night rush", "Last week’s deposits checked", "GM schedule submitted", "Schedule published"]) {
     assert.match(component, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 });
@@ -25,10 +25,25 @@ test("the private dashboard is available only to Area Supervisors and administra
   assert.match(component, /kpi-dashboard/);
 });
 
-test("the Area Supervisor workspace combines current plans, history, and visit logs", () => {
-  for (const label of ["Current week", "Past weeks", "Visit logs"]) assert.match(component, new RegExp(label));
+test("the Area Supervisor workspace combines current plans, history, visit logs, and expectations", () => {
+  for (const label of ["Current week", "Past weeks", "Visit logs", "Expectations"]) assert.match(component, new RegExp(label));
   assert.match(component, /<SupervisorVisitLog/);
+  assert.match(component, /<AreaSupervisorExpectations/);
   assert.doesNotMatch(app, /id: "visit-log", label: "DM Visit Logs"/);
+});
+
+test("Game Day is planned once per assigned store", () => {
+  assert.match(component, /target: "per-store"/);
+  assert.match(component, /purpose === "Game Day visit"/);
+  assert.match(component, /assignedStores\.length/);
+});
+
+test("Director-authored visit forms are available as sectioned digital templates", () => {
+  const templates = readFileSync(new URL("../src/components/VisitTemplateForm.tsx", import.meta.url), "utf8");
+  const log = readFileSync(new URL("../src/components/SupervisorVisitLog.tsx", import.meta.url), "utf8");
+  for (const label of ["Game Day Sheet", "Opening Visit Evaluation", "Closing Visit Evaluation", "Observation of the Rush"]) assert.match(templates, new RegExp(label));
+  assert.match(log, /templateForVisit/);
+  assert.match(log, /Optional photos for this section/);
 });
 
 test("the per-store checklist excludes the synthetic All Stores record", () => {
