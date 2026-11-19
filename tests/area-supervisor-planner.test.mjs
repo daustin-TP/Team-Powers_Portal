@@ -24,3 +24,14 @@ test("the private dashboard is available only to Area Supervisors and administra
   assert.match(component, /supervisor_visit_schedules/);
   assert.match(component, /kpi-dashboard/);
 });
+
+test("the Area Supervisor workspace combines current plans, history, and visit logs", () => {
+  for (const label of ["Current week", "Past weeks", "Visit logs"]) assert.match(component, new RegExp(label));
+  assert.match(component, /<SupervisorVisitLog/);
+  assert.doesNotMatch(app, /id: "visit-log", label: "DM Visit Logs"/);
+});
+
+test("the per-store checklist excludes the synthetic All Stores record", () => {
+  assert.match(component, /function isAllStores/);
+  assert.match(component, /filter\(\(store\) => !isAllStores\(store\)\)/);
+});

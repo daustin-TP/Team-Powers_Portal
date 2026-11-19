@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, BarChart3, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
+import SupervisorVisitLog from "./SupervisorVisitLog";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Supervisor = { id: string; full_name: string; store_id: string | null };
@@ -36,6 +37,7 @@ type WeeklyPlan = {
 };
 type KpiRow = { store_id: string; week_end: string; metrics: Record<string, unknown> };
 type KpiData = { history?: KpiRow[]; results?: KpiRow[] };
+type WorkspaceView = "current" | "history" | "visits";
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const storeChecks = [
@@ -74,6 +76,7 @@ function numberValue(value: unknown) { if (value === null || value === undefined
 function average(values: number[]) { return values.reduce((sum, value) => sum + value, 0) / values.length; }
 function formatMetric(value: number, format: string) { if (format === "currency") return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value > 1000 ? 0 : 2 }); if (format === "percent") return `${(Math.abs(value) <= 1 ? value * 100 : value).toFixed(1)}%`; return value.toFixed(2); }
 function blankPlan(supervisorId: string, weekStart: string): Omit<WeeklyPlan, "id" | "updated_by" | "updated_at"> { return { supervisor_id: supervisorId, week_start: weekStart, days_off: "", hours_by_day: {}, rush_shifts: {}, top_priorities: "", store_checklist: {}, notes: "", status: "live" }; }
+function isAllStores(store: Store) { return [store.name, store.store_number].some((value) => /^all\s*stores$/i.test((value ?? "").trim())); }
 
 export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { profile: Profile; onOpenVisitLog: (scheduleId: string) => void }) {
   const isAdmin = profile.role === "admin";
@@ -92,6 +95,11 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [message, setMessage] = useState("");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => {
+    const saved = window.sessionStorage.getItem("dashos:supervisor-workspace-view");
+    return saved === "history" || saved === "visits" ? saved : "current";
+  });
+  const [pastPlans, setPastPlans] = useState<WeeklyPlan[]>([]);
 
   const weekEnd = addIsoDays(weekStart, 6);
   const storeMap = useMemo(() => new Map(stores.map((store) => [store.id, store])), [stores]);
@@ -116,16 +124,17 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     setLoading(true);
     setMessage("");
     const selectedSupervisor = supervisors.find((item) => item.id === supervisorId);
-    const [storeResult, assignmentResult, planResult, visitResult, kpiResult] = await Promise.all([
+    const [storeResult, assignmentResult, planResult, visitResult, historyResult, kpiResult] = await Promise.all([
       supabase.from("stores").select("id,name,store_number").eq("active", true).order("name"),
       supabase.from("profile_store_assignments").select("store_id").eq("profile_id", supervisorId),
       supabase.from("supervisor_weekly_plans").select("id,supervisor_id,week_start,days_off,hours_by_day,rush_shifts,top_priorities,store_checklist,notes,status,updated_by,updated_at").eq("supervisor_id", supervisorId).eq("week_start", weekStart).maybeSingle(),
       supabase.from("supervisor_visit_schedules").select("id,supervisor_id,store_id,visit_date,start_time,end_time,purpose,notes,status,weekly_plan_id,edited_from_original,last_change_reason").eq("supervisor_id", supervisorId).gte("visit_date", weekStart).lte("visit_date", weekEnd).neq("status", "cancelled").order("visit_date").order("start_time"),
+      supabase.from("supervisor_weekly_plans").select("id,supervisor_id,week_start,days_off,hours_by_day,rush_shifts,top_priorities,store_checklist,notes,status,updated_by,updated_at").eq("supervisor_id", supervisorId).order("week_start", { ascending: false }).limit(52),
       supabase.functions.invoke("kpi-dashboard", { body: { week_end: addIsoDays(weekStart, -1) } }),
     ]);
-    const firstError = [storeResult.error, assignmentResult.error, planResult.error, visitResult.error].find(Boolean);
+    const firstError = [storeResult.error, assignmentResult.error, planResult.error, visitResult.error, historyResult.error].find(Boolean);
     if (firstError) { setMessage(firstError.message); setLoading(false); return; }
-    const nextStores = (storeResult.data ?? []).filter((store) => !/^all\s*stores$/i.test(`${store.name} ${store.store_number ?? ""}`)) as Store[];
+    const nextStores = ((storeResult.data ?? []) as Store[]).filter((store) => !isAllStores(store));
     const assigned = new Set((assignmentResult.data ?? []).map((row) => row.store_id));
     if (selectedSupervisor?.store_id) assigned.add(selectedSupervisor.store_id);
     setStores(nextStores);
@@ -134,6 +143,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     setPlan(savedPlan);
     setDraft(savedPlan ?? blankPlan(supervisorId, weekStart));
     setVisits((visitResult.data ?? []) as Visit[]);
+    setPastPlans((historyResult.data ?? []) as WeeklyPlan[]);
     setKpi((kpiResult.data?.ok ? kpiResult.data : {}) as KpiData);
     const firstStore = nextStores.find((store) => assigned.has(store.id));
     setNewVisit((current) => ({ ...current, store_id: assigned.has(current.store_id) ? current.store_id : (firstStore?.id ?? ""), visit_date: current.visit_date >= weekStart && current.visit_date <= weekEnd ? current.visit_date : weekStart }));
@@ -143,6 +153,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
 
   useEffect(() => { void loadSupervisors(); }, [loadSupervisors]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { window.sessionStorage.setItem("dashos:supervisor-workspace-view", workspaceView); }, [workspaceView]);
   useEffect(() => {
     if (!supabase || !supervisorId) return;
     const client = supabase;
@@ -233,8 +244,16 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
         <div className="week-stepper"><button className="icon-button" aria-label="Previous week" onClick={() => setWeekStart(addIsoDays(weekStart, -7))}><ChevronLeft /></button><label>Week of<input type="date" value={weekStart} onChange={(event) => setWeekStart(monday(fromIso(event.target.value)))}/></label><button className="icon-button" aria-label="Next week" onClick={() => setWeekStart(addIsoDays(weekStart, 7))}><ChevronRight /></button></div>
       </div>
     </div>
+    <nav className="supervisor-workspace-tabs" aria-label="Area Supervisor workspace views">
+      <button className={workspaceView === "current" ? "active" : ""} onClick={() => setWorkspaceView("current")}><CalendarClock size={18}/>Current week</button>
+      <button className={workspaceView === "history" ? "active" : ""} onClick={() => setWorkspaceView("history")}><History size={18}/>Past weeks</button>
+      <button className={workspaceView === "visits" ? "active" : ""} onClick={() => setWorkspaceView("visits")}><ClipboardCheck size={18}/>Visit logs</button>
+    </nav>
     {message && <p className="inline-message">{message}</p>}
-    {loading ? <section className="panel activity-empty">Loading {supervisorName}’s weekly planner…</section> : <>
+    {workspaceView === "visits" ? <div className="supervisor-workspace-embedded"><SupervisorVisitLog profile={profile} initialScheduleId={window.sessionStorage.getItem("dashos:visit-schedule")}/></div> : workspaceView === "history" ? <section className="panel supervisor-plan-history">
+      <div className="table-toolbar"><div><p className="eyebrow">Weekly planner history</p><h2>{supervisorName}’s prior weeks</h2><p>Open any saved week to review it or continue making updates.</p></div></div>
+      {pastPlans.length ? <div className="supervisor-history-list">{pastPlans.map((item) => <article key={item.id}><div><strong>{dateLabel(item.week_start)}–{dateLabel(addIsoDays(item.week_start, 6))}</strong><span className={`status-pill ${item.status}`}>{item.status === "complete" ? "Complete" : "Live"}</span></div><p>{item.top_priorities || item.notes || "No priorities or notes were entered."}</p><small>Updated {new Date(item.updated_at).toLocaleString()}</small><button className="button secondary compact" onClick={() => { setWeekStart(item.week_start); setWorkspaceView("current"); }}>Open week</button></article>)}</div> : <div className="activity-empty">No saved weekly plans yet.</div>}
+    </section> : loading ? <section className="panel activity-empty">Loading {supervisorName}’s weekly planner…</section> : <>
       <section className="supervisor-kpi-focus">
         <article className="panel"><header><BarChart3 /><div><span>Area focus</span><strong>Bottom-store attention</strong></div></header>{kpiFocus.bottom.length ? kpiFocus.bottom.map((item) => <div className="focus-store" key={item.storeId}><b>{storeMap.get(item.storeId)?.name} {storeMap.get(item.storeId)?.store_number}</b><small>Appears near the bottom across {item.score} current KPI comparisons</small></div>) : <p>More KPI history is needed for this week.</p>}</article>
         <article className="panel"><header><AlertTriangle /><div><span>Trend watch</span><strong>Moving the wrong direction</strong></div></header>{kpiFocus.trends.length ? kpiFocus.trends.map((trend) => <div className="trend-warning" key={`${trend.storeId}-${trend.label}`}><b>{storeMap.get(trend.storeId)?.name} · {trend.label}</b><small>{formatMetric(trend.oldValue, trend.format)} → {formatMetric(trend.newValue, trend.format)} over the latest four reported weeks</small></div>) : <p>No clear negative four-week trends in the available results.</p>}</article>
@@ -252,7 +271,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
         </div>
       </section>
 
-      <section className="panel live-visit-schedule"><div className="table-toolbar"><div><p className="eyebrow">Live schedule</p><h2>Visits and field work</h2><p>Changes update the private Team Calendar. Original details remain in the audit history.</p></div><button className="button primary" onClick={() => openAddVisit()}><Plus size={16}/>Add visit</button></div>{visits.length ? <div className="visit-schedule-list">{visits.map((visit) => <article key={visit.id} className={visit.edited_from_original ? "edited" : ""}><div className="visit-schedule-date"><b>{fromIso(visit.visit_date).toLocaleDateString(undefined, { weekday: "short" })}</b><span>{dateLabel(visit.visit_date)}</span></div><div className="visit-schedule-fields"><label>Store<select value={visit.store_id} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, store_id: event.target.value } : item))}>{storesForVisit(visit.purpose, visit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label><label>Start<input type="time" value={visit.start_time.slice(0, 5)} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, start_time: event.target.value } : item))}/></label><label>End<input type="time" value={visit.end_time.slice(0, 5)} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, end_time: event.target.value } : item))}/></label><label>Type<select value={visit.purpose} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, purpose: event.target.value } : item))}>{visitOptions.map((option) => <option key={option}>{option}</option>)}</select></label><label className="visit-notes">Notes<input value={visit.notes ?? ""} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, notes: event.target.value } : item))}/></label></div><div className="visit-schedule-actions">{visit.edited_from_original && <small>Edited from original{visit.last_change_reason ? ` · ${visit.last_change_reason}` : ""}</small>}<button className="button secondary compact" onClick={() => onOpenVisitLog(visit.id)}><ClipboardCheck size={14}/>Visit form</button><button className="button secondary compact" disabled={busy} onClick={() => void updateVisit(visit)}><Save size={14}/>Save</button><button className="icon-button danger" aria-label="Remove visit" onClick={() => void cancelVisit(visit)}><Trash2 size={16}/></button></div></article>)}</div> : <div className="activity-empty compact">No visits are scheduled yet. Use the checklist or Add visit to build the week.</div>}</section>
+      <section className="panel live-visit-schedule"><div className="table-toolbar"><div><p className="eyebrow">Live schedule</p><h2>Visits and field work</h2><p>Changes update the private Team Calendar. Original details remain in the audit history.</p></div><button className="button primary" onClick={() => openAddVisit()}><Plus size={16}/>Add visit</button></div>{visits.length ? <div className="visit-schedule-list">{visits.map((visit) => <article key={visit.id} className={visit.edited_from_original ? "edited" : ""}><div className="visit-schedule-date"><b>{fromIso(visit.visit_date).toLocaleDateString(undefined, { weekday: "short" })}</b><span>{dateLabel(visit.visit_date)}</span></div><div className="visit-schedule-fields"><label>Store<select value={visit.store_id} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, store_id: event.target.value } : item))}>{storesForVisit(visit.purpose, visit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label><label>Start<input type="time" value={visit.start_time.slice(0, 5)} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, start_time: event.target.value } : item))}/></label><label>End<input type="time" value={visit.end_time.slice(0, 5)} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, end_time: event.target.value } : item))}/></label><label>Type<select value={visit.purpose} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, purpose: event.target.value } : item))}>{visitOptions.map((option) => <option key={option}>{option}</option>)}</select></label><label className="visit-notes">Notes<input value={visit.notes ?? ""} onChange={(event) => setVisits((current) => current.map((item) => item.id === visit.id ? { ...item, notes: event.target.value } : item))}/></label></div><div className="visit-schedule-actions">{visit.edited_from_original && <small>Edited from original{visit.last_change_reason ? ` · ${visit.last_change_reason}` : ""}</small>}<button className="button secondary compact" onClick={() => { onOpenVisitLog(visit.id); setWorkspaceView("visits"); }}><ClipboardCheck size={14}/>Visit form</button><button className="button secondary compact" disabled={busy} onClick={() => void updateVisit(visit)}><Save size={14}/>Save</button><button className="icon-button danger" aria-label="Remove visit" onClick={() => void cancelVisit(visit)}><Trash2 size={16}/></button></div></article>)}</div> : <div className="activity-empty compact">No visits are scheduled yet. Use the checklist or Add visit to build the week.</div>}</section>
 
       <section className="panel store-weekly-checklist"><div className="table-toolbar"><div><p className="eyebrow">Per-store checklist</p><h2>Complete for every assigned store</h2></div></div><div className="responsive-table"><table><thead><tr><th>Store</th>{storeChecks.map(([, label]) => <th key={label}>{label}</th>)}</tr></thead><tbody>{assignedStores.map((store) => <tr key={store.id}><td><b>{store.name}</b><small>{store.store_number}</small></td>{storeChecks.map(([key]) => <td key={key}><input aria-label={`${store.name} ${key}`} type="checkbox" checked={Boolean(draft.store_checklist[store.id]?.[key])} onChange={(event) => changeDraft({ store_checklist: { ...draft.store_checklist, [store.id]: { ...(draft.store_checklist[store.id] ?? {}), [key]: event.target.checked } } })}/></td>)}</tr>)}</tbody></table></div></section>
 
