@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Pencil, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Pencil, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import SupervisorVisitLog from "./SupervisorVisitLog";
@@ -43,6 +43,19 @@ type KpiRow = { store_id: string; week_end: string; metrics: Record<string, unkn
 type KpiData = { history?: KpiRow[]; results?: KpiRow[] };
 type VisitLogStatus = { schedule_id: string; status: "draft" | "submitted"; completion_percent: number };
 type WorkspaceView = "current" | "history" | "visits" | "expectations";
+type RegionalAction = { id: string; store_id: string; metric: string; note: string; action: string; owner: string; due_date: string; status: "open" | "in_progress" | "done"; outcome: string };
+type RegionalPlan = {
+  id: string;
+  version: number;
+  supervisor_id: string;
+  week_end: string;
+  followup_date: string;
+  status: "released" | "closed" | string;
+  director_notes: string;
+  followup_notes: string;
+  actions: RegionalAction[];
+  snapshot: { supervisor_name: string; stores: Array<{ id: string; name: string; store_number?: string | null; metrics: Record<string, { value: number | null; goal: number | null }> }> };
+};
 
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const storeChecks = [
@@ -76,6 +89,8 @@ const metricConfigs = [
   { key: "load", label: "Load", source: "avg_load", lowerBetter: true, format: "number" },
   { key: "adt", label: "ADT", source: "avg_adt", lowerBetter: true, format: "number" },
 ] as const;
+const regionalMetricLabels: Record<string, string> = { sales: "Sales", pcya: "Sales PCYA", labor: "Labor", splh: "SPLH", food: "Food variance", load: "Load", adt: "ADT" };
+const regionalMetricFormats: Record<string, string> = { sales: "currency", pcya: "percent", labor: "percent", splh: "currency", food: "percent", load: "number", adt: "number" };
 
 function iso(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
 function fromIso(value: string) { return new Date(`${value}T12:00:00`); }
@@ -87,8 +102,15 @@ function scheduleMinutes(value: string) { const [hour, minute] = value.slice(0, 
 function numberValue(value: unknown) { if (value === null || value === undefined || value === "") return null; const parsed = Number(String(value).replace(/[$,%\s]/g, "")); return Number.isFinite(parsed) ? parsed : null; }
 function average(values: number[]) { return values.reduce((sum, value) => sum + value, 0) / values.length; }
 function formatMetric(value: number, format: string) { if (format === "currency") return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value > 1000 ? 0 : 2 }); if (format === "percent") return `${(Math.abs(value) <= 1 ? value * 100 : value).toFixed(1)}%`; return value.toFixed(2); }
+function regionalMetricValue(value: number | null | undefined, metric: string) { return value === null || value === undefined ? "not available" : formatMetric(value, regionalMetricFormats[metric] ?? "number"); }
 function blankPlan(supervisorId: string, weekStart: string): Omit<WeeklyPlan, "id" | "updated_by" | "updated_at"> { return { supervisor_id: supervisorId, week_start: weekStart, days_off: "", hours_by_day: {}, rush_shifts: {}, top_priorities: "", store_checklist: {}, notes: "", status: "live" }; }
 function isAllStores(store: Store) { return [store.name, store.store_number].some((value) => /^all\s*stores$/i.test((value ?? "").trim())); }
+function regionalPlanApplies(plan: RegionalPlan, weekStart: string, weekEnd: string) {
+  const activeFrom = addIsoDays(plan.week_end, 1);
+  const activeUntil = [plan.followup_date, ...plan.actions.map((action) => action.due_date)].sort().at(-1) ?? plan.followup_date;
+  const hasOpenWork = plan.status === "released" && plan.actions.some((action) => action.status !== "done");
+  return activeFrom <= weekEnd && (hasOpenWork || activeUntil >= weekStart);
+}
 
 export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { profile: Profile; onOpenVisitLog: (scheduleId: string) => void }) {
   const isAdmin = profile.role === "admin";
@@ -102,6 +124,10 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
   const [visits, setVisits] = useState<Visit[]>([]);
   const [visitLogStatuses, setVisitLogStatuses] = useState<Record<string, VisitLogStatus>>({});
   const [kpi, setKpi] = useState<KpiData>({});
+  const [regionalPlans, setRegionalPlans] = useState<RegionalPlan[]>([]);
+  const [regionalError, setRegionalError] = useState("");
+  const [followupEditor, setFollowupEditor] = useState<{ planId: string; actionId: string; status: RegionalAction["status"]; outcome: string } | null>(null);
+  const [followupBusy, setFollowupBusy] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingVisitId, setEditingVisitId] = useState<string | null>(null);
   const [newVisit, setNewVisit] = useState({ store_id: "", visit_date: monday(), start_time: "09:00", end_time: "12:00", purpose: "Training visit", notes: "" });
@@ -138,7 +164,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     if (!supabase || !supervisorId) return;
     if (showLoading) setLoading(true);
     const selectedSupervisor = supervisors.find((item) => item.id === supervisorId);
-    const [storeResult, assignmentResult, planResult, visitResult, visitLogResult, historyResult, kpiResult] = await Promise.all([
+    const [storeResult, assignmentResult, planResult, visitResult, visitLogResult, historyResult, kpiResult, regionalResult] = await Promise.all([
       supabase.from("stores").select("id,name,store_number").eq("active", true).order("name"),
       supabase.from("profile_store_assignments").select("store_id").eq("profile_id", supervisorId),
       supabase.from("supervisor_weekly_plans").select("id,supervisor_id,week_start,days_off,hours_by_day,rush_shifts,top_priorities,store_checklist,notes,status,updated_by,updated_at").eq("supervisor_id", supervisorId).eq("week_start", weekStart).maybeSingle(),
@@ -146,6 +172,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
       supabase.from("supervisor_visit_logs").select("schedule_id,status,completion_percent").eq("supervisor_id", supervisorId).gte("visit_date", weekStart).lte("visit_date", weekEnd).not("schedule_id", "is", null),
       supabase.from("supervisor_weekly_plans").select("id,supervisor_id,week_start,days_off,hours_by_day,rush_shifts,top_priorities,store_checklist,notes,status,updated_by,updated_at").eq("supervisor_id", supervisorId).order("week_start", { ascending: false }).limit(52),
       supabase.functions.invoke("kpi-dashboard", { body: { week_end: addIsoDays(weekStart, -1) } }),
+      supabase.functions.invoke("kpi-plans", { body: { action: "list" } }),
     ]);
     const firstError = [storeResult.error, assignmentResult.error, planResult.error, visitResult.error, visitLogResult.error, historyResult.error].find(Boolean);
     if (firstError) { setMessage(firstError.message); setLoading(false); return; }
@@ -161,12 +188,19 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     setVisitLogStatuses(Object.fromEntries(((visitLogResult.data ?? []) as VisitLogStatus[]).map((item) => [item.schedule_id, item])));
     setPastPlans((historyResult.data ?? []) as WeeklyPlan[]);
     setKpi((kpiResult.data?.ok ? kpiResult.data : {}) as KpiData);
+    if (regionalResult.error || !regionalResult.data?.ok) {
+      setRegionalPlans([]);
+      setRegionalError(regionalResult.data?.error || regionalResult.error?.message || "KPI action plans could not be loaded.");
+    } else {
+      setRegionalPlans(((regionalResult.data.plans ?? []) as RegionalPlan[]).filter((item) => item.supervisor_id === supervisorId && (isAdmin || ["released", "closed"].includes(item.status))));
+      setRegionalError("");
+    }
     const firstStore = nextStores.find((store) => assigned.has(store.id));
     setNewVisit((current) => ({ ...current, store_id: assigned.has(current.store_id) ? current.store_id : (firstStore?.id ?? ""), visit_date: current.visit_date >= weekStart && current.visit_date <= weekEnd ? current.visit_date : weekStart }));
     setDirty(false);
     setVisitDirty(false);
     setLoading(false);
-  }, [supervisorId, supervisors, weekStart, weekEnd]);
+  }, [isAdmin, supervisorId, supervisors, weekStart, weekEnd]);
 
   useEffect(() => { void loadSupervisors(); }, [loadSupervisors]);
   useEffect(() => { void load(); }, [load]);
@@ -310,6 +344,31 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     return { bottom, trends: trends.sort((a, b) => b.severity - a.severity).slice(0, 5) };
   }, [assignedStoreIds, kpi]);
 
+  const applicableRegionalPlans = useMemo(() => regionalPlans.filter((item) => regionalPlanApplies(item, weekStart, weekEnd)).sort((a, b) => b.week_end.localeCompare(a.week_end)), [regionalPlans, weekEnd, weekStart]);
+  const regionalActionSnapshots = useMemo(() => applicableRegionalPlans.flatMap((regionalPlan) => regionalPlan.actions.map((action) => ({ regionalPlan, action }))).sort((left, right) => {
+    const statusOrder = { open: 0, in_progress: 1, done: 2 };
+    return statusOrder[left.action.status] - statusOrder[right.action.status] || left.action.due_date.localeCompare(right.action.due_date);
+  }), [applicableRegionalPlans]);
+
+  const saveRegionalFollowup = async () => {
+    if (!supabase || !followupEditor) return;
+    const regionalPlan = regionalPlans.find((item) => item.id === followupEditor.planId);
+    if (!regionalPlan) return;
+    setFollowupBusy(true);
+    setRegionalError("");
+    const actions = regionalPlan.actions.map((action) => action.id === followupEditor.actionId ? { ...action, status: followupEditor.status, outcome: followupEditor.outcome } : action);
+    const { data, error } = await supabase.functions.invoke("kpi-plans", { body: { action: "save", id: regionalPlan.id, version: regionalPlan.version, status: regionalPlan.status, actions, followup_notes: regionalPlan.followup_notes ?? "" } });
+    setFollowupBusy(false);
+    if (error || !data?.ok) {
+      setRegionalError(data?.error || error?.message || "The KPI follow-up could not be saved.");
+      return;
+    }
+    setRegionalPlans((current) => current.map((item) => item.id === regionalPlan.id ? data.plan as RegionalPlan : item));
+    setFollowupEditor(null);
+    setMessage("KPI action progress saved from the Area Supervisor dashboard.");
+    window.dispatchEvent(new CustomEvent("dashos:kpi-followup-changed"));
+  };
+
   const planUpdatedBy = supervisors.find((item) => item.id === plan?.updated_by)?.full_name ?? (plan?.updated_by === profile.id ? profile.fullName : "leadership");
   return <div className="page area-supervisor-dashboard">
     <div className="page-heading supervisor-dashboard-heading">
@@ -331,7 +390,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
       {pastPlans.length ? <div className="supervisor-history-list">{pastPlans.map((item) => <article key={item.id}><div><strong>{dateLabel(item.week_start)}–{dateLabel(addIsoDays(item.week_start, 6))}</strong><span className={`status-pill ${item.status}`}>{item.status === "complete" ? "Complete" : "Live"}</span></div><p>{item.top_priorities || item.notes || "No priorities or notes were entered."}</p><small>Updated {new Date(item.updated_at).toLocaleString()}</small><button className="button secondary compact" onClick={() => { setWeekStart(item.week_start); setWorkspaceView("current"); }}>Open week</button></article>)}</div> : <div className="activity-empty">No saved weekly plans yet.</div>}
     </section> : loading ? <section className="panel activity-empty">Loading {supervisorName}’s weekly planner…</section> : <>
       <section className="supervisor-kpi-focus">
-        <article className="panel"><header><BarChart3 /><div><span>Area focus</span><strong>Bottom-store attention</strong></div></header>{kpiFocus.bottom.length ? kpiFocus.bottom.map((item) => <div className="focus-store" key={item.storeId}><b>{storeMap.get(item.storeId)?.name} {storeMap.get(item.storeId)?.store_number}</b><small>Appears near the bottom across {item.score} current KPI comparisons</small></div>) : <p>More KPI history is needed for this week.</p>}</article>
+        <article className="panel regional-area-focus"><header><Target /><div><span>Area focus</span><strong>{regionalActionSnapshots.length ? "Director action plan" : "Bottom-store attention"}</strong></div>{regionalActionSnapshots.length > 0 && <em>{applicableRegionalPlans.some((item) => item.status === "director_review") ? "Awaiting Director" : `${regionalActionSnapshots.filter((item) => item.action.status !== "done").length} open`}</em>}</header>{regionalActionSnapshots.length ? <><div className="regional-focus-context"><small>Applies to {dateLabel(weekStart)}–{dateLabel(weekEnd)}</small>{applicableRegionalPlans[0]?.director_notes && <p>{applicableRegionalPlans[0].director_notes}</p>}</div><div className="regional-focus-actions">{regionalActionSnapshots.slice(0, 3).map(({ regionalPlan, action }) => { const snapshotStore = regionalPlan.snapshot.stores.find((store) => store.id === action.store_id); const metric = snapshotStore?.metrics[action.metric]; const released = regionalPlan.status === "released"; return <button type="button" disabled={!released} key={`${regionalPlan.id}-${action.id}`} className={`regional-focus-action ${action.status} ${released ? "" : "pending-release"}`} onClick={() => released && setFollowupEditor({ planId: regionalPlan.id, actionId: action.id, status: action.status, outcome: action.outcome })}><span><b>{snapshotStore?.name ?? storeMap.get(action.store_id)?.name ?? "Assigned store"} · {regionalMetricLabels[action.metric] ?? action.metric}</b><em>{!released ? "Director review" : action.status === "in_progress" ? "In progress" : action.status === "done" ? "Done" : action.due_date < iso(new Date()) ? "Past due" : "Open"}</em></span><p>{action.action || action.note || "Review this KPI concern with the store."}</p><small>{metric ? `Baseline ${regionalMetricValue(metric.value, action.metric)} → Goal ${regionalMetricValue(metric.goal, action.metric)}` : "KPI action"} · Due {dateLabel(action.due_date)}</small></button>; })}</div>{regionalActionSnapshots.length > 3 && <span className="regional-more-actions">+ {regionalActionSnapshots.length - 3} more action{regionalActionSnapshots.length - 3 === 1 ? "" : "s"} in this plan</span>}</> : <>{kpiFocus.bottom.length ? kpiFocus.bottom.map((item) => <div className="focus-store" key={item.storeId}><b>{storeMap.get(item.storeId)?.name} {storeMap.get(item.storeId)?.store_number}</b><small>Appears near the bottom across {item.score} current KPI comparisons</small></div>) : <p>More KPI history is needed for this week.</p>}</>}{regionalError && <small className="regional-focus-error">{regionalError}</small>}</article>
         <article className="panel"><header><AlertTriangle /><div><span>Trend watch</span><strong>Moving the wrong direction</strong></div></header>{kpiFocus.trends.length ? kpiFocus.trends.map((trend) => <div className="trend-warning" key={`${trend.storeId}-${trend.label}`}><b>{storeMap.get(trend.storeId)?.name} · {trend.label}</b><small>{formatMetric(trend.oldValue, trend.format)} → {formatMetric(trend.newValue, trend.format)} over the latest four reported weeks</small></div>) : <p>No clear negative four-week trends in the available results.</p>}</article>
       </section>
 
@@ -379,5 +438,6 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
       <label>Notes <small>(optional)</small><textarea rows={3} value={newVisit.notes} onChange={(event) => setNewVisit({ ...newVisit, notes: event.target.value })}/></label><p className="visit-editor-preview">{newVisit.visit_date ? `${dateLabel(newVisit.visit_date)} · ${timeLabel(newVisit.start_time)}–${timeLabel(newVisit.end_time)}` : "Choose a date and time"}</p>
       <div className="button-row"><button className="button secondary" onClick={() => { setEditorOpen(false); setEditingVisitId(null); }}>Cancel</button><button className="button primary" disabled={!newVisit.store_id || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)} onClick={addVisit}>{editingVisitId ? <Save size={16}/> : <Plus size={16}/>} {editingVisitId ? "Save visit changes" : "Add to weekly board"}</button></div>
     </section></div>}
+    {followupEditor && (() => { const regionalPlan = regionalPlans.find((item) => item.id === followupEditor.planId); const action = regionalPlan?.actions.find((item) => item.id === followupEditor.actionId); const snapshotStore = regionalPlan?.snapshot.stores.find((store) => store.id === action?.store_id); if (!regionalPlan || !action) return null; return <div className="modal-backdrop" onClick={() => !followupBusy && setFollowupEditor(null)}><section className="ticket-modal regional-field-followup" onClick={(event) => event.stopPropagation()}><button className="icon-button modal-close" aria-label="Close KPI follow-up" disabled={followupBusy} onClick={() => setFollowupEditor(null)}>×</button><p className="eyebrow">Area focus · field follow-up</p><h2>{snapshotStore?.name ?? "Assigned store"} · {regionalMetricLabels[action.metric] ?? action.metric}</h2><p className="regional-field-instruction">{action.action || action.note || "Review this KPI concern with the store."}</p><div className="regional-field-meta"><span>Results week ending <b>{dateLabel(regionalPlan.week_end)}</b></span><span>Follow-up due <b>{dateLabel(action.due_date)}</b></span>{action.owner && <span>Owner <b>{action.owner}</b></span>}</div><label>Progress<select value={followupEditor.status} onChange={(event) => setFollowupEditor({ ...followupEditor, status: event.target.value as RegionalAction["status"] })}><option value="open">Open</option><option value="in_progress">In progress</option><option value="done">Done</option></select></label><label>Outcome / field evidence<textarea rows={5} value={followupEditor.outcome} onChange={(event) => setFollowupEditor({ ...followupEditor, outcome: event.target.value })} placeholder="What was completed, observed, coached, or still needs attention?"/></label><small>This updates the same Regional KPI Plan used by the Director—no separate form or duplicate entry.</small><div className="button-row"><button className="button secondary" disabled={followupBusy} onClick={() => setFollowupEditor(null)}>Cancel</button><button className="button primary" disabled={followupBusy} onClick={() => void saveRegionalFollowup()}><Save size={16}/>{followupBusy ? "Saving…" : "Save follow-up"}</button></div></section></div>; })()}
   </div>;
 }

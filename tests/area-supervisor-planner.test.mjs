@@ -82,3 +82,12 @@ test("scheduled visits prefill their linked form and provide a printable recap",
   assert.match(print, /Generated from the permanent DASH visit record/);
   assert.match(print, /team-powers-logo\.png/);
 });
+
+test("released KPI action plans appear in Area Focus and can be updated without leaving the field dashboard", () => {
+  assert.match(component, /supabase\.functions\.invoke\("kpi-plans", \{ body: \{ action: "list" \} \}\)/);
+  assert.match(component, /regionalPlanApplies/);
+  assert.match(component, /Director action plan/);
+  assert.match(component, /Outcome \/ field evidence/);
+  assert.match(component, /Save follow-up/);
+  assert.match(component, /This updates the same Regional KPI Plan used by the Director/);
+});
