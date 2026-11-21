@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Camera, Check, FileImage, Upload } from "lucide-react";
+import { Check, FileImage, Upload } from "lucide-react";
 import type { Profile } from "../types";
 import { supabase } from "../lib/supabase";
 
@@ -72,15 +72,16 @@ export default function Receipts({ profile }: { profile: Profile }) {
       ) : (
         <form className="panel receipt-form" onSubmit={submit}>
           <label className="upload-zone">
-            <input type="file" accept="image/*,.pdf" capture="environment" onChange={(event) => {
-              const selected = event.target.files?.[0] ?? null;
+            <input type="file" aria-label="Choose receipt photo or PDF" accept="image/*,.pdf" style={{ position: "static", opacity: 1, pointerEvents: "auto", maxWidth: "100%" }} onChange={(event) => {
+              const selected = event.target.files?.[0];
+              if (!selected) return;
               setFile(selected);
-              setFileName(selected?.name ?? "");
+              setFileName(selected.name);
             }} />
             {fileName ? <FileImage size={32} /> : <Upload size={32} />}
             <strong>{fileName || "Upload or photograph the receipt"}</strong>
             <span>JPG, PNG, HEIC, or PDF · Make sure the total is readable</span>
-            <span className="mobile-camera"><Camera size={16} /> Camera available on mobile</span>
+            <span>Choose an existing photo or PDF from your device.</span>
           </label>
           <div className="form-grid">
             <label>Purchase date<input name="purchase_date" type="date" required /></label>
