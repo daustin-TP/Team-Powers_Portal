@@ -138,6 +138,29 @@ type Settings = {
   late_driver_rule: "none" | "hour_before_close" | "until_close" | "second_closer";
 };
 type Availability = { id?: string; member_id: string; day_of_week: number; start_time: string; end_time: string; available: boolean; kind: "standard" | "rto"; week_start?: string; reason?: string; source_time_off_request_id?: string | null; source_availability_request_id?: string | null };
+
+function availabilityCellCopy(standard?: Availability, rto?: Availability) {
+  if (rto) {
+    const allDay = rto.start_time.slice(0, 5) === "00:00" && rto.end_time.slice(0, 5) === "23:59";
+    return {
+      summary: allDay ? "⛔ Not available" : `⚠ Unavailable ${displayTime(rto.start_time)}–${displayTime(rto.end_time)}`,
+      detail: rto.source_time_off_request_id
+        ? "✓ Approved paid leave"
+        : rto.source_availability_request_id
+          ? "✓ Approved request off"
+          : "Requested time off",
+    };
+  }
+  const allDay = !standard || (standard.start_time.slice(0, 5) === "00:00" && standard.end_time.slice(0, 5) === "23:59" && standard.available);
+  return {
+    summary: standard && !standard.available
+      ? "⛔ Not available"
+      : allDay
+        ? "✓ Available"
+        : `⚠ ${displayTime(standard!.start_time)}–${displayTime(standard!.end_time)}`,
+    detail: "",
+  };
+}
 type AvailabilityRequest = { id:string; member_id:string; member_name:string; member_email:string|null; request_kind:"one_time"|"recurring"; selected_dates:string[]; selected_weekdays:number[]; all_day:boolean; start_time:string; end_time:string; note:string; status:string; review_note:string; created_at:string };
 type SchedulingEvent = {
   id: string;
@@ -1266,7 +1289,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
             {availabilityForm.kind === "rto" && <label>Reason or note <span className="optional-label">Optional</span><input value={availabilityForm.reason} onChange={(event) => setAvailabilityForm({ ...availabilityForm, reason: event.target.value })} placeholder="Appointment, vacation, school event…" /></label>}
             <div className="button-row"><button className="button primary" onClick={() => void saveAvailability()}><Save size={17} />Save {availabilityForm.kind === "standard" ? "availability" : "request"}</button>{selectedAvailabilityEntry && !selectedAvailabilityEntry.source_time_off_request_id && <button className="button secondary danger" onClick={() => void clearAvailability()}><Trash2 size={17} />Clear entry</button>}</div>
           </section>
-          <section className="panel availability-week-panel"><div className="table-toolbar"><div><p className="eyebrow">Week at a glance</p><h2>Standard availability + requests</h2><p>Click any employee/day cell to edit it. Blue is recurring availability; orange/red is requested time off for this selected week. Approved paid leave is controlled from PTO &amp; Vacation.</p></div></div>{members.length === 0 ? <div className="activity-empty">Add employees to the roster before recording availability.</div> : <div className="responsive-table"><table className="availability-table"><thead><tr><th>Employee</th>{days.map((day, dayIndex) => <th key={day}>{day.slice(0, 3)}<small>{formatScheduleDate(weekStart, dayIndex, true)}</small></th>)}</tr></thead><tbody>{members.map((member) => <tr key={member.id}><td><strong>{member.display_name}</strong></td>{days.map((_, day) => { const standard = availability.find((item) => item.member_id === member.id && item.day_of_week === day && item.kind === "standard"); const rto = availability.find((item) => item.member_id === member.id && item.day_of_week === day && item.kind === "rto"); const standardAllDay = !standard || (standard.start_time.slice(0, 5) === "00:00" && standard.end_time.slice(0, 5) === "23:59" && standard.available); return <td key={day}><button className={`availability-cell-button ${rto ? "has-rto" : standard && !standard.available ? "unavailable" : standardAllDay ? "available" : "limited"}`} onClick={() => chooseAvailability(member.id, day, rto ? "rto" : "standard")}><span>{standard && !standard.available ? "⛔ Not available" : standardAllDay ? "✓ Available" : `⚠ ${displayTime(standard!.start_time)}–${displayTime(standard!.end_time)}`}</span>{rto && <strong>{rto.source_time_off_request_id ? "✓ Approved paid leave" : "RTO"} · {rto.start_time.slice(0, 5) === "00:00" && rto.end_time.slice(0, 5) === "23:59" ? "all day" : `${displayTime(rto.start_time)}–${displayTime(rto.end_time)}`}</strong>}</button></td>; })}</tr>)}</tbody></table></div>}</section>
+          <section className="panel availability-week-panel"><div className="table-toolbar"><div><p className="eyebrow">Week at a glance</p><h2>Standard availability + requests</h2><p>Click any employee/day cell to edit it. Blue is recurring availability; orange/red is requested time off for this selected week. Approved paid leave is controlled from PTO &amp; Vacation.</p></div></div>{members.length === 0 ? <div className="activity-empty">Add employees to the roster before recording availability.</div> : <div className="responsive-table"><table className="availability-table"><thead><tr><th>Employee</th>{days.map((day, dayIndex) => <th key={day}>{day.slice(0, 3)}<small>{formatScheduleDate(weekStart, dayIndex, true)}</small></th>)}</tr></thead><tbody>{members.map((member) => <tr key={member.id}><td><strong>{member.display_name}</strong></td>{days.map((_, day) => { const standard = availability.find((item) => item.member_id === member.id && item.day_of_week === day && item.kind === "standard"); const rto = availability.find((item) => item.member_id === member.id && item.day_of_week === day && item.kind === "rto"); const display = availabilityCellCopy(standard, rto); const standardAllDay = !standard || (standard.start_time.slice(0, 5) === "00:00" && standard.end_time.slice(0, 5) === "23:59" && standard.available); return <td key={day}><button className={`availability-cell-button ${rto ? "has-rto" : standard && !standard.available ? "unavailable" : standardAllDay ? "available" : "limited"}`} onClick={() => chooseAvailability(member.id, day, rto ? "rto" : "standard")}><span>{display.summary}</span>{display.detail && <strong>{display.detail}</strong>}</button></td>; })}</tr>)}</tbody></table></div>}</section>
         </div>
       ) : view === "events" ? (
         <div className="labor-event-layout">

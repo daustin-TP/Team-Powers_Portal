@@ -35,3 +35,10 @@ test("manager approval writes protected scheduler availability",()=>{
   assert.match(labor,/Approve &amp; apply/);
   assert.match(labor,/selected_days:number\[\]/);
 });
+
+test("approved requests replace the misleading available label in the week view",()=>{
+  assert.match(labor,/if \(rto\)/);
+  assert.match(labor,/allDay \? "⛔ Not available"/);
+  assert.match(labor,/"✓ Approved request off"/);
+  assert.match(labor,/display\.summary/);
+});
