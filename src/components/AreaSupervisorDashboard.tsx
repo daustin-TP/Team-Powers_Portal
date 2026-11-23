@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
-import { AlertTriangle, BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Pencil, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, CalendarClock, Camera, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Pencil, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import SupervisorVisitLog from "./SupervisorVisitLog";
@@ -43,6 +43,7 @@ type WeeklyPlan = {
 type KpiRow = { store_id: string; week_end: string; metrics: Record<string, unknown> };
 type KpiData = { history?: KpiRow[]; results?: KpiRow[] };
 type VisitLogStatus = { schedule_id: string; status: "draft" | "submitted"; completion_percent: number };
+type CutTest = { id: string; supervisor_id: string; store_id: string; week_start: string; result: "great" | "remake"; made_by: string; image_path: string; created_at: string };
 type WorkspaceView = "current" | "history" | "visits" | "expectations";
 type RegionalAction = { id: string; store_id: string; metric: string; note: string; action: string; owner: string; due_date: string; status: "open" | "in_progress" | "done"; outcome: string };
 type RegionalPlan = {
@@ -74,9 +75,8 @@ const visitRequirements = [
   { key: "rush", label: "Rush observation", target: 1, match: (purpose: string) => purpose === "Rush observation", add: "Rush observation" },
   { key: "game-day", label: "Game Day visits", target: "per-store" as const, match: (purpose: string) => purpose === "Game Day visit", add: "Game Day visit" },
   { key: "feel-good", label: "Feel-good visit", target: 1, match: (purpose: string) => purpose === "Feel-good visit", add: "Feel-good visit" },
-  { key: "cut-test", label: "Cut test", target: 1, match: (purpose: string) => purpose === "Cut test", add: "Cut test" },
 ];
-const visitOptions = ["Training visit", "Game Day visit", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Cut test", "KPI / goal follow-up", "Operations review", "Schedule review", "Other"];
+const visitOptions = ["Training visit", "Game Day visit", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "KPI / goal follow-up", "Operations review", "Schedule review", "Other"];
 const connectedLogTypes = new Set(visitOptions.filter((option) => option !== "Other"));
 const timeOptions = Array.from({ length: 88 }, (_, index) => {
   const totalMinutes = (6 * 60 + index * 15) % (24 * 60);
@@ -132,6 +132,10 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
   const [draft, setDraft] = useState(() => blankPlan(profile.id, monday()));
   const [visits, setVisits] = useState<Visit[]>([]);
   const [visitLogStatuses, setVisitLogStatuses] = useState<Record<string, VisitLogStatus>>({});
+  const [cutTests, setCutTests] = useState<CutTest[]>([]);
+  const [cutTestStore, setCutTestStore] = useState<Store | null>(null);
+  const [cutTestDraft, setCutTestDraft] = useState<{ result: "great" | "remake" | ""; made_by: string; photo: File | null }>({ result: "", made_by: "", photo: null });
+  const [cutTestBusy, setCutTestBusy] = useState(false);
   const [kpi, setKpi] = useState<KpiData>({});
   const [regionalPlans, setRegionalPlans] = useState<RegionalPlan[]>([]);
   const [regionalError, setRegionalError] = useState("");
@@ -179,17 +183,18 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     if (!supabase || !supervisorId) return;
     if (showLoading) setLoading(true);
     const selectedSupervisor = supervisors.find((item) => item.id === supervisorId);
-    const [storeResult, assignmentResult, planResult, visitResult, visitLogResult, historyResult, kpiResult, regionalResult] = await Promise.all([
+    const [storeResult, assignmentResult, planResult, visitResult, visitLogResult, cutTestResult, historyResult, kpiResult, regionalResult] = await Promise.all([
       supabase.from("stores").select("id,name,store_number").eq("active", true).order("name"),
       supabase.from("profile_store_assignments").select("store_id").eq("profile_id", supervisorId),
       supabase.from("supervisor_weekly_plans").select("id,supervisor_id,week_start,days_off,hours_by_day,rush_shifts,top_priorities,store_checklist,notes,status,updated_by,updated_at").eq("supervisor_id", supervisorId).eq("week_start", weekStart).maybeSingle(),
       supabase.from("supervisor_visit_schedules").select("id,supervisor_id,store_id,visit_date,start_time,end_time,purpose,notes,status,weekly_plan_id,edited_from_original,last_change_reason").eq("supervisor_id", supervisorId).gte("visit_date", weekStart).lte("visit_date", weekEnd).neq("status", "cancelled").order("visit_date").order("start_time"),
       supabase.from("supervisor_visit_logs").select("schedule_id,status,completion_percent").eq("supervisor_id", supervisorId).gte("visit_date", weekStart).lte("visit_date", weekEnd).not("schedule_id", "is", null),
+      supabase.from("supervisor_cut_tests").select("id,supervisor_id,store_id,week_start,result,made_by,image_path,created_at").eq("supervisor_id", supervisorId).eq("week_start", weekStart).order("created_at", { ascending: false }),
       supabase.from("supervisor_weekly_plans").select("id,supervisor_id,week_start,days_off,hours_by_day,rush_shifts,top_priorities,store_checklist,notes,status,updated_by,updated_at").eq("supervisor_id", supervisorId).order("week_start", { ascending: false }).limit(52),
       supabase.functions.invoke("kpi-dashboard", { body: { week_end: addIsoDays(weekStart, -1) } }),
       supabase.functions.invoke("kpi-plans", { body: { action: "list" } }),
     ]);
-    const firstError = [storeResult.error, assignmentResult.error, planResult.error, visitResult.error, visitLogResult.error, historyResult.error].find(Boolean);
+    const firstError = [storeResult.error, assignmentResult.error, planResult.error, visitResult.error, visitLogResult.error, cutTestResult.error, historyResult.error].find(Boolean);
     if (firstError) { setMessage(firstError.message); setLoading(false); return; }
     const nextStores = ((storeResult.data ?? []) as Store[]).filter((store) => !isAllStores(store));
     const assigned = new Set((assignmentResult.data ?? []).map((row) => row.store_id));
@@ -201,6 +206,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     setDraft(savedPlan ?? blankPlan(supervisorId, weekStart));
     setVisits((visitResult.data ?? []) as Visit[]);
     setVisitLogStatuses(Object.fromEntries(((visitLogResult.data ?? []) as VisitLogStatus[]).map((item) => [item.schedule_id, item])));
+    setCutTests((cutTestResult.data ?? []) as CutTest[]);
     setPastPlans((historyResult.data ?? []) as WeeklyPlan[]);
     setKpi((kpiResult.data?.ok ? kpiResult.data : {}) as KpiData);
     if (regionalResult.error || !regionalResult.data?.ok) {
@@ -228,6 +234,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
       .on("postgres_changes", { event: "*", schema: "public", table: "supervisor_weekly_plans" }, () => { if (!dirty && !visitDirty) void load(false); })
       .on("postgres_changes", { event: "*", schema: "public", table: "supervisor_visit_schedules" }, () => { if (!dirty && !visitDirty) void load(false); })
       .on("postgres_changes", { event: "*", schema: "public", table: "supervisor_visit_logs" }, () => { if (!dirty && !visitDirty) void load(false); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "supervisor_cut_tests" }, () => { if (!dirty && !visitDirty) void load(false); })
       .subscribe();
     return () => { void client.removeChannel(channel); };
   }, [dirty, load, supervisorId, visitDirty, weekStart]);
@@ -425,6 +432,43 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     window.dispatchEvent(new CustomEvent("dashos:kpi-followup-changed"));
   };
 
+  const openCutTest = (store: Store) => {
+    setCutTestStore(store);
+    setCutTestDraft({ result: "", made_by: "", photo: null });
+    setMessage("");
+  };
+
+  const saveCutTest = async () => {
+    if (!supabase || !cutTestStore || !cutTestDraft.result || !cutTestDraft.made_by.trim() || !cutTestDraft.photo) return;
+    if (!cutTestDraft.photo.type.startsWith("image/")) { setMessage("The cut-test photo must be an image."); return; }
+    setCutTestBusy(true);
+    setMessage("");
+    const safeName = cutTestDraft.photo.name.replace(/[^a-z0-9._-]/gi, "-");
+    const imagePath = `${profile.id}/cut-tests/${weekStart}/${cutTestStore.id}/${crypto.randomUUID()}-${safeName}`;
+    const uploaded = await supabase.storage.from("supervisor-visit-photos").upload(imagePath, cutTestDraft.photo, { contentType: cutTestDraft.photo.type, upsert: false });
+    if (uploaded.error) { setCutTestBusy(false); setMessage(uploaded.error.message); return; }
+    const { data, error } = await supabase.from("supervisor_cut_tests").insert({
+      supervisor_id: supervisorId,
+      store_id: cutTestStore.id,
+      week_start: weekStart,
+      result: cutTestDraft.result,
+      made_by: cutTestDraft.made_by.trim(),
+      image_path: imagePath,
+      created_by: profile.id,
+    }).select("id,supervisor_id,store_id,week_start,result,made_by,image_path,created_at").single();
+    if (error || !data) {
+      await supabase.storage.from("supervisor-visit-photos").remove([imagePath]);
+      setCutTestBusy(false);
+      setMessage(error?.message ?? "The cut test could not be saved.");
+      return;
+    }
+    setCutTests((current) => [data as CutTest, ...current]);
+    setCutTestBusy(false);
+    setCutTestStore(null);
+    setCutTestDraft({ result: "", made_by: "", photo: null });
+    setMessage(`Cut test saved for ${cutTestStore.name}. Additional tests can be added at any time.`);
+  };
+
   const planUpdatedBy = supervisors.find((item) => item.id === plan?.updated_by)?.full_name ?? (plan?.updated_by === profile.id ? profile.fullName : "leadership");
   return <div className="page area-supervisor-dashboard">
     <div className="page-heading supervisor-dashboard-heading">
@@ -487,7 +531,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
 
       <section className="panel live-visit-schedule"><div className="table-toolbar"><div><p className="eyebrow">Working schedule</p><h2>Visits and field work</h2><p>Plan freely without waiting. Nothing is published to the Team Calendar until Save updates is selected.</p></div><div className="visit-save-controls">{pendingVisitCount > 0 && <span>{pendingVisitCount} unsaved</span>}<button className="button secondary" onClick={() => openAddVisit()}><Plus size={16}/>Add visit</button><button className="button primary" disabled={busy || (!visitDirty && !dirty)} onClick={() => void saveVisitUpdates()}><Save size={16}/>{busy ? "Saving…" : "Save updates"}</button></div></div>{visibleVisits.length ? <div className="visit-schedule-list">{visibleVisits.map((visit) => <article id={`visit-${visit.id}`} key={visit.id} className={`${visit.edited_from_original ? "edited " : ""}${visit._draft || visit._dirty ? "pending" : ""}`}><div className="visit-schedule-date"><b>{fromIso(visit.visit_date).toLocaleDateString(undefined, { weekday: "short" })}</b><span>{dateLabel(visit.visit_date)}</span>{visit._draft || visit._dirty ? <small>Unsaved</small> : null}</div><div className="visit-schedule-fields"><label>Store<select value={visit.store_id} onChange={(event) => editVisit(visit.id, { store_id: event.target.value })}>{storesForVisit(visit.purpose, visit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label><label>Start<select value={visit.start_time.slice(0, 5)} onChange={(event) => editVisit(visit.id, { start_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>End<select value={visit.end_time.slice(0, 5)} onChange={(event) => editVisit(visit.id, { end_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>Type<select value={visit.purpose} onChange={(event) => selectVisitType(visit, event.target.value)}>{visitOptions.map((option) => <option key={option}>{option}</option>)}</select></label><label className="visit-notes">Notes<input value={visit.notes ?? ""} onChange={(event) => editVisit(visit.id, { notes: event.target.value })}/></label></div><div className="visit-schedule-actions">{visit.edited_from_original && <small>Edited from original{visit.last_change_reason ? ` · ${visit.last_change_reason}` : ""}</small>}{connectedLogTypes.has(visit.purpose) && (visit._draft || visit._dirty ? <small>Visit log available after save</small> : <button className="button secondary compact" onClick={() => { onOpenVisitLog(visit.id); setWorkspaceView("visits"); }}><ClipboardCheck size={14}/>Complete visit log</button>)}<button className="icon-button danger" aria-label="Remove visit" onClick={() => cancelVisit(visit)}><Trash2 size={16}/></button></div></article>)}</div> : <div className="activity-empty compact">No visits are scheduled yet. Drag a required visit onto a day or use Add visit.</div>}</section>
 
-      <section className="panel store-weekly-checklist"><div className="table-toolbar"><div><p className="eyebrow">Per-store checklist</p><h2>Complete for every assigned store</h2></div></div><div className="responsive-table"><table><thead><tr><th>Store</th>{storeChecks.map(([, label]) => <th key={label}>{label}</th>)}</tr></thead><tbody>{assignedStores.map((store) => <tr key={store.id}><td><b>{store.name}</b><small>{store.store_number}</small></td>{storeChecks.map(([key]) => <td key={key}><input aria-label={`${store.name} ${key}`} type="checkbox" checked={Boolean(draft.store_checklist[store.id]?.[key])} onChange={(event) => changeDraft({ store_checklist: { ...draft.store_checklist, [store.id]: { ...(draft.store_checklist[store.id] ?? {}), [key]: event.target.checked } } })}/></td>)}</tr>)}</tbody></table></div></section>
+      <section className="panel store-weekly-checklist"><div className="table-toolbar"><div><p className="eyebrow">Per-store checklist</p><h2>Complete for every assigned store</h2><p>One cut test is required per store each week. Add as many additional tests as coaching requires.</p></div></div><div className="responsive-table"><table><thead><tr><th>Store</th><th>Cut tests</th>{storeChecks.map(([, label]) => <th key={label}>{label}</th>)}</tr></thead><tbody>{assignedStores.map((store) => { const storeCutTests = cutTests.filter((test) => test.store_id === store.id); const latest = storeCutTests[0]; return <tr key={store.id}><td><b>{store.name}</b><small>{store.store_number}</small></td><td><div className="cut-test-cell"><span className={storeCutTests.length ? "cut-test-status complete" : "cut-test-status required"}>{storeCutTests.length ? `${storeCutTests.length} complete` : "Required"}</span>{latest && <small><b>{latest.result === "great" ? "Great" : "Remake"}</b> · {latest.made_by}</small>}<button className="button secondary compact" onClick={() => openCutTest(store)}><Camera size={14}/>{storeCutTests.length ? "Add another" : "Add cut test"}</button></div></td>{storeChecks.map(([key]) => <td key={key}><input aria-label={`${store.name} ${key}`} type="checkbox" checked={Boolean(draft.store_checklist[store.id]?.[key])} onChange={(event) => changeDraft({ store_checklist: { ...draft.store_checklist, [store.id]: { ...(draft.store_checklist[store.id] ?? {}), [key]: event.target.checked } } })}/></td>)}</tr>; })}</tbody></table></div></section>
 
       <section className="panel supervisor-week-notes"><label>Weekly notes<textarea rows={5} value={draft.notes} onChange={(event) => changeDraft({ notes: event.target.value })} placeholder="Changes, outcomes, follow-up, or context for the Director…"/></label><div><small>{plan ? `Last saved ${new Date(plan.updated_at).toLocaleString()} by ${planUpdatedBy}` : "This week has not been saved yet."}</small><div className="button-row"><button className="button secondary" disabled={busy || draft.status === "live"} onClick={() => void savePlan("live")}><RotateCcw size={16}/>Return to live</button><button className="button secondary" disabled={busy} onClick={() => void savePlan("complete")}><CheckCircle2 size={16}/>Mark week complete</button><button className="button primary" disabled={busy || (!dirty && !visitDirty)} onClick={() => void saveVisitUpdates()}><Save size={16}/>{busy ? "Saving…" : "Save all updates"}</button></div></div></section>
     </>}
@@ -500,6 +544,13 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
       <small>Only stores assigned to this Area Supervisor are available.</small>
       <label>Notes <small>(optional)</small><textarea rows={3} value={newVisit.notes} onChange={(event) => setNewVisit({ ...newVisit, notes: event.target.value })}/></label><p className="visit-editor-preview">{newVisit.visit_date ? `${dateLabel(newVisit.visit_date)} · ${timeLabel(newVisit.start_time)}–${timeLabel(newVisit.end_time)}` : "Choose a date and time"}</p>
       <div className="button-row"><button className="button secondary" onClick={() => { setEditorOpen(false); setEditingVisitId(null); }}>Cancel</button><button className="button primary" disabled={!newVisit.store_id || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)} onClick={addVisit}>{editingVisitId ? <Save size={16}/> : <Plus size={16}/>} {editingVisitId ? "Save visit changes" : "Add to weekly board"}</button></div>
+    </section></div>}
+    {cutTestStore && <div className="modal-backdrop" onClick={() => !cutTestBusy && setCutTestStore(null)}><section className="ticket-modal cut-test-editor" onClick={(event) => event.stopPropagation()}>
+      <p className="eyebrow">Per-store weekly checklist</p><h2>Add cut test · {cutTestStore.name} {cutTestStore.store_number}</h2><p>Record the product result, who made it, and one photo. You may add more than one test for this store.</p>
+      <fieldset><legend>Result</legend><div className="cut-test-result-options"><label className={cutTestDraft.result === "great" ? "selected great" : "great"}><input type="radio" name="cut-test-result" value="great" checked={cutTestDraft.result === "great"} onChange={() => setCutTestDraft({ ...cutTestDraft, result: "great" })}/><CheckCircle2/>Great</label><label className={cutTestDraft.result === "remake" ? "selected remake" : "remake"}><input type="radio" name="cut-test-result" value="remake" checked={cutTestDraft.result === "remake"} onChange={() => setCutTestDraft({ ...cutTestDraft, result: "remake" })}/><RotateCcw/>Remake</label></div></fieldset>
+      <label>Who made it?<input value={cutTestDraft.made_by} maxLength={160} onChange={(event) => setCutTestDraft({ ...cutTestDraft, made_by: event.target.value })} placeholder="Team member name"/></label>
+      <label className="cut-test-photo"><span><Camera size={18}/>Picture</span><input type="file" accept="image/*" capture="environment" onChange={(event) => setCutTestDraft({ ...cutTestDraft, photo: event.target.files?.[0] ?? null })}/><small>{cutTestDraft.photo?.name ?? "A photo is required."}</small></label>
+      <div className="button-row"><button className="button secondary" disabled={cutTestBusy} onClick={() => setCutTestStore(null)}>Cancel</button><button className="button primary" disabled={cutTestBusy || !cutTestDraft.result || !cutTestDraft.made_by.trim() || !cutTestDraft.photo} onClick={() => void saveCutTest()}><Save size={16}/>{cutTestBusy ? "Saving…" : "Save cut test"}</button></div>
     </section></div>}
     {followupEditor && (() => { const regionalPlan = regionalPlans.find((item) => item.id === followupEditor.planId); const action = regionalPlan?.actions.find((item) => item.id === followupEditor.actionId); const snapshotStore = regionalPlan?.snapshot.stores.find((store) => store.id === action?.store_id); if (!regionalPlan || !action) return null; return <div className="modal-backdrop" onClick={() => !followupBusy && setFollowupEditor(null)}><section className="ticket-modal regional-field-followup" onClick={(event) => event.stopPropagation()}><button className="icon-button modal-close" aria-label="Close KPI follow-up" disabled={followupBusy} onClick={() => setFollowupEditor(null)}>×</button><p className="eyebrow">Area focus · field follow-up</p><h2>{snapshotStore?.name ?? "Assigned store"} · {regionalMetricLabels[action.metric] ?? action.metric}</h2><p className="regional-field-instruction">{action.action || action.note || "Review this KPI concern with the store."}</p><div className="regional-field-meta"><span>Results week ending <b>{dateLabel(regionalPlan.week_end)}</b></span><span>Follow-up due <b>{dateLabel(action.due_date)}</b></span>{action.owner && <span>Owner <b>{action.owner}</b></span>}</div><label>Progress<select value={followupEditor.status} onChange={(event) => setFollowupEditor({ ...followupEditor, status: event.target.value as RegionalAction["status"] })}><option value="open">Open</option><option value="in_progress">In progress</option><option value="done">Done</option></select></label><label>Outcome / field evidence<textarea rows={5} value={followupEditor.outcome} onChange={(event) => setFollowupEditor({ ...followupEditor, outcome: event.target.value })} placeholder="What was completed, observed, coached, or still needs attention?"/></label><small>This updates the same Regional KPI Plan used by the Director—no separate form or duplicate entry.</small><div className="button-row"><button className="button secondary" disabled={followupBusy} onClick={() => setFollowupEditor(null)}>Cancel</button><button className="button primary" disabled={followupBusy} onClick={() => void saveRegionalFollowup()}><Save size={16}/>{followupBusy ? "Saving…" : "Save follow-up"}</button></div></section></div>; })()}
   </div>;

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const component = readFileSync(new URL("../src/components/AreaSupervisorDashboard.tsx", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../supabase/migrations/20261119001707_area_supervisor_weekly_planner.sql", import.meta.url), "utf8");
+const cutTestMigration = readFileSync(new URL("../supabase/migrations/20261123210000_supervisor_cut_tests.sql", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 test("the Director checklist is represented in the live weekly workspace", () => {
@@ -36,6 +37,20 @@ test("Game Day is planned once per assigned store", () => {
   assert.match(component, /target: "per-store"/);
   assert.match(component, /purpose === "Game Day visit"/);
   assert.match(component, /assignedStores\.length/);
+});
+
+test("cut tests are per-store checklist evidence rather than scheduled visits", () => {
+  assert.doesNotMatch(component, /purpose === "Cut test"/);
+  assert.doesNotMatch(component, /visitOptions = \[[^\]]*"Cut test"/);
+  assert.match(component, /One cut test is required per store each week/);
+  assert.match(component, /Add another/);
+  assert.match(component, /Who made it\?/);
+  assert.match(component, /Great/);
+  assert.match(component, /Remake/);
+  assert.match(component, /capture="environment"/);
+  assert.match(cutTestMigration, /Multiple tests are intentionally allowed/);
+  assert.doesNotMatch(cutTestMigration, /unique\s*\(\s*supervisor_id\s*,\s*week_start\s*,\s*store_id/);
+  assert.match(cutTestMigration, /enable row level security/);
 });
 
 test("Director-authored visit forms are available as sectioned digital templates", () => {
