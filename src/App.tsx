@@ -47,6 +47,7 @@ import OperationsCalendar from "./components/OperationsCalendar";
 import SupervisorVisitLog from "./components/SupervisorVisitLog";
 import AreaSupervisorDashboard from "./components/AreaSupervisorDashboard";
 import TeamEvaluations from "./components/TeamEvaluations";
+import TeamMemberPortal, { type MemberAccess } from "./components/TeamMemberPortal";
 
 const navigation: {
   id: PortalSection;
@@ -122,6 +123,7 @@ export default function App() {
     isSupabaseConfigured ? null : demoProfile,
   );
   const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [memberAccess, setMemberAccess] = useState<MemberAccess | null>(null);
   const [section, setSection] = useState<PortalSection>("home");
   const [menuOpen, setMenuOpen] = useState(false);
   const [recentSections, setRecentSections] = useState<PortalSection[]>([]);
@@ -153,10 +155,16 @@ export default function App() {
         if (!active || request !== authRequestId.current) return;
         setSession(data.session);
         setProfile(resolvedProfile);
+        if (!resolvedProfile) {
+          const memberResult = await client.rpc("team_member_portal_action", { action: "session", payload: {} });
+          if (!active || request !== authRequestId.current) return;
+          setMemberAccess(memberResult.error ? null : memberResult.data?.member ?? null);
+        } else setMemberAccess(null);
       } else {
         if (request !== authRequestId.current) return;
         setSession(null);
         setProfile(null);
+        setMemberAccess(null);
       }
       setLoading(false);
     });
@@ -168,6 +176,7 @@ export default function App() {
         setSession(nextSession);
         if (!nextSession?.user) {
           setProfile(null);
+          setMemberAccess(null);
           setLoading(false);
           return;
         }
@@ -180,6 +189,11 @@ export default function App() {
             ?? await new Promise<Profile | null>((resolve) => window.setTimeout(() => void loadProfile(user.id, user.email ?? "").then(resolve), 250));
           if (!active || request !== authRequestId.current) return;
           setProfile(resolvedProfile);
+          if (!resolvedProfile) {
+            const memberResult = await client.rpc("team_member_portal_action", { action: "session", payload: {} });
+            if (!active || request !== authRequestId.current) return;
+            setMemberAccess(memberResult.error ? null : memberResult.data?.member ?? null);
+          } else setMemberAccess(null);
           setLoading(false);
         })();
       },
@@ -292,6 +306,7 @@ export default function App() {
     setSection("home");
     setRecentSections([]);
     setProfile(null);
+    setMemberAccess(null);
     setSession(null);
   };
 
@@ -309,6 +324,8 @@ export default function App() {
   }
 
   if (isSupabaseConfigured && !session) return <Login />;
+
+  if (memberAccess) return <TeamMemberPortal member={memberAccess} onSignOut={signOut} onAccessRevoked={()=>{setMemberAccess(null);void signOut();}} />;
 
   if (!profile) {
     return (

@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import { ArrowLeft, Mail, ShieldCheck } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 export default function Login() {
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [teamMemberMode, setTeamMemberMode] = useState(new URLSearchParams(window.location.search).has("team"));
+  const [email, setEmail] = useState("");
 
   const signInWithGoogle = async () => {
     if (!supabase) return;
@@ -20,6 +22,17 @@ export default function Login() {
     }
   };
 
+  const sendTeamMemberLink = async () => {
+    if (!supabase || !email.trim()) return;
+    setSubmitting(true); setMessage("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim().toLowerCase(),
+      options: { shouldCreateUser: true, emailRedirectTo: `${window.location.origin}/?team=1` },
+    });
+    setSubmitting(false);
+    setMessage(error ? "That secure sign-in email could not be sent. Confirm the address and try again." : "Secure sign-in sent. Open the email on this device to continue.");
+  };
+
   return (
     <main className="login-page">
       <section className="login-panel">
@@ -33,12 +46,14 @@ export default function Login() {
         </div>
 
         <div className="login-content">
-          <p className="eyebrow">Welcome back</p>
-          <h1>Your operation, moving smarter.</h1>
-          <p>
-            Sign in with the approved Google account connected to your DASH-OS access.
-          </p>
-          <button
+          <p className="eyebrow">{teamMemberMode ? "Team member access" : "Welcome back"}</p>
+          <h1>{teamMemberMode ? "Schedule and time off." : "Your operation, moving smarter."}</h1>
+          <p>{teamMemberMode ? "Use the email saved by your manager. Any email provider is accepted." : "Sign in with the approved Google account connected to your DASH-OS access."}</p>
+          {teamMemberMode ? <>
+            <label className="team-member-login-email">Email address<input type="email" autoComplete="email" value={email} onChange={(event)=>setEmail(event.target.value)} onKeyDown={(event)=>{if(event.key==="Enter")void sendTeamMemberLink();}} placeholder="name@example.com"/></label>
+            <button className="button primary full" type="button" onClick={() => void sendTeamMemberLink()} disabled={submitting || !email.trim()}><Mail size={17}/>{submitting ? "Sending…" : "Email my secure sign-in"}</button>
+            <button className="button text full" type="button" onClick={()=>{setTeamMemberMode(false);setMessage("");}}><ArrowLeft size={16}/>Back to DASH staff sign-in</button>
+          </> : <><button
             className="button google-button full"
             type="button"
             onClick={() => void signInWithGoogle()}
@@ -47,10 +62,11 @@ export default function Login() {
             <span className="google-mark" aria-hidden="true">G</span>
             {submitting ? "Opening Google…" : "Continue with Google"}
           </button>
+          <button className="button secondary full team-member-access-button" type="button" onClick={()=>{setTeamMemberMode(true);setMessage("");}}><Mail size={17}/>Team member schedule &amp; requests</button></>}
           {message && <p className="form-error">{message}</p>}
           <div className="login-security">
             <ShieldCheck size={18} />
-            <span>Only preapproved team members can access the portal.</span>
+            <span>{teamMemberMode ? "Access works only while your roster status is active." : "Only preapproved DASH users can access the operations portal."}</span>
           </div>
         </div>
       </section>

@@ -39,6 +39,7 @@ type TeamMember = {
   status_effective_date: string | null;
   status_notes: string;
   linked_hr_action_id: string | null;
+  access_email?: string | null;
 };
 type TerminationRecord = { id: string; employee_name: string; incident_date: string; incident_summary: string };
 type TeamMemberPrivateDetails = {
@@ -136,7 +137,8 @@ type Settings = {
   opening_driver_through_rush: boolean;
   late_driver_rule: "none" | "hour_before_close" | "until_close" | "second_closer";
 };
-type Availability = { id?: string; member_id: string; day_of_week: number; start_time: string; end_time: string; available: boolean; kind: "standard" | "rto"; week_start?: string; reason?: string; source_time_off_request_id?: string | null };
+type Availability = { id?: string; member_id: string; day_of_week: number; start_time: string; end_time: string; available: boolean; kind: "standard" | "rto"; week_start?: string; reason?: string; source_time_off_request_id?: string | null; source_availability_request_id?: string | null };
+type AvailabilityRequest = { id:string; member_id:string; member_name:string; member_email:string|null; request_kind:"one_time"|"recurring"; selected_dates:string[]; selected_weekdays:number[]; all_day:boolean; start_time:string; end_time:string; note:string; status:string; review_note:string; created_at:string };
 type SchedulingEvent = {
   id: string;
   scope: "company" | "store";
@@ -334,11 +336,13 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   const [selectedDay, setSelectedDay] = useState(0);
   const [showWeekOverview, setShowWeekOverview] = useState(false);
   const [newShift, setNewShift] = useState<{ role: LaborRole; start_time: string; end_time: string }>({ role: "insider", start_time: "16:00", end_time: "20:00" });
-  const [newMember, setNewMember] = useState<{ display_name: string; preferred_name: string; qualified_roles: LaborRole[]; is_minor: boolean; hire_date: string; birth_date: string; anniversary_different: boolean; evaluation_anniversary: string }>({ display_name: "", preferred_name: "", qualified_roles: ["insider"], is_minor: false, hire_date: "", birth_date: "", anniversary_different: false, evaluation_anniversary: "" });
+  const [newMember, setNewMember] = useState<{ display_name: string; access_email:string; preferred_name: string; qualified_roles: LaborRole[]; is_minor: boolean; hire_date: string; birth_date: string; anniversary_different: boolean; evaluation_anniversary: string }>({ display_name: "", access_email:"", preferred_name: "", qualified_roles: ["insider"], is_minor: false, hire_date: "", birth_date: "", anniversary_different: false, evaluation_anniversary: "" });
   const [anniversaryOverrideMembers, setAnniversaryOverrideMembers] = useState<Set<string>>(new Set());
   const [positionMemberId, setPositionMemberId] = useState("");
   const [positionDraft, setPositionDraft] = useState({ position_name: "", hourly_rate: "", effective_date: localTodayIso() });
-  const [availabilityForm, setAvailabilityForm] = useState<{ member_id: string; kind: "standard" | "rto"; day_of_week: number; standard_status: "available" | "unavailable" | "limited"; all_day: boolean; start_time: string; end_time: string; reason: string }>({ member_id: "", kind: "standard", day_of_week: 0, standard_status: "available", all_day: true, start_time: "10:00", end_time: "23:00", reason: "" });
+  const [availabilityForm, setAvailabilityForm] = useState<{ member_id: string; kind: "standard" | "rto"; day_of_week: number; selected_days:number[]; standard_status: "available" | "unavailable" | "limited"; all_day: boolean; start_time: string; end_time: string; reason: string }>({ member_id: "", kind: "standard", day_of_week: 0, selected_days:[0], standard_status: "available", all_day: true, start_time: "10:00", end_time: "23:00", reason: "" });
+  const [availabilityRequests,setAvailabilityRequests]=useState<AvailabilityRequest[]>([]);
+  const [reviewingRequest,setReviewingRequest]=useState("");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -436,14 +440,14 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         setSettings(defaultSettings); setStoreHours(defaultStoreHours()); setLoading(false); return;
       }
       const [memberResult, detailResult, positionResult, settingResult, hoursResult, planResult, standardResult, rtoResult, eventResult, forecastResult] = await Promise.all([
-        supabase.from("labor_team_members").select("id,store_id,display_name,qualified_roles,is_minor,active,employment_status,home_store_id,status_reason,status_effective_date,status_notes,linked_hr_action_id").eq("store_id", storeId).order("display_name"),
+        supabase.from("labor_team_members").select("id,store_id,display_name,access_email,qualified_roles,is_minor,active,employment_status,home_store_id,status_reason,status_effective_date,status_notes,linked_hr_action_id").eq("store_id", storeId).order("display_name"),
         supabase.from("team_member_private_details").select("member_id,store_id,preferred_name,hire_date,rehire_date,evaluation_anniversary,birth_date").eq("store_id", storeId),
         supabase.from("team_member_positions").select("id,member_id,store_id,position_name,hourly_rate,effective_date,active").eq("store_id", storeId).eq("active", true).order("position_name"),
         supabase.from("labor_store_settings").select("*").eq("store_id", storeId).maybeSingle(),
         supabase.from("labor_store_hours").select("day_of_week,open_time,close_time").eq("store_id", storeId).order("day_of_week"),
         supabase.from("labor_week_plans").select("id,status").eq("store_id", storeId).eq("week_start", weekStart).maybeSingle(),
         supabase.from("labor_standard_availability").select("id,member_id,day_of_week,start_time,end_time,available").eq("store_id", storeId),
-        supabase.from("labor_time_off").select("id,member_id,week_start,day_of_week,start_time,end_time,reason,source_time_off_request_id").eq("store_id", storeId).eq("week_start", weekStart),
+        supabase.from("labor_time_off").select("id,member_id,week_start,day_of_week,start_time,end_time,reason,source_time_off_request_id,source_availability_request_id").eq("store_id", storeId).eq("week_start", weekStart),
         supabase.from("labor_scheduling_events").select("*").lte("start_date", addIsoDays(weekStart, 90)).gte("end_date", addIsoDays(weekStart, -420)).order("start_date"),
         supabase.from("demand_forecast_runs").select("id,confidence_score,confidence_level,confidence_reasons,weekly_projection,method_version,created_at").eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true).maybeSingle(),
       ]);
@@ -501,6 +505,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       }).subscribe();
     return () => { void supabase?.removeChannel(channel); };
   }, [planId]);
+
+  useEffect(()=>{if(view==="availability")void loadAvailabilityRequests();},[view,storeId]);
 
   const memberStatus = (member: TeamMember, shift: Shift) => {
     const entries = availability.filter((item) => item.member_id === member.id && item.day_of_week === shift.day_of_week);
@@ -651,11 +657,12 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (!displayName) { setError("Enter the employee’s name."); return; }
     if (newMember.qualified_roles.length === 0) { setError("Select at least one qualified role."); return; }
     setError("");
-    const draft: TeamMember = { id: `member-${Date.now()}`, store_id: storeId, display_name: displayName, qualified_roles: newMember.qualified_roles, is_minor: newMember.is_minor, active: true, employment_status: "active", home_store_id: null, status_reason: "", status_effective_date: null, status_notes: "", linked_hr_action_id: null };
+    const accessEmail=newMember.access_email.trim().toLowerCase()||null;
+    const draft: TeamMember = { id: `member-${Date.now()}`, store_id: storeId, display_name: displayName, access_email:accessEmail, qualified_roles: newMember.qualified_roles, is_minor: newMember.is_minor, active: true, employment_status: "active", home_store_id: null, status_reason: "", status_effective_date: null, status_notes: "", linked_hr_action_id: null };
     let savedMember = draft;
     if (!supabase || storeId === demoStore.id) setMembers((current) => [...current, draft].sort((left, right) => left.display_name.localeCompare(right.display_name)));
     else {
-      const { data, error: insertError } = await supabase.from("labor_team_members").insert({ store_id: storeId, display_name: displayName, qualified_roles: newMember.qualified_roles, is_minor: newMember.is_minor, active: true, employment_status: "active" }).select("id,store_id,display_name,qualified_roles,is_minor,active,employment_status,home_store_id,status_reason,status_effective_date,status_notes,linked_hr_action_id").single();
+      const { data, error: insertError } = await supabase.from("labor_team_members").insert({ store_id: storeId, display_name: displayName, access_email:accessEmail, qualified_roles: newMember.qualified_roles, is_minor: newMember.is_minor, active: true, employment_status: "active" }).select("id,store_id,display_name,access_email,qualified_roles,is_minor,active,employment_status,home_store_id,status_reason,status_effective_date,status_notes,linked_hr_action_id").single();
       if (insertError) { setError(insertError.message); return; }
       savedMember = data as TeamMember;
       setMembers((current) => [...current, savedMember].sort((left, right) => left.display_name.localeCompare(right.display_name)));
@@ -666,9 +673,9 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         setMemberDetails((current) => [...current.filter((item) => item.member_id !== savedMember.id), savedDetails as TeamMemberPrivateDetails]);
       }
     }
-    setNewMember({ display_name: "", preferred_name: "", qualified_roles: ["insider"], is_minor: false, hire_date: "", birth_date: "", anniversary_different: false, evaluation_anniversary: "" }); setMessage(`${displayName} added to the scheduling roster.`);
+    setNewMember({ display_name: "", access_email:"", preferred_name: "", qualified_roles: ["insider"], is_minor: false, hire_date: "", birth_date: "", anniversary_different: false, evaluation_anniversary: "" }); setMessage(`${displayName} added to the scheduling roster.`);
   };
-  const updateTeamMember = async (member: TeamMember, changes: Partial<Pick<TeamMember, "display_name" | "qualified_roles" | "is_minor">>) => {
+  const updateTeamMember = async (member: TeamMember, changes: Partial<Pick<TeamMember, "display_name" | "access_email" | "qualified_roles" | "is_minor">>) => {
     const updated = { ...member, ...changes };
     if (!updated.display_name.trim()) { setError("Employee names cannot be blank."); return; }
     if (updated.qualified_roles.length === 0) { setError("Each employee must have at least one qualified role."); return; }
@@ -678,6 +685,24 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
       if (updateError) { setError(updateError.message); return; }
     }
     setMessage(`${updated.display_name}’s roster settings saved.`);
+  };
+
+  const loadAvailabilityRequests=async()=>{
+    if(!supabase||!storeId||storeId===demoStore.id){setAvailabilityRequests([]);return;}
+    const {data,error:requestError}=await supabase.rpc("team_member_portal_action",{action:"manager_list",payload:{store_id:storeId}});
+    if(requestError){setError(requestError.message);return;}
+    setAvailabilityRequests((data?.requests??[]) as AvailabilityRequest[]);
+  };
+  const reviewAvailabilityRequest=async(requestId:string,decision:"approved"|"denied")=>{
+    if(!supabase)return;
+    const verb=decision==="approved"?"approve":"deny";
+    if(!window.confirm(`${verb[0].toUpperCase()+verb.slice(1)} this team member request?`))return;
+    setReviewingRequest(requestId);setError("");
+    const {error:reviewError}=await supabase.rpc("team_member_portal_action",{action:"review",payload:{request_id:requestId,decision}});
+    setReviewingRequest("");
+    if(reviewError){setError(reviewError.message);return;}
+    setMessage(`Request ${decision}. ${decision==="approved"?"The scheduler availability has been updated.":"No schedule availability was changed."}`);
+    await Promise.all([loadAvailabilityRequests(),refreshApprovedLeave()]);
   };
   const updatePrivateDetails = async (member: TeamMember, changes: Partial<Pick<TeamMemberPrivateDetails, "preferred_name" | "hire_date" | "rehire_date" | "evaluation_anniversary" | "birth_date">>) => {
     const current = memberDetails.find((item) => item.member_id === member.id);
@@ -758,8 +783,10 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
   };
   const saveAvailability = async () => {
     if (!availabilityForm.member_id) { setError("Select an employee first."); return; }
+    const selectedDays=[...new Set(availabilityForm.selected_days)].sort();
+    if(!selectedDays.length){setError("Select at least one day.");return;}
     const isStandard = availabilityForm.kind === "standard";
-    const approvedLeave = !isStandard && availability.some((item) => item.kind === "rto" && item.member_id === availabilityForm.member_id && item.day_of_week === availabilityForm.day_of_week && Boolean(item.source_time_off_request_id));
+    const approvedLeave = !isStandard && availability.some((item) => item.kind === "rto" && item.member_id === availabilityForm.member_id && selectedDays.includes(item.day_of_week) && Boolean(item.source_time_off_request_id || item.source_availability_request_id));
     if (approvedLeave) { setError("Approved PTO / Vacation already controls this employee’s availability for that day. Manage it from the PTO & Vacation tab."); return; }
     const allDay = isStandard ? availabilityForm.standard_status !== "limited" : availabilityForm.all_day;
     const startTime = allDay ? "00:00" : availabilityForm.start_time;
@@ -767,48 +794,49 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
     if (!allDay && (startTime === endTime || !/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime))) { setError("Choose a valid availability time range."); return; }
     const available = isStandard ? availabilityForm.standard_status !== "unavailable" : false;
     setError("");
-    const baseEntry: Availability = { member_id: availabilityForm.member_id, day_of_week: availabilityForm.day_of_week, start_time: startTime, end_time: endTime, available, kind: availabilityForm.kind, week_start: isStandard ? undefined : weekStart, reason: isStandard ? undefined : availabilityForm.reason.trim() };
+    const entries:Availability[]=selectedDays.map(day_of_week=>({ member_id: availabilityForm.member_id, day_of_week, start_time: startTime, end_time: endTime, available, kind: availabilityForm.kind, week_start: isStandard ? undefined : weekStart, reason: isStandard ? undefined : availabilityForm.reason.trim() }));
     if (!supabase || storeId === demoStore.id) {
-      setAvailability((current) => [...current.filter((item) => !(item.member_id === baseEntry.member_id && item.day_of_week === baseEntry.day_of_week && item.kind === baseEntry.kind)), { ...baseEntry, id: `availability-${Date.now()}` }]);
+      setAvailability((current) => [...current.filter((item) => !(item.member_id === availabilityForm.member_id && selectedDays.includes(item.day_of_week) && item.kind === availabilityForm.kind)), ...entries.map((entry,index)=>({...entry,id:`availability-${Date.now()}-${index}`}))]);
     } else if (isStandard) {
-      const { error: deleteError } = await supabase.from("labor_standard_availability").delete().eq("store_id", storeId).eq("member_id", baseEntry.member_id).eq("day_of_week", baseEntry.day_of_week);
+      const { error: deleteError } = await supabase.from("labor_standard_availability").delete().eq("store_id", storeId).eq("member_id", availabilityForm.member_id).in("day_of_week", selectedDays);
       if (deleteError) { setError(deleteError.message); return; }
-      const { data, error: insertError } = await supabase.from("labor_standard_availability").insert({ store_id: storeId, member_id: baseEntry.member_id, day_of_week: baseEntry.day_of_week, start_time: startTime, end_time: endTime, available }).select("id,member_id,day_of_week,start_time,end_time,available").single();
+      const { data, error: insertError } = await supabase.from("labor_standard_availability").insert(selectedDays.map(day_of_week=>({ store_id: storeId, member_id: availabilityForm.member_id, day_of_week, start_time: startTime, end_time: endTime, available }))).select("id,member_id,day_of_week,start_time,end_time,available");
       if (insertError) { setError(insertError.message); return; }
-      setAvailability((current) => [...current.filter((item) => !(item.member_id === baseEntry.member_id && item.day_of_week === baseEntry.day_of_week && item.kind === "standard")), { ...data, kind: "standard" } as Availability]);
+      setAvailability((current) => [...current.filter((item) => !(item.member_id === availabilityForm.member_id && selectedDays.includes(item.day_of_week) && item.kind === "standard")), ...(data??[]).map(item=>({ ...item, kind: "standard" as const }))]);
     } else {
-      const { error: deleteError } = await supabase.from("labor_time_off").delete().eq("store_id", storeId).eq("member_id", baseEntry.member_id).eq("week_start", weekStart).eq("day_of_week", baseEntry.day_of_week).is("source_time_off_request_id", null);
+      const { error: deleteError } = await supabase.from("labor_time_off").delete().eq("store_id", storeId).eq("member_id", availabilityForm.member_id).eq("week_start", weekStart).in("day_of_week", selectedDays).is("source_time_off_request_id", null).is("source_availability_request_id",null);
       if (deleteError) { setError(deleteError.message); return; }
-      const { data, error: insertError } = await supabase.from("labor_time_off").insert({ store_id: storeId, member_id: baseEntry.member_id, week_start: weekStart, day_of_week: baseEntry.day_of_week, start_time: startTime, end_time: endTime, reason: availabilityForm.reason.trim() }).select("id,member_id,week_start,day_of_week,start_time,end_time,reason").single();
+      const { data, error: insertError } = await supabase.from("labor_time_off").insert(selectedDays.map(day_of_week=>({ store_id: storeId, member_id: availabilityForm.member_id, week_start: weekStart, day_of_week, start_time: startTime, end_time: endTime, reason: availabilityForm.reason.trim() }))).select("id,member_id,week_start,day_of_week,start_time,end_time,reason");
       if (insertError) { setError(insertError.message); return; }
-      setAvailability((current) => [...current.filter((item) => !(item.member_id === baseEntry.member_id && item.day_of_week === baseEntry.day_of_week && item.kind === "rto")), { ...data, available: false, kind: "rto" } as Availability]);
+      setAvailability((current) => [...current.filter((item) => !(item.member_id === availabilityForm.member_id && selectedDays.includes(item.day_of_week) && item.kind === "rto")), ...(data??[]).map(item=>({ ...item,available:false, kind: "rto" as const }))]);
     }
-    const employee = members.find((member) => member.id === baseEntry.member_id)?.display_name || "Employee";
-    setMessage(isStandard ? `${employee}’s recurring ${days[baseEntry.day_of_week]} availability saved.` : `${employee}’s requested time off saved for ${days[baseEntry.day_of_week]} of the selected week.`);
+    const employee = members.find((member) => member.id === availabilityForm.member_id)?.display_name || "Employee";
+    setMessage(`${employee}’s ${isStandard?"recurring availability":"requested time off"} saved for ${selectedDays.map(day=>days[day]).join(", ")}.`);
   };
   const clearAvailability = async () => {
     if (!availabilityForm.member_id) return;
     const isStandard = availabilityForm.kind === "standard";
-    const selectedEntry = availability.find((item) => item.member_id === availabilityForm.member_id && item.day_of_week === availabilityForm.day_of_week && item.kind === availabilityForm.kind);
-    if(selectedEntry?.source_time_off_request_id){setError("Approved PTO / Vacation must be changed from the PTO & Vacation tab.");return;}
+    const selectedDays=availabilityForm.selected_days;
+    const selectedEntries = availability.filter((item) => item.member_id === availabilityForm.member_id && selectedDays.includes(item.day_of_week) && item.kind === availabilityForm.kind);
+    if(selectedEntries.some(entry=>entry.source_time_off_request_id||entry.source_availability_request_id)){setError("Approved requests must be changed from the request that created them.");return;}
     if (supabase && storeId !== demoStore.id) {
-      let query = supabase.from(isStandard ? "labor_standard_availability" : "labor_time_off").delete().eq("store_id", storeId).eq("member_id", availabilityForm.member_id).eq("day_of_week", availabilityForm.day_of_week);
-      if (!isStandard) query = query.eq("week_start", weekStart).is("source_time_off_request_id", null);
+      let query = supabase.from(isStandard ? "labor_standard_availability" : "labor_time_off").delete().eq("store_id", storeId).eq("member_id", availabilityForm.member_id).in("day_of_week", selectedDays);
+      if (!isStandard) query = query.eq("week_start", weekStart).is("source_time_off_request_id", null).is("source_availability_request_id",null);
       const { error: deleteError } = await query;
       if (deleteError) { setError(deleteError.message); return; }
     }
-    setAvailability((current) => current.filter((item) => !(item.member_id === availabilityForm.member_id && item.day_of_week === availabilityForm.day_of_week && item.kind === availabilityForm.kind)));
+    setAvailability((current) => current.filter((item) => !(item.member_id === availabilityForm.member_id && selectedDays.includes(item.day_of_week) && item.kind === availabilityForm.kind)));
     setMessage(isStandard ? "Recurring restriction cleared; this employee is available by default." : "Requested time off cleared for the selected week.");
   };
   const chooseAvailability = (memberId: string, day: number, kind: "standard" | "rto") => {
     const entry = availability.find((item) => item.member_id === memberId && item.day_of_week === day && item.kind === kind);
-    if(entry?.source_time_off_request_id){setMessage("This restriction came from approved PTO / Vacation. Manage it from the PTO & Vacation tab.");return;}
+    if(entry?.source_time_off_request_id||entry?.source_availability_request_id){setMessage(entry.source_time_off_request_id?"This restriction came from approved PTO / Vacation. Manage it from the PTO & Vacation tab.":"This restriction came from an approved team member request and is locked to its approval record.");return;}
     const fullDay = !entry || (entry.start_time.slice(0, 5) === "00:00" && entry.end_time.slice(0, 5) === "23:59");
-    setAvailabilityForm((current) => ({ ...current, member_id: memberId, day_of_week: day, kind, standard_status: !entry ? "available" : !entry.available ? "unavailable" : fullDay ? "available" : "limited", all_day: fullDay, start_time: entry?.start_time.slice(0, 5) || "10:00", end_time: entry?.end_time.slice(0, 5) || "23:00", reason: entry?.reason || "" }));
+    setAvailabilityForm((current) => ({ ...current, member_id: memberId, day_of_week: day, selected_days:[day], kind, standard_status: !entry ? "available" : !entry.available ? "unavailable" : fullDay ? "available" : "limited", all_day: fullDay, start_time: entry?.start_time.slice(0, 5) || "10:00", end_time: entry?.end_time.slice(0, 5) || "23:00", reason: entry?.reason || "" }));
   };
   const refreshApprovedLeave = async () => {
     if(!supabase||!storeId||storeId===demoStore.id)return;
-    const {data,error:refreshError}=await supabase.from("labor_time_off").select("id,member_id,week_start,day_of_week,start_time,end_time,reason,source_time_off_request_id").eq("store_id",storeId).eq("week_start",weekStart);
+    const {data,error:refreshError}=await supabase.from("labor_time_off").select("id,member_id,week_start,day_of_week,start_time,end_time,reason,source_time_off_request_id,source_availability_request_id").eq("store_id",storeId).eq("week_start",weekStart);
     if(refreshError){setError(refreshError.message);return;}
     const rto=(data??[]).map(item=>({...item,available:false,kind:"rto" as const}));
     setAvailability(current=>[...current.filter(item=>item.kind==="standard"),...rto]);
@@ -1204,6 +1232,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
           <section className="panel roster-add-panel">
             <div><p className="eyebrow">Scheduling roster</p><h2>Add an employee</h2><p>Hire date powers evaluation reminders. Birth year stays private and is never shown on the calendar.</p></div>
             <label>Employee name<input value={newMember.display_name} onChange={(event) => setNewMember({ ...newMember, display_name: event.target.value })} placeholder="First and last name" /></label>
+            <label>Team member access email <span className="optional-label">Optional</span><input type="email" value={newMember.access_email} onChange={(event) => setNewMember({ ...newMember, access_email: event.target.value })} placeholder="Any email provider" /><small>Personal schedule and request-off access is available only while this employee is active.</small></label>
             <label>Preferred name <span className="optional-label">Optional</span><input value={newMember.preferred_name} onChange={(event) => setNewMember({ ...newMember, preferred_name: event.target.value })} placeholder="Used only for birthday and anniversary cards" /></label>
             <div className="roster-date-fields"><label>Hire date<input type="date" value={newMember.hire_date} onChange={(event) => setNewMember({ ...newMember, hire_date: event.target.value })} /></label><label>Birthday<input type="date" value={newMember.birth_date} onChange={(event) => setNewMember({ ...newMember, birth_date: event.target.value })} /></label></div>
             <label className="anniversary-exception-toggle"><input type="checkbox" checked={newMember.anniversary_different} onChange={(event) => setNewMember({ ...newMember, anniversary_different: event.target.checked, evaluation_anniversary: event.target.checked ? newMember.evaluation_anniversary : "" })} /><span>Anniversary date different than hire date</span></label>
@@ -1211,6 +1240,7 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
             <fieldset><legend>Qualified scheduling roles</legend>{(["manager", "insider", "driver"] as LaborRole[]).map((role) => <label key={role} className="checkbox-line"><input type="checkbox" checked={newMember.qualified_roles.includes(role)} onChange={(event) => setNewMember({ ...newMember, qualified_roles: event.target.checked ? [...newMember.qualified_roles, role] : newMember.qualified_roles.filter((item) => item !== role) })} />{role[0].toUpperCase() + role.slice(1)}</label>)}</fieldset>
             <label className="checkbox-line"><input type="checkbox" checked={newMember.is_minor} onChange={(event) => setNewMember({ ...newMember, is_minor: event.target.checked })} />Minor employee</label>
             <button className="button primary" onClick={() => void addTeamMember()}><Plus size={17} />Add to roster</button>
+            <details className="roster-access-emails"><summary><strong>Existing employee access emails</strong><small>Only active employees can sign in</small></summary><div>{members.map((member)=><label key={`access-${member.id}`}><span>{member.display_name}</span><input type="email" value={member.access_email??""} placeholder="No portal access" onChange={(event)=>setMembers(current=>current.map(item=>item.id===member.id?{...item,access_email:event.target.value}:item))} onBlur={(event)=>void updateTeamMember(member,{access_email:event.target.value.trim().toLowerCase()||null})}/></label>)}</div></details>
           </section>
           <section className="panel roster-list-panel">
             <div className="active-roster-panel">
@@ -1228,6 +1258,8 @@ export default function LaborManagement({ profile }: { profile: Profile }) {
         <LeaveManagement profile={profile} storeId={storeId} onAvailabilityChanged={refreshApprovedLeave} />
       ) : view === "availability" ? (
         <div className="availability-layout">
+          <section className="panel availability-request-queue"><div className="table-toolbar"><div><p className="eyebrow">Team member requests</p><h2>Review and apply requests</h2><p>Approval automatically updates the scheduler. Existing assigned shifts remain visible so the manager can resolve any conflict intentionally.</p></div><span className="request-count">{availabilityRequests.filter(request=>request.status==="pending").length} pending</span></div>{availabilityRequests.filter(request=>request.status==="pending").length===0?<div className="activity-empty compact">No employee requests need review for this store.</div>:<div className="availability-request-cards">{availabilityRequests.filter(request=>request.status==="pending").map(request=><article key={request.id}><div><strong>{request.member_name}</strong><span>{request.request_kind==="recurring"?`Repeats ${request.selected_weekdays.map(day=>days[day].slice(0,3)).join(", ")}`:request.selected_dates.map(date=>formatWeek(date)).join(" – ")}</span><small>{request.all_day?"All day":`${displayTime(request.start_time)}–${displayTime(request.end_time)}`}{request.note?` · ${request.note}`:""}</small></div><div className="button-row"><button className="button secondary compact danger" disabled={reviewingRequest===request.id} onClick={()=>void reviewAvailabilityRequest(request.id,"denied")}>Deny</button><button className="button primary compact" disabled={reviewingRequest===request.id} onClick={()=>void reviewAvailabilityRequest(request.id,"approved")}>Approve &amp; apply</button></div></article>)}</div>}</section>
+          <section className="panel availability-multi-day"><div><p className="eyebrow">Multiple days</p><h3>Apply this entry to every selected day</h3></div><fieldset className="member-weekday-picker"><legend>Select one or more days</legend>{days.map((day,index)=><label className={availabilityForm.selected_days.includes(index)?"selected":""} key={day}><input type="checkbox" checked={availabilityForm.selected_days.includes(index)} onChange={(event)=>setAvailabilityForm(current=>({...current,selected_days:event.target.checked?[...new Set([...current.selected_days,index])].sort():current.selected_days.filter(value=>value!==index),day_of_week:event.target.checked?index:current.day_of_week}))}/>{day.slice(0,3)}</label>)}</fieldset></section>
           <section className="panel availability-editor"><div><p className="eyebrow">Availability entry</p><h2>{availabilityForm.kind === "standard" ? "Recurring standard availability" : "Requested time off"}</h2><p>{availabilityForm.kind === "standard" ? "This repeats every week until it is changed." : `This applies only to the week of ${formatWeek(weekStart)}.`}</p></div><label>Employee<select value={availabilityForm.member_id} onChange={(event) => chooseAvailability(event.target.value, availabilityForm.day_of_week, availabilityForm.kind)}><option value="">Select employee</option>{members.map((member) => <option key={member.id} value={member.id}>{member.display_name}</option>)}</select></label><label>Entry type<select value={availabilityForm.kind} onChange={(event) => chooseAvailability(availabilityForm.member_id, availabilityForm.day_of_week, event.target.value as "standard" | "rto")}><option value="standard">Standard availability · repeats</option><option value="rto">Requested time off · this week</option></select></label><label>Day<select value={availabilityForm.day_of_week} onChange={(event) => chooseAvailability(availabilityForm.member_id, Number(event.target.value), availabilityForm.kind)}>{days.map((day, index) => <option key={day} value={index}>{day}</option>)}</select></label>
             {availabilityForm.kind === "standard" ? <label>Status<select value={availabilityForm.standard_status} onChange={(event) => setAvailabilityForm({ ...availabilityForm, standard_status: event.target.value as typeof availabilityForm.standard_status })}><option value="available">Available all day</option><option value="limited">Available only during set times</option><option value="unavailable">Not available</option></select></label> : <label className="checkbox-line"><input type="checkbox" checked={availabilityForm.all_day} onChange={(event) => setAvailabilityForm({ ...availabilityForm, all_day: event.target.checked })} />Entire day requested off</label>}
             {((availabilityForm.kind === "standard" && availabilityForm.standard_status === "limited") || (availabilityForm.kind === "rto" && !availabilityForm.all_day)) && <div className="availability-time-row"><label>Starts<input type="time" step="900" value={availabilityForm.start_time} onChange={(event) => setAvailabilityForm({ ...availabilityForm, start_time: event.target.value })} /></label><label>Ends<input type="time" step="900" value={availabilityForm.end_time} onChange={(event) => setAvailabilityForm({ ...availabilityForm, end_time: event.target.value })} /></label></div>}
