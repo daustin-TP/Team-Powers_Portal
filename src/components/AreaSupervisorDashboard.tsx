@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { AlertTriangle, BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, History, Pencil, Plus, RotateCcw, Save, Target, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
@@ -81,6 +82,13 @@ const timeOptions = Array.from({ length: 88 }, (_, index) => {
   const totalMinutes = (6 * 60 + index * 15) % (24 * 60);
   return `${String(Math.floor(totalMinutes / 60)).padStart(2, "0")}:${String(totalMinutes % 60).padStart(2, "0")}`;
 });
+const timelineStartMinutes = 7 * 60;
+const timelineEndMinutes = 25 * 60;
+const timelineRowHeight = 34;
+const timelineSlots = Array.from({ length: (timelineEndMinutes - timelineStartMinutes) / 30 }, (_, index) => {
+  const minutes = timelineStartMinutes + index * 30;
+  return { minutes, clock: `${String(Math.floor((minutes % (24 * 60)) / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}` };
+});
 const metricConfigs = [
   { key: "sales", label: "Sales", source: "royalty_sales", lowerBetter: false, format: "currency" },
   { key: "labor", label: "Labor", source: "labor_percent", lowerBetter: true, format: "percent" },
@@ -99,6 +107,7 @@ function monday(value = new Date()) { const date = new Date(value); date.setHour
 function dateLabel(value: string) { return fromIso(value).toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
 function timeLabel(value: string) { const [hour, minute] = value.slice(0, 5).split(":").map(Number); return new Date(2000, 0, 1, hour, minute).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
 function scheduleMinutes(value: string) { const [hour, minute] = value.slice(0, 5).split(":").map(Number); const total = hour * 60 + minute; return hour < 5 ? total + 24 * 60 : total; }
+function scheduleClock(minutes: number) { const normalized = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60); return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`; }
 function numberValue(value: unknown) { if (value === null || value === undefined || value === "") return null; const parsed = Number(String(value).replace(/[$,%\s]/g, "")); return Number.isFinite(parsed) ? parsed : null; }
 function average(values: number[]) { return values.reduce((sum, value) => sum + value, 0) / values.length; }
 function formatMetric(value: number, format: string) { if (format === "currency") return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value > 1000 ? 0 : 2 }); if (format === "percent") return `${(Math.abs(value) <= 1 ? value * 100 : value).toFixed(1)}%`; return value.toFixed(2); }
@@ -141,6 +150,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     return saved === "history" || saved === "visits" || saved === "expectations" ? saved : "current";
   });
   const [pastPlans, setPastPlans] = useState<WeeklyPlan[]>([]);
+  const resizeVisitRef = useRef<{ id: string; startY: number; originalEnd: number; lastEnd: number } | null>(null);
 
   const weekEnd = addIsoDays(weekStart, 6);
   const storeMap = useMemo(() => new Map(stores.map((store) => [store.id, store])), [stores]);
@@ -236,10 +246,12 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     return data as WeeklyPlan;
   };
 
-  const openAddVisit = (purpose = "Training visit", visitDate = weekStart) => {
+  const openAddVisit = (purpose = "Training visit", visitDate = weekStart, startTime?: string) => {
     const eligibleStores = storesForVisit(purpose);
+    const nextStart = startTime ?? newVisit.start_time;
+    const nextEnd = startTime ? scheduleClock(Math.min(scheduleMinutes(startTime) + 60, timelineEndMinutes)) : newVisit.end_time;
     setEditingVisitId(null);
-    setNewVisit((current) => ({ ...current, purpose, visit_date: visitDate, store_id: eligibleStores.some((store) => store.id === current.store_id) ? current.store_id : (eligibleStores[0]?.id ?? "") }));
+    setNewVisit((current) => ({ ...current, purpose, visit_date: visitDate, start_time: nextStart, end_time: nextEnd, store_id: eligibleStores.some((store) => store.id === current.store_id) ? current.store_id : (eligibleStores[0]?.id ?? "") }));
     setEditorOpen(true);
   };
   const openEditVisit = (visit: Visit) => {
@@ -268,6 +280,44 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
   const editVisit = (visitId: string, patch: Partial<Visit>) => {
     setVisits((current) => current.map((item) => item.id === visitId ? { ...item, ...patch, _dirty: true } : item));
     setVisitDirty(true);
+  };
+  const stageVisitAt = (purpose: string, visitDate: string, startTime: string) => {
+    const eligibleStores = storesForVisit(purpose);
+    if (!eligibleStores.length) { setMessage("No assigned store is available for this visit type."); return; }
+    const stagedVisit: Visit = {
+      id: crypto.randomUUID(), supervisor_id: supervisorId, store_id: eligibleStores[0].id, visit_date: visitDate,
+      start_time: startTime, end_time: scheduleClock(Math.min(scheduleMinutes(startTime) + 60, timelineEndMinutes)),
+      purpose, notes: "", weekly_plan_id: plan?.id ?? null, status: "tentative", edited_from_original: false,
+      last_change_reason: null, _draft: true, _dirty: true,
+    };
+    setVisits((current) => [...current, stagedVisit].sort((left, right) => left.visit_date.localeCompare(right.visit_date) || scheduleMinutes(left.start_time) - scheduleMinutes(right.start_time)));
+    setVisitDirty(true);
+    setMessage(`${purpose} placed at ${timeLabel(startTime)}. Tap the visit to confirm its store or adjust its details, then save the schedule.`);
+  };
+  const placeVisitInSlot = (event: ReactDragEvent, visitDate: string, startTime: string) => {
+    event.preventDefault();
+    const scheduledVisitId = event.dataTransfer.getData("text/scheduled-visit");
+    if (scheduledVisitId) {
+      const visit = visits.find((item) => item.id === scheduledVisitId);
+      if (!visit) return;
+      const duration = Math.max(30, scheduleMinutes(visit.end_time) - scheduleMinutes(visit.start_time));
+      const nextEnd = scheduleClock(Math.min(scheduleMinutes(startTime) + duration, timelineEndMinutes));
+      editVisit(visit.id, { visit_date: visitDate, start_time: startTime, end_time: nextEnd, edited_from_original: visit.edited_from_original || !visit._draft, last_change_reason: visit._draft ? visit.last_change_reason : "Moved on the weekly timeline" });
+      setMessage("Visit moved on the working timeline. Save schedule updates when the week is ready.");
+      return;
+    }
+    const purpose = event.dataTransfer.getData("text/visit-purpose");
+    if (purpose) stageVisitAt(purpose, visitDate, startTime);
+  };
+  const resizeVisit = (event: ReactPointerEvent<HTMLButtonElement>, visit: Visit) => {
+    const active = resizeVisitRef.current;
+    if (!active || active.id !== visit.id) return;
+    const slotChange = Math.round((event.clientY - active.startY) / timelineRowHeight);
+    const minimumEnd = scheduleMinutes(visit.start_time) + 30;
+    const nextEnd = Math.max(minimumEnd, Math.min(active.originalEnd + slotChange * 30, timelineEndMinutes));
+    if (nextEnd === active.lastEnd) return;
+    active.lastEnd = nextEnd;
+    editVisit(visit.id, { end_time: scheduleClock(nextEnd), edited_from_original: visit.edited_from_original || !visit._draft, last_change_reason: visit._draft ? visit.last_change_reason : "Duration adjusted on the weekly timeline" });
   };
   const selectVisitType = (visit: Visit, purpose: string) => {
     editVisit(visit.id, { purpose });
@@ -396,22 +446,29 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
 
       <section className="panel weekly-planner-sheet">
         <header className="weekly-planner-title"><div><p className="eyebrow">Team Powers weekly checklist</p><h2>{supervisorName} · {dateLabel(weekStart)}–{dateLabel(weekEnd)}</h2></div><span className={`status-pill ${draft.status}`}>{draft.status === "complete" ? "Week complete" : "Live plan"}</span></header>
-        <div className="supervisor-week-board">{days.map((day, index) => {
-          const visitDate = addIsoDays(weekStart, index);
-          const dayVisits = visibleVisits.filter((visit) => visit.visit_date === visitDate).sort((left, right) => scheduleMinutes(left.start_time) - scheduleMinutes(right.start_time));
-          return <section key={day} className="supervisor-day-card" onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("drag-over"); }} onDragLeave={(event) => event.currentTarget.classList.remove("drag-over")} onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("drag-over"); const purpose = event.dataTransfer.getData("text/visit-purpose"); if (purpose) openAddVisit(purpose, visitDate); }}>
-            <header><div><strong>{day}</strong><small>{dateLabel(visitDate)}</small></div><button className="icon-button" type="button" aria-label={`Add visit on ${day}`} onClick={() => openAddVisit("Training visit", visitDate)}><Plus size={16}/></button></header>
-            <label>Planned hours<input value={draft.hours_by_day[day] ?? ""} onChange={(event) => changeDraft({ hours_by_day: { ...draft.hours_by_day, [day]: event.target.value } })} placeholder="Hours / time" /></label>
-            <div className="day-visit-list">{dayVisits.map((visit) => {
-              const log = visitLogStatuses[visit.id];
-              const state = visit._draft || visit._dirty ? "unsaved" : log?.status === "submitted" ? "completed" : log?.status === "draft" ? "started" : "planned";
-              return <article key={visit.id} className={`day-visit-card ${state}`}>
-                <button type="button" className="day-visit-main" onClick={() => openScheduledVisitLog(visit)}><b>{timeLabel(visit.start_time)}-{timeLabel(visit.end_time)}</b><span>{visit.purpose}</span><small>{storeMap.get(visit.store_id)?.name ?? "Store"}</small><em>{state === "completed" ? "Visit completed" : state === "started" ? `Draft ${log.completion_percent}%` : state === "unsaved" ? "Unsaved change" : "Planned"}</em></button>
-                <div><button type="button" aria-label={`Edit ${visit.purpose}`} onClick={() => openEditVisit(visit)}><Pencil size={13}/>Edit</button>{connectedLogTypes.has(visit.purpose) && <button type="button" onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={13}/>{state === "completed" ? "Review" : "Log"}</button>}<button type="button" aria-label={`Remove ${visit.purpose}`} onClick={() => cancelVisit(visit)}><Trash2 size={13}/>Remove</button></div>
-              </article>;
-            })}{!dayVisits.length && <button className="day-drop-zone" type="button" onClick={() => openAddVisit("Training visit", visitDate)}>Drop a visit here or tap +</button>}</div>
-          </section>;
-        })}</div>
+        <div className="supervisor-timeline-help"><span><b>Drag</b> a required visit into its time.</span><span><b>Move</b> a visit by dragging its card.</span><span><b>Stretch</b> the bottom handle in 30-minute steps.</span></div>
+        <div className="supervisor-timeline-scroll"><div className="supervisor-timeline-grid">
+          <div className="timeline-corner">Time</div>
+          {days.map((day, index) => { const visitDate = addIsoDays(weekStart, index); return <header className="timeline-day-heading" key={day}><div><strong>{day}</strong><small>{dateLabel(visitDate)}</small></div><button className="icon-button" type="button" aria-label={`Add visit on ${day}`} onClick={() => openAddVisit("Training visit", visitDate, "09:00")}><Plus size={15}/></button><label>Planned hours<input value={draft.hours_by_day[day] ?? ""} onChange={(event) => changeDraft({ hours_by_day: { ...draft.hours_by_day, [day]: event.target.value } })} placeholder="Optional" /></label></header>; })}
+          <div className="timeline-time-lane">{timelineSlots.map((slot) => <div className={slot.minutes % 60 === 0 ? "hour" : "half-hour"} key={slot.minutes}>{slot.minutes % 60 === 0 ? timeLabel(slot.clock) : ""}</div>)}</div>
+          {days.map((day, index) => {
+            const visitDate = addIsoDays(weekStart, index);
+            const dayVisits = visibleVisits.filter((visit) => visit.visit_date === visitDate).sort((left, right) => scheduleMinutes(left.start_time) - scheduleMinutes(right.start_time));
+            return <section className="timeline-day-lane" key={day} aria-label={`${day} schedule`}>{timelineSlots.map((slot) => <button type="button" className={slot.minutes % 60 === 0 ? "timeline-slot hour" : "timeline-slot half-hour"} key={slot.minutes} aria-label={`Add visit ${day} at ${timeLabel(slot.clock)}`} onClick={() => openAddVisit("Training visit", visitDate, slot.clock)} onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("drag-over"); }} onDragLeave={(event) => event.currentTarget.classList.remove("drag-over")} onDrop={(event) => { event.currentTarget.classList.remove("drag-over"); placeVisitInSlot(event, visitDate, slot.clock); }}/>) }
+              {dayVisits.map((visit) => {
+                const log = visitLogStatuses[visit.id];
+                const state = visit._draft || visit._dirty ? "unsaved" : log?.status === "submitted" ? "completed" : log?.status === "draft" ? "started" : "planned";
+                const top = Math.max(0, (scheduleMinutes(visit.start_time) - timelineStartMinutes) / 30 * timelineRowHeight);
+                const height = Math.max(timelineRowHeight, (scheduleMinutes(visit.end_time) - scheduleMinutes(visit.start_time)) / 30 * timelineRowHeight);
+                return <article draggable className={`timeline-visit ${state}`} key={visit.id} style={{ top, height }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/scheduled-visit", visit.id); }}>
+                  <button type="button" className="timeline-visit-main" onClick={() => openEditVisit(visit)}><b>{timeLabel(visit.start_time)}–{timeLabel(visit.end_time)}</b><span>{visit.purpose}</span><small>{storeMap.get(visit.store_id)?.name ?? "Select store"}</small><em>{state === "completed" ? "Completed" : state === "started" ? `Draft ${log.completion_percent}%` : state === "unsaved" ? "Unsaved" : "Planned"}</em></button>
+                  <div className="timeline-visit-tools">{connectedLogTypes.has(visit.purpose) && <button type="button" title={state === "completed" ? "Review visit log" : "Complete visit log"} onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={12}/></button>}<button type="button" title="Remove visit" onClick={() => cancelVisit(visit)}><Trash2 size={12}/></button></div>
+                  <button type="button" className="timeline-resize-handle" aria-label={`Resize ${visit.purpose}`} title="Drag to change the end time" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); const end = scheduleMinutes(visit.end_time); resizeVisitRef.current = { id: visit.id, startY: event.clientY, originalEnd: end, lastEnd: end }; }} onPointerMove={(event) => resizeVisit(event, visit)} onPointerUp={(event) => { event.currentTarget.releasePointerCapture(event.pointerId); resizeVisitRef.current = null; }}><span/></button>
+                </article>;
+              })}
+            </section>;
+          })}
+        </div></div>
         <div className="weekly-board-save"><div>{pendingVisitCount > 0 ? <strong>{pendingVisitCount} unsaved schedule change{pendingVisitCount === 1 ? "" : "s"}</strong> : <span>Schedule and visit completion stay together on this board.</span>}</div><button className="button primary" disabled={busy || (!visitDirty && !dirty)} onClick={() => void saveVisitUpdates()}><Save size={16}/>{busy ? "Saving…" : "Save schedule updates"}</button></div>
         <label className="supervisor-days-off">Days off<input value={draft.days_off} onChange={(event) => changeDraft({ days_off: event.target.value })} placeholder="Example: Thursday and Sunday" /></label>
 

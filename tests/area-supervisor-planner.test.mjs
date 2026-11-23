@@ -51,13 +51,24 @@ test("the per-store checklist excludes the synthetic All Stores record", () => {
   assert.match(component, /filter\(\(store\) => !isAllStores\(store\)\)/);
 });
 
-test("visits can be planned instantly by day and saved together", () => {
+test("visits can be placed on an hourly week timeline and saved together", () => {
   assert.match(component, /draggable/);
   assert.match(component, /text\/visit-purpose/);
-  assert.match(component, /Drop a visit here or tap \+/);
-  assert.match(component, /Save updates/);
+  assert.match(component, /timelineStartMinutes = 7 \* 60/);
+  assert.match(component, /timelineEndMinutes = 25 \* 60/);
+  assert.match(component, /stageVisitAt/);
+  assert.match(component, /placeVisitInSlot/);
+  assert.match(component, /Save schedule updates/);
   assert.match(component, /15\) % \(24 \* 60\)/);
   assert.match(component, /Complete visit log/);
+});
+
+test("scheduled visits move and resize in half-hour steps", () => {
+  assert.match(component, /text\/scheduled-visit/);
+  assert.match(component, /timelineRowHeight = 34/);
+  assert.match(component, /slotChange \* 30/);
+  assert.match(component, /timeline-resize-handle/);
+  assert.match(component, /Duration adjusted on the weekly timeline/);
 });
 
 test("all visit types are restricted to the Area Supervisor's assigned stores", () => {
@@ -67,7 +78,7 @@ test("all visit types are restricted to the Area Supervisor's assigned stores", 
 });
 
 test("the weekly board owns schedule editing and visit completion status", () => {
-  for (const label of ["Visit completed", "Draft", "Planned", "Save schedule updates", "Save visit changes"]) assert.match(component, new RegExp(label));
+  for (const label of ["Completed", "Draft", "Planned", "Save schedule updates", "Save visit changes"]) assert.match(component, new RegExp(label));
   assert.match(component, /visitLogStatuses\[visit\.id\]/);
   assert.match(component, /openScheduledVisitLog/);
 });
