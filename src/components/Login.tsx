@@ -25,12 +25,13 @@ export default function Login() {
   const sendTeamMemberLink = async () => {
     if (!supabase || !email.trim()) return;
     setSubmitting(true); setMessage("");
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim().toLowerCase(),
-      options: { shouldCreateUser: true, emailRedirectTo: `${window.location.origin}/?team=1` },
+    const { error } = await supabase.functions.invoke("team-member-auth", {
+      body: { email: email.trim().toLowerCase() },
     });
     setSubmitting(false);
-    setMessage(error ? "That secure sign-in email could not be sent. Confirm the address and try again." : "Secure sign-in sent. Open the email on this device to continue.");
+    setMessage(error
+      ? "DASH could not send the secure sign-in email. Please wait a moment and try again."
+      : "If this email belongs to an active team member, a secure sign-in link is on its way.");
   };
 
   return (
