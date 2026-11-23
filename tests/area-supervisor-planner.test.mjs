@@ -8,7 +8,7 @@ const cutTestMigration = readFileSync(new URL("../supabase/migrations/2026112321
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 test("the Director checklist is represented in the live weekly workspace", () => {
-  for (const label of ["Training visits", "Game Day visits", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Cut test", "One weeknight rush shift", "Friday or Saturday night rush", "Last week’s deposits checked", "GM schedule submitted", "Schedule published"]) {
+  for (const label of ["General Supervisor Visits", "Game Day visits", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Cut test", "One weeknight rush shift", "Friday or Saturday night rush", "Last week’s deposits checked", "GM schedule submitted", "Schedule published"]) {
     assert.match(component, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 });
@@ -37,6 +37,16 @@ test("Game Day is planned once per assigned store", () => {
   assert.match(component, /target: "per-store"/);
   assert.match(component, /purpose === "Game Day visit"/);
   assert.match(component, /assignedStores\.length/);
+});
+
+test("General Supervisor Visits are first, per-store, and open the standard linked log", () => {
+  const log = readFileSync(new URL("../src/components/SupervisorVisitLog.tsx", import.meta.url), "utf8");
+  assert.match(component, /label: "General Supervisor Visits", target: "per-store"/);
+  assert.match(component, /visitOptions = \["General Supervisor Visit"/);
+  assert.match(component, /new Set\(matchingVisits\.map\(\(visit\) => visit\.store_id\)\)\.size/);
+  assert.match(component, /connectedLogTypes/);
+  assert.match(log, /visitType: "General Supervisor Visit"/);
+  assert.match(log, /templateForVisit\(data\.purpose\) \? data\.purpose : "General Supervisor Visit"/);
 });
 
 test("cut tests are per-store checklist evidence rather than scheduled visits", () => {

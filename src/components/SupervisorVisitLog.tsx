@@ -149,7 +149,7 @@ const centralDate = () => {
 };
 
 const emptyForm = (): VisitForm => ({
-  visitType: "General Area Supervisor visit",
+  visitType: "General Supervisor Visit",
   templateData: {},
   managerName: "",
   visitDate: centralDate(),
@@ -166,7 +166,7 @@ const emptyForm = (): VisitForm => ({
 const normalizeForm = (value?: Partial<VisitForm> | null): VisitForm => ({
   ...emptyForm(),
   ...(value ?? {}),
-  visitType: value?.visitType ?? "General Area Supervisor visit",
+  visitType: value?.visitType ?? "General Supervisor Visit",
   templateData: value?.templateData ?? {},
   checks: value?.checks ?? {},
   products: value?.products ?? {},
@@ -332,7 +332,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     void supabase.from('supervisor_visit_schedules').select('id,supervisor_id,store_id,visit_date,start_time,end_time,purpose').eq('id',initialScheduleId).maybeSingle().then(({data,error})=>{
       if(error||!data){setMessage(error?.message||'This calendar visit is not available.');return;}
       if(profile.role==='admin'){setMessage('No DM Visit Form has been started for this scheduled visit yet. The assigned Area Supervisor can open it from their calendar.');return;}
-      const visitType = templateForVisit(data.purpose) ? data.purpose : "General Area Supervisor visit";
+      const visitType = templateForVisit(data.purpose) ? data.purpose : "General Supervisor Visit";
       setSelected(null);setLogId(null);setScheduleId(data.id);setStoreId(data.store_id);setForm({...emptyForm(),visitType,visitDate:data.visit_date,visitTime:data.start_time.slice(0,5),templateData:scheduledTemplateData(visitType,data.start_time,data.end_time)});setPhotos([]);setStepIndex(0);setShowEditor(true);setMessage(`Store, date, scheduled time, and visit type were filled from the weekly plan. You can adjust them in this form if the visit changed.`);
     });
   },[initialScheduleId,loading,logs,profile.role]);
@@ -462,7 +462,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     const key = activeStep.key;
     if (key === "details") return <div className="visit-details-grid">
       <label>Visit form<select value={form.visitType} onChange={(event) => { setForm((current) => ({ ...current, visitType: event.target.value, templateData: {} })); setStepIndex(0); }} disabled={readOnly}>
-        <option>General Area Supervisor visit</option><option>Game Day visit</option><option>Opening visit</option><option>Closing visit</option><option>Rush observation</option>
+        <option>General Supervisor Visit</option><option>Game Day visit</option><option>Opening visit</option><option>Closing visit</option><option>Rush observation</option>
       </select></label>
       <label>Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)} disabled={readOnly}><option value="">Select store</option>{stores.map((store) => <option value={store.id} key={store.id}>{store.name} {store.store_number ?? ""}</option>)}</select></label>
       <label>Date<input type="date" value={form.visitDate} onChange={(event) => setForm((current) => ({ ...current, visitDate: event.target.value }))} disabled={readOnly} /></label>
@@ -541,7 +541,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     <section className="panel visit-records-panel"><div className="table-toolbar visit-log-toolbar"><div><h2>Visits by date</h2><p>{profile.role === "admin" ? "All Area Supervisor visit records" : "Your private visit history"}</p></div><div className="hr-filters"><select value={storeFilter} onChange={(event) => setStoreFilter(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number ?? ""}</option>)}</select><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="all">All statuses</option><option value="draft">Drafts</option><option value="submitted">Submitted</option></select></div></div>
       {loading ? <div className="empty-state">Loading visit records…</div> : visibleLogs.length === 0 ? <div className="empty-state"><ClipboardCheck size={34} /><h3>No visit logs yet</h3><p>Start a visit from a phone or desktop and save it at any point.</p></div> : <div className="visit-record-list">{visibleLogs.map((log) => <button type="button" key={log.id} onClick={() => void openLog(log)}>
         <div className="visit-record-date"><strong>{new Date(`${log.visit_date}T12:00:00`).toLocaleDateString("en-US", { day: "numeric" })}</strong><span>{new Date(`${log.visit_date}T12:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" })}</span></div>
-        <div className="visit-record-main"><div><strong>{storeName(log.store_id)}</strong><span>{log.form_data.visitType ?? "General Area Supervisor visit"} · {formatTime(log.visit_time)} · Manager: {log.manager_name || "Not entered"}</span></div>{profile.role === "admin" && <small>Visited by {log.supervisor_name}</small>}</div>
+        <div className="visit-record-main"><div><strong>{storeName(log.store_id)}</strong><span>{log.form_data.visitType ?? "General Supervisor Visit"} · {formatTime(log.visit_time)} · Manager: {log.manager_name || "Not entered"}</span></div>{profile.role === "admin" && <small>Visited by {log.supervisor_name}</small>}</div>
         <div className="visit-record-facts"><span><b>{log.completion_percent}%</b> complete</span><span><b>{log.issues_found}</b> flagged</span><span><b>{photoCounts[log.id] ?? 0}</b> photos</span></div>
         <span className={`visit-status ${log.status}`}>{log.status}</span><Eye size={18} />
       </button>)}</div>}

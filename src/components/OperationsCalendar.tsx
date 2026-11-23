@@ -13,7 +13,7 @@ type Birthday = { member_id: string; store_id: string; display_name: string; bir
 type Anniversary = { member_id: string; store_id: string; display_name: string; service_date: string };
 type EditorMode = "visit" | "event";
 
-const purposeOptions = ["Training visit", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Cut test", "Store visit", "Operations review", "Training / coaching", "Schedule review", "KPI / goal follow-up", "Inventory / food cost", "Maintenance / technology", "Other"];
+const purposeOptions = ["General Supervisor Visit", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "Store visit", "Operations review", "Training / coaching", "Schedule review", "KPI / goal follow-up", "Inventory / food cost", "Maintenance / technology", "Other"];
 const audienceLabels: Record<TeamEvent["audience"], string> = { everyone: "Everyone with portal access", leadership: "Store leadership", supervisors: "Area Supervisors + admins", admin: "Admins only" };
 const categoryOptions = [["operations", "Period meeting"], ["holiday", "Holiday"], ["custom", "Webinar / class"], ["promotion", "Promotion"], ["local_event", "Local event"], ["school", "School event"], ["sports", "Sports"], ["weather", "Weather"]];
 
