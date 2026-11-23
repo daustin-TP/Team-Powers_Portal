@@ -7,6 +7,7 @@ const app=readFileSync("src/App.tsx","utf8");
 const portal=readFileSync("src/components/TeamMemberPortal.tsx","utf8");
 const labor=readFileSync("src/components/LaborManagement.tsx","utf8");
 const recurringMigration=readFileSync("supabase/migrations/20261123181500_recurring_availability_change_requests.sql","utf8");
+const cutoffMigration=readFileSync("supabase/migrations/20261123190000_team_member_request_cutoff.sql","utf8");
 
 test("employee access is server-gated by current active roster status",()=>{
   assert.match(migration,/lower\(access_email\) = email_value/);
@@ -58,4 +59,13 @@ test("recurring changes require a valid reason and manager approval",()=>{
   assert.match(recurringMigration,/if decision_value='approved'/);
   assert.match(recurringMigration,/req\.recurring_status in \('available','limited'\)/);
   assert.match(labor,/Approve &amp; apply/);
+});
+
+test("one-time requests close before managers begin the target schedule",()=>{
+  assert.match(portal,/earliestRequestDate/);
+  assert.match(portal,/Request-off dates close the Sunday before managers begin that schedule/);
+  assert.match(cutoffMigration,/America\/Chicago/);
+  assert.match(cutoffMigration,/date_trunc\('week'/);
+  assert.match(cutoffMigration,/requested_date::timestamp\)::date - 8/);
+  assert.match(cutoffMigration,/new\.request_kind = 'one_time'/);
 });

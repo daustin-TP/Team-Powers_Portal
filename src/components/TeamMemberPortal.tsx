@@ -11,14 +11,21 @@ const days=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunda
 const dateLabel=(value:string)=>new Date(`${value}T12:00:00`).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
 const timeLabel=(value:string)=>new Date(`2000-01-01T${value}`).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
 const addDays=(iso:string,amount:number)=>{const d=new Date(`${iso}T12:00:00`);d.setDate(d.getDate()+amount);return d.toISOString().slice(0,10);};
+const centralToday=()=>{
+  const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"America/Chicago",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
+  const value=(type:string)=>parts.find(part=>part.type===type)?.value??"";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+};
+const mondayOfWeek=(iso:string)=>{const date=new Date(`${iso}T12:00:00`);const offset=(date.getDay()+6)%7;return addDays(iso,-offset);};
+const earliestRequestDate=()=>addDays(mondayOfWeek(centralToday()),14);
 
 export default function TeamMemberPortal({ member, onSignOut, onAccessRevoked }:{member:MemberAccess;onSignOut:()=>void;onAccessRevoked:()=>void}){
   const [requests,setRequests]=useState<MemberRequest[]>([]);
   const [weeks,setWeeks]=useState<MemberWeek[]>([]);
   const [standardAvailability,setStandardAvailability]=useState<StandardAvailability[]>([]);
   const [kind,setKind]=useState<"one_time"|"recurring">("one_time");
-  const [startDate,setStartDate]=useState(new Date().toISOString().slice(0,10));
-  const [endDate,setEndDate]=useState(new Date().toISOString().slice(0,10));
+  const [startDate,setStartDate]=useState(earliestRequestDate);
+  const [endDate,setEndDate]=useState(earliestRequestDate);
   const [weekdays,setWeekdays]=useState<number[]>([]);
   const [recurringStatus,setRecurringStatus]=useState<"available"|"limited"|"unavailable">("unavailable");
   const [allDay,setAllDay]=useState(true);
@@ -29,6 +36,7 @@ export default function TeamMemberPortal({ member, onSignOut, onAccessRevoked }:
   const [error,setError]=useState("");
   const [loading,setLoading]=useState(true);
   const [submitting,setSubmitting]=useState(false);
+  const firstRequestDate=useMemo(earliestRequestDate,[]);
 
   const load=useCallback(async()=>{
     if(!supabase)return;
@@ -42,6 +50,7 @@ export default function TeamMemberPortal({ member, onSignOut, onAccessRevoked }:
   const submit=async()=>{
     if(!supabase)return;
     if(kind==="one_time"&&!selectedDates.length){setError("Choose a valid date or date range.");return;}
+    if(kind==="one_time"&&selectedDates.some(date=>date<firstRequestDate)){setError("That schedule is already being prepared. Choose a date in an open request week.");return;}
     if(kind==="recurring"&&!weekdays.length){setError("Choose at least one weekday.");return;}
     if(kind==="recurring"&&note.trim().length<5){setError("A valid reason is required for every recurring availability change.");return;}
     setSubmitting(true);setError("");setMessage("");
@@ -79,7 +88,7 @@ export default function TeamMemberPortal({ member, onSignOut, onAccessRevoked }:
       </section>
       <section className="panel member-request-form"><div><p className="eyebrow">Request a change</p><h2>Request time off or availability</h2><p>Your manager must approve this before it changes the scheduler.</p></div>
         <div className="request-kind-toggle"><button className={kind==="one_time"?"active":""} onClick={()=>setKind("one_time")}>Specific date(s)</button><button className={kind==="recurring"?"active":""} onClick={()=>setKind("recurring")}>Repeating weekly</button></div>
-        {kind==="one_time"?<div className="member-date-range"><label>First date<input type="date" min={new Date().toISOString().slice(0,10)} value={startDate} onChange={e=>{setStartDate(e.target.value);if(e.target.value>endDate)setEndDate(e.target.value);}}/></label><label>Last date<input type="date" min={startDate} value={endDate} onChange={e=>setEndDate(e.target.value)}/></label><small>{selectedDates.length} day{selectedDates.length===1?"":"s"} selected</small></div>:<><fieldset className="member-weekday-picker"><legend>Days this repeats</legend>{days.map((day,index)=><label className={weekdays.includes(index)?"selected":""} key={day}><input type="checkbox" checked={weekdays.includes(index)} onChange={e=>setWeekdays(current=>e.target.checked?[...current,index].sort():current.filter(value=>value!==index))}/>{day.slice(0,3)}</label>)}</fieldset><label>Requested availability<select value={recurringStatus} onChange={e=>setRecurringStatus(e.target.value as typeof recurringStatus)}><option value="available">Available all day</option><option value="limited">Available only during set hours</option><option value="unavailable">Not available</option></select></label><div className="recurring-reason-warning"><AlertTriangle size={18}/><strong>A valid reason is required for recurring changes.</strong><span>Examples: second job, school, after-school activity, or an ongoing family responsibility.</span></div></>}
+        {kind==="one_time"?<><div className="recurring-reason-warning"><AlertTriangle size={18}/><strong>Request-off dates close the Sunday before managers begin that schedule.</strong><span>The earliest week currently open begins {dateLabel(firstRequestDate)}. Contact your manager directly about an emergency after the cutoff.</span></div><div className="member-date-range"><label>First date<input type="date" min={firstRequestDate} value={startDate} onChange={e=>{setStartDate(e.target.value);if(e.target.value>endDate)setEndDate(e.target.value);}}/></label><label>Last date<input type="date" min={startDate} value={endDate} onChange={e=>setEndDate(e.target.value)}/></label><small>{selectedDates.length} day{selectedDates.length===1?"":"s"} selected</small></div></>:<><fieldset className="member-weekday-picker"><legend>Days this repeats</legend>{days.map((day,index)=><label className={weekdays.includes(index)?"selected":""} key={day}><input type="checkbox" checked={weekdays.includes(index)} onChange={e=>setWeekdays(current=>e.target.checked?[...current,index].sort():current.filter(value=>value!==index))}/>{day.slice(0,3)}</label>)}</fieldset><label>Requested availability<select value={recurringStatus} onChange={e=>setRecurringStatus(e.target.value as typeof recurringStatus)}><option value="available">Available all day</option><option value="limited">Available only during set hours</option><option value="unavailable">Not available</option></select></label><div className="recurring-reason-warning"><AlertTriangle size={18}/><strong>A valid reason is required for recurring changes.</strong><span>Examples: second job, school, after-school activity, or an ongoing family responsibility.</span></div></>}
         {kind==="one_time"&&<label className="checkbox-line"><input type="checkbox" checked={allDay} onChange={e=>setAllDay(e.target.checked)}/>Unavailable all day</label>}
         {((kind==="one_time"&&!allDay)||(kind==="recurring"&&recurringStatus==="limited"))&&<div className="availability-time-row"><label>{kind==="recurring"?"Available from":"Unavailable from"}<input type="time" step="900" value={startTime} onChange={e=>setStartTime(e.target.value)}/></label><label>Until<input type="time" step="900" value={endTime} onChange={e=>setEndTime(e.target.value)}/></label></div>}
         <label>Reason or details {kind==="one_time"?<small className="optional-label">Optional</small>:<small className="required-label">Required</small>}<textarea required={kind==="recurring"} rows={3} value={note} onChange={e=>setNote(e.target.value)} placeholder={kind==="recurring"?"Explain why this repeating change is needed":"Help your manager understand the request"}/></label>
