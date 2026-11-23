@@ -128,6 +128,19 @@ test('only administrators can immediately deliver queued payroll email',async()=
   assert.equal((await response.json()).sent,1);
 });
 
+test('layout test delivery is administrator-only, uses the signed-in email, and reads the latest approved cycle',()=>{
+  const source=readFileSync(new URL('../supabase/functions/payroll/index.ts',import.meta.url),'utf8');
+  assert.match(source,/body\.action==="send_layout_test"/);
+  assert.match(source,/p\.role!=="admin"/);
+  assert.match(source,/to:p\.email/);
+  assert.match(source,/payroll_cycles/);
+  assert.match(source,/eq\("status","approved"\)\.order\("due_date",\{ascending:false\}\)/);
+  assert.match(source,/TEST EMAIL — REVIEW ONLY/);
+  assert.match(source,/does not reopen or change that payroll cycle/);
+  const ui=readFileSync(new URL('../src/components/PayrollCenter.tsx',import.meta.url),'utf8');
+  assert.match(ui,/Send latest payroll layout test to me/);
+});
+
 test('store payroll drafts auto-save after edits without submitting',()=>{
   const source=readFileSync(new URL('../src/components/PayrollCenter.tsx',import.meta.url),'utf8');
   assert.match(source,/status:\"draft\"/);

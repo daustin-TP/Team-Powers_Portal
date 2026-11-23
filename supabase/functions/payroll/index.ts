@@ -62,7 +62,7 @@ export async function handlePayroll(req: Request) {
     }
     const auth=await db.auth.getUser(token);
     if(auth.error || !auth.data.user)return json({error:"Sign in required"},401);
-    const pr=await db.from("profiles").select("id,role,active,store_id,full_name").eq("id",auth.data.user.id).maybeSingle();check(pr);
+    const pr=await db.from("profiles").select("id,role,active,store_id,full_name,email").eq("id",auth.data.user.id).maybeSingle();check(pr);
     const p=pr.data;
     if(!p?.active || !["manager","supervisor","admin"].includes(p.role))return json({error:"Payroll is available to GMs and above."},403);
     const assignments=await db.from("profile_store_assignments").select("store_id").eq("profile_id",p.id);check(assignments);
@@ -127,6 +127,20 @@ export async function handlePayroll(req: Request) {
       if(!email)return json({error:"The email sender secrets are incomplete."},400);
       const connection=await checkEmailConnection(email);
       return json({ok:true,email_ready:true,...connection});
+    }
+    if(body.action==="send_layout_test"){
+      if(p.role!=="admin")return json({error:"Only administrators can send a payroll layout test."},403);
+      if(!email)return json({error:"The email sender secrets are incomplete."},400);
+      if(!p.email)return json({error:"Your DASH account does not have a delivery email address."},400);
+      const latestCycle=await db.from("payroll_cycles").select("due_date").eq("status","approved").order("due_date",{ascending:false}).limit(1).maybeSingle();check(latestCycle);
+      if(!latestCycle.data?.due_date)return json({error:"No approved payroll cycle is available for a layout test."},404);
+      const submissions=await db.from("payroll_submissions").select("store_name,entries").eq("due_date",latestCycle.data.due_date).eq("status","approved").order("store_name");check(submissions);
+      if(!submissions.data?.length)return json({error:"The latest approved payroll cycle has no approved store submissions."},404);
+      const dueDate=String(latestCycle.data.due_date);
+      const subject=`TEST — Payroll layout — ${dueDate}`;
+      const text=`TEST EMAIL — REVIEW ONLY\nThis message uses the most recent approved payroll information. It does not reopen or change that payroll cycle.\n\n${emailBody(dueDate,submissions.data)}`;
+      const providerId=await sendEmailMessage(email,{id:`payroll-layout-test:${p.id}:${crypto.randomUUID()}`,to:p.email,subject,text,html:emailHtml(subject,text,Deno.env.get("DASH_OS_URL")?.trim()||"https://team-powers-portal.daustin-15d.workers.dev/"),fromName:"DASH-OS Payroll"});
+      return json({ok:true,recipient:p.email,due_date:dueDate,provider_id:providerId});
     }
     if(body.action==="deliver_now"){
       if(p.role!=="admin")return json({error:"Only administrators can send queued payroll email."},403);
