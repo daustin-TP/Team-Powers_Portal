@@ -84,7 +84,7 @@ const timeOptions = Array.from({ length: 88 }, (_, index) => {
 });
 const timelineStartMinutes = 7 * 60;
 const timelineEndMinutes = 25 * 60;
-const timelineRowHeight = 34;
+const timelineRowHeights = { 65: 18, 80: 26, 100: 34 } as const;
 const timelineSlots = Array.from({ length: (timelineEndMinutes - timelineStartMinutes) / 30 }, (_, index) => {
   const minutes = timelineStartMinutes + index * 30;
   return { minutes, clock: `${String(Math.floor((minutes % (24 * 60)) / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}` };
@@ -150,7 +150,12 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
     return saved === "history" || saved === "visits" || saved === "expectations" ? saved : "current";
   });
   const [pastPlans, setPastPlans] = useState<WeeklyPlan[]>([]);
+  const [timelineZoom, setTimelineZoom] = useState<keyof typeof timelineRowHeights>(() => {
+    const saved = Number(window.localStorage.getItem(`dashos:supervisor-timeline-zoom:${profile.id}`));
+    return saved === 80 || saved === 100 ? saved : 65;
+  });
   const resizeVisitRef = useRef<{ id: string; startY: number; originalEnd: number; lastEnd: number } | null>(null);
+  const timelineRowHeight = timelineRowHeights[timelineZoom];
 
   const weekEnd = addIsoDays(weekStart, 6);
   const storeMap = useMemo(() => new Map(stores.map((store) => [store.id, store])), [stores]);
@@ -215,6 +220,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
   useEffect(() => { void loadSupervisors(); }, [loadSupervisors]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { window.sessionStorage.setItem("dashos:supervisor-workspace-view", workspaceView); }, [workspaceView]);
+  useEffect(() => { window.localStorage.setItem(`dashos:supervisor-timeline-zoom:${profile.id}`, String(timelineZoom)); }, [profile.id, timelineZoom]);
   useEffect(() => {
     if (!supabase || !supervisorId) return;
     const client = supabase;
@@ -446,15 +452,15 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
 
       <section className="panel weekly-planner-sheet">
         <header className="weekly-planner-title"><div><p className="eyebrow">Team Powers weekly checklist</p><h2>{supervisorName} · {dateLabel(weekStart)}–{dateLabel(weekEnd)}</h2></div><span className={`status-pill ${draft.status}`}>{draft.status === "complete" ? "Week complete" : "Live plan"}</span></header>
-        <div className="supervisor-timeline-help"><span><b>Drag</b> a required visit into its time.</span><span><b>Move</b> a visit by dragging its card.</span><span><b>Stretch</b> the bottom handle in 30-minute steps.</span></div>
-        <div className="supervisor-timeline-scroll"><div className="supervisor-timeline-grid">
+        <div className="supervisor-timeline-help"><span><b>Drag</b> a required visit into its time.</span><span><b>Move</b> a visit by dragging its card.</span><span><b>Stretch</b> the bottom handle in 30-minute steps.</span><div className="timeline-zoom-controls" aria-label="Weekly schedule size"><b>Schedule size</b>{([65, 80, 100] as const).map((value) => <button type="button" className={timelineZoom === value ? "active" : ""} aria-pressed={timelineZoom === value} title={value === 65 ? "Compact overview" : value === 80 ? "Standard size" : "Large text"} onClick={() => setTimelineZoom(value)} key={value}>{value}%</button>)}</div></div>
+        <div className={`supervisor-timeline-scroll timeline-zoom-${timelineZoom}`}><div className="supervisor-timeline-grid">
           <div className="timeline-corner">Time</div>
           {days.map((day, index) => { const visitDate = addIsoDays(weekStart, index); return <header className="timeline-day-heading" key={day}><div><strong>{day}</strong><small>{dateLabel(visitDate)}</small></div><button className="icon-button" type="button" aria-label={`Add visit on ${day}`} onClick={() => openAddVisit("Training visit", visitDate, "09:00")}><Plus size={15}/></button><label>Planned hours<input value={draft.hours_by_day[day] ?? ""} onChange={(event) => changeDraft({ hours_by_day: { ...draft.hours_by_day, [day]: event.target.value } })} placeholder="Optional" /></label></header>; })}
-          <div className="timeline-time-lane">{timelineSlots.map((slot) => <div className={slot.minutes % 60 === 0 ? "hour" : "half-hour"} key={slot.minutes}>{slot.minutes % 60 === 0 ? timeLabel(slot.clock) : ""}</div>)}</div>
+          <div className="timeline-time-lane">{timelineSlots.map((slot) => <div style={{ height: timelineRowHeight }} className={slot.minutes % 60 === 0 ? "hour" : "half-hour"} key={slot.minutes}>{slot.minutes % 60 === 0 ? timeLabel(slot.clock) : ""}</div>)}</div>
           {days.map((day, index) => {
             const visitDate = addIsoDays(weekStart, index);
             const dayVisits = visibleVisits.filter((visit) => visit.visit_date === visitDate).sort((left, right) => scheduleMinutes(left.start_time) - scheduleMinutes(right.start_time));
-            return <section className="timeline-day-lane" key={day} aria-label={`${day} schedule`}>{timelineSlots.map((slot) => <button type="button" className={slot.minutes % 60 === 0 ? "timeline-slot hour" : "timeline-slot half-hour"} key={slot.minutes} aria-label={`Add visit ${day} at ${timeLabel(slot.clock)}`} onClick={() => openAddVisit("Training visit", visitDate, slot.clock)} onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("drag-over"); }} onDragLeave={(event) => event.currentTarget.classList.remove("drag-over")} onDrop={(event) => { event.currentTarget.classList.remove("drag-over"); placeVisitInSlot(event, visitDate, slot.clock); }}/>) }
+            return <section className="timeline-day-lane" style={{ height: timelineSlots.length * timelineRowHeight }} key={day} aria-label={`${day} schedule`}>{timelineSlots.map((slot) => <button type="button" style={{ height: timelineRowHeight }} className={slot.minutes % 60 === 0 ? "timeline-slot hour" : "timeline-slot half-hour"} key={slot.minutes} aria-label={`Add visit ${day} at ${timeLabel(slot.clock)}`} onClick={() => openAddVisit("Training visit", visitDate, slot.clock)} onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("drag-over"); }} onDragLeave={(event) => event.currentTarget.classList.remove("drag-over")} onDrop={(event) => { event.currentTarget.classList.remove("drag-over"); placeVisitInSlot(event, visitDate, slot.clock); }}/>) }
               {dayVisits.map((visit) => {
                 const log = visitLogStatuses[visit.id];
                 const state = visit._draft || visit._dirty ? "unsaved" : log?.status === "submitted" ? "completed" : log?.status === "draft" ? "started" : "planned";
@@ -462,7 +468,7 @@ export default function AreaSupervisorDashboard({ profile, onOpenVisitLog }: { p
                 const height = Math.max(timelineRowHeight, (scheduleMinutes(visit.end_time) - scheduleMinutes(visit.start_time)) / 30 * timelineRowHeight);
                 return <article draggable className={`timeline-visit ${state}`} key={visit.id} style={{ top, height }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/scheduled-visit", visit.id); }}>
                   <button type="button" className="timeline-visit-main" onClick={() => openEditVisit(visit)}><b>{timeLabel(visit.start_time)}–{timeLabel(visit.end_time)}</b><span>{visit.purpose}</span><small>{storeMap.get(visit.store_id)?.name ?? "Select store"}</small><em>{state === "completed" ? "Completed" : state === "started" ? `Draft ${log.completion_percent}%` : state === "unsaved" ? "Unsaved" : "Planned"}</em></button>
-                  <div className="timeline-visit-tools">{connectedLogTypes.has(visit.purpose) && <button type="button" title={state === "completed" ? "Review visit log" : "Complete visit log"} onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={12}/></button>}<button type="button" title="Remove visit" onClick={() => cancelVisit(visit)}><Trash2 size={12}/></button></div>
+                  <div className="timeline-visit-tools">{connectedLogTypes.has(visit.purpose) && <button type="button" className="timeline-log-button" aria-label={state === "completed" ? "Review completed visit log" : "Complete visit log"} title={state === "completed" ? "Review completed log" : "Complete log"} onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={16}/></button>}<button type="button" className="timeline-delete-button" aria-label={`Delete ${visit.purpose}`} title="Delete visit" onClick={() => cancelVisit(visit)}><Trash2 size={16}/></button></div>
                   <button type="button" className="timeline-resize-handle" aria-label={`Resize ${visit.purpose}`} title="Drag to change the end time" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); const end = scheduleMinutes(visit.end_time); resizeVisitRef.current = { id: visit.id, startY: event.clientY, originalEnd: end, lastEnd: end }; }} onPointerMove={(event) => resizeVisit(event, visit)} onPointerUp={(event) => { event.currentTarget.releasePointerCapture(event.pointerId); resizeVisitRef.current = null; }}><span/></button>
                 </article>;
               })}

@@ -65,10 +65,24 @@ test("visits can be placed on an hourly week timeline and saved together", () =>
 
 test("scheduled visits move and resize in half-hour steps", () => {
   assert.match(component, /text\/scheduled-visit/);
-  assert.match(component, /timelineRowHeight = 34/);
+  assert.match(component, /timelineRowHeights = \{ 65: 18, 80: 26, 100: 34 \}/);
   assert.match(component, /slotChange \* 30/);
   assert.match(component, /timeline-resize-handle/);
   assert.match(component, /Duration adjusted on the weekly timeline/);
+});
+
+test("the weekly timeline supports a remembered compact-to-large zoom", () => {
+  assert.match(component, /dashos:supervisor-timeline-zoom:/);
+  assert.match(component, /Schedule size/);
+  assert.match(component, /\(\[65, 80, 100\] as const\)/);
+  assert.match(component, /timeline-zoom-/);
+});
+
+test("visit log and delete controls remain prominent in the compact timeline", () => {
+  assert.match(component, /timeline-log-button/);
+  assert.match(component, /timeline-delete-button/);
+  assert.match(component, /Complete visit log/);
+  assert.match(component, /Delete visit/);
 });
 
 test("all visit types are restricted to the Area Supervisor's assigned stores", () => {
