@@ -6,6 +6,7 @@ const migration=readFileSync("supabase/migrations/20261123143000_team_member_req
 const app=readFileSync("src/App.tsx","utf8");
 const portal=readFileSync("src/components/TeamMemberPortal.tsx","utf8");
 const labor=readFileSync("src/components/LaborManagement.tsx","utf8");
+const recurringMigration=readFileSync("supabase/migrations/20261123181500_recurring_availability_change_requests.sql","utf8");
 
 test("employee access is server-gated by current active roster status",()=>{
   assert.match(migration,/lower\(access_email\) = email_value/);
@@ -41,4 +42,20 @@ test("approved requests replace the misleading available label in the week view"
   assert.match(labor,/allDay \? "⛔ Not available"/);
   assert.match(labor,/"✓ Approved request off"/);
   assert.match(labor,/display\.summary/);
+});
+
+test("team members see current recurring availability and may request more availability",()=>{
+  assert.match(portal,/Current weekly availability/);
+  assert.match(portal,/Available all day/);
+  assert.match(portal,/Available only during set hours/);
+  assert.match(portal,/chooseRecurringDay/);
+  assert.match(recurringMigration,/standard_availability/);
+});
+
+test("recurring changes require a valid reason and manager approval",()=>{
+  assert.match(portal,/A valid reason is required for every recurring availability change/);
+  assert.match(recurringMigration,/length\(note_value\) < 5/);
+  assert.match(recurringMigration,/if decision_value='approved'/);
+  assert.match(recurringMigration,/req\.recurring_status in \('available','limited'\)/);
+  assert.match(labor,/Approve &amp; apply/);
 });
