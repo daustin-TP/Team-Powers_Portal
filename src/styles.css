@@ -1,5 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,600&display=swap");
 
+.availability-request-cards .request-submitted-at{margin-top:.15rem;color:#0a4f83;font-weight:850}
+
 :root {
   font-family: "DM Sans", system-ui, sans-serif;
   color: #101722;

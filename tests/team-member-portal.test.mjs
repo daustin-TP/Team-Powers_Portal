@@ -69,3 +69,9 @@ test("one-time requests close before managers begin the target schedule",()=>{
   assert.match(cutoffMigration,/requested_date::timestamp\)::date - 8/);
   assert.match(cutoffMigration,/new\.request_kind = 'one_time'/);
 });
+
+test("managers see the Central submission timestamp before reviewing a request",()=>{
+  assert.match(labor,/formatRequestTimestamp/);
+  assert.match(labor,/timeZone: "America\/Chicago"/);
+  assert.match(labor,/Submitted \{formatRequestTimestamp\(request\.created_at\)\}/);
+});
