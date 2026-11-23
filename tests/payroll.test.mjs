@@ -34,18 +34,31 @@ test('payroll validates each request type and limits pay changes to pay-period s
   assert.equal(m.validateEntries([]).length,0);
   assert.equal(m.validateEntries([{...entry,employee:'',effective_date:'',details:''}],false).length,1);
 });
-test('one email groups by section, then store, and includes no-change confirmations',()=>{
+test('one email groups by LLC, category, and store without empty-category filler',()=>{
   const content=m.emailBody('2026-11-02',[
-    {store_name:'Zulu',entries:[]},
-    {store_name:'Alpha',entries:[{section:'recognition',type:'Period Bonus',employee:'Sample',employee_id:'',effective_date:'2026-11-01',amount:'100',hours:'',details:'Period bonus'}]},
+    {store_name:'Jamestown',entries:[{section:'recognition',type:'Period Bonus',employee:'Sample',employee_id:'',effective_date:'2026-11-01',amount:'100',hours:'',details:'Period bonus'}]},
+    {store_name:'Sparta',entries:[{section:'pay',type:'PTO / Vacation',employee:'Alex',employee_id:'',effective_date:'2026-10-20',end_date:'2026-10-21',day_portion:'Full day',amount:'',hours:'',details:''}]},
+    {store_name:'Baxter',entries:[]},
   ]);
-  assert.ok(content.indexOf('TEAM MEMBER PAY')<content.indexOf('ADDITIONAL PAYROLL UPDATES'));
-  assert.ok(content.indexOf('ADDITIONAL PAYROLL UPDATES')<content.indexOf('MANAGEMENT BONUSES'));
-  assert.ok(content.indexOf('Alpha')<content.indexOf('Zulu'));
-  assert.match(content,/No changes reported/);
-  assert.match(content,/Period Bonus — Sample/);
-  const miscellaneous=m.emailBody('2026-11-02',[{store_name:'Alpha',entries:[{section:'pay',type:'Additional Payroll Update',employee:'',effective_date:'',details:'Correct duplicate payroll entry.'}]}]);
-  assert.match(miscellaneous,/Additional Payroll Update\nNo additional fields\nDescription: Correct duplicate payroll entry\./);
+  assert.ok(content.indexOf('POWERS PIZZA')<content.indexOf('PIZZA POWER'));
+  assert.ok(content.indexOf('PTO / VACATION')<content.indexOf('MANAGEMENT BONUSES'));
+  assert.match(content,/Sparta\n• Alex/);
+  assert.match(content,/Jamestown\n• Sample/);
+  assert.doesNotMatch(content,/No changes reported|No additional fields/);
+  assert.doesNotMatch(content,/Baxter/);
+  const miscellaneous=m.emailBody('2026-11-02',[{store_name:'Algood',entries:[{section:'pay',type:'Additional Payroll Update',employee:'',effective_date:'',details:'Correct duplicate payroll entry.'}]}]);
+  assert.match(miscellaneous,/ADDITIONAL PAYROLL UPDATES[\s\S]*General payroll update[\s\S]*Description: Correct duplicate payroll entry\./);
+});
+test('sensitive payroll categories include editable admin placeholders',()=>{
+  const entries=[
+    {section:'information',type:'Direct Deposit Update',employee:'Direct Test',employee_id:'',effective_date:'',amount:'',hours:'',details:'',acknowledged:true},
+    {section:'information',type:'Legal Name Change',employee:'Legal Test',employee_id:'',effective_date:'',new_name:'New Name',amount:'',hours:'',details:'',acknowledged:true},
+    {section:'deductions',type:'Partners Foundation Payroll Deduction',employee:'Partner Test',employee_id:'',effective_date:'',amount:'5',hours:'',details:'',attachment_name:'form.pdf'},
+  ];
+  const content=m.emailBody('2026-11-02',[{store_name:'Smithville',entries}]);
+  assert.match(content,/ADD OR ATTACH THE SECURE DIRECT-DEPOSIT INFORMATION/);
+  assert.match(content,/ATTACH THE REQUIRED LEGAL NAME-CHANGE DOCUMENTATION/);
+  assert.match(content,/ATTACH THE PARTNERS FOUNDATION FORM OR PHOTO/);
 });
 test('payroll email HTML uses DASH branding and escapes submitted text',()=>{
   const html=m.emailHtml('Payroll <Review>','A & B','https://dash.example/');
@@ -53,6 +66,8 @@ test('payroll email HTML uses DASH branding and escapes submitted text',()=>{
   assert.match(html,/Payroll &lt;Review&gt;/);
   assert.match(html,/A &amp; B/);
   assert.doesNotMatch(html,/<Review>/);
+  assert.match(html,/Copy-ready summary/);
+  assert.match(html,/<pre/);
 });
 test('Payroll Monday reminders clearly identify the 9 a.m. and 2 p.m. checkpoints',()=>{
   const morning=m.reminderBody('2026-11-16','Alex Manager','Smithville','morning');

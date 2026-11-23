@@ -40,7 +40,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
   async function load(){
     const request=++seq.current;setLoading(true);setMessage("");
     if(!supabase){
-      setData({cycle:{status:"open"},stores:[{id:"preview",name:"Example store (preview)"}],submissions:[],requests:[],emails:[],email_ready:false,preview:"The approved email will list each payroll section, then each store."});
+      setData({cycle:{status:"open"},stores:[{id:"preview",name:"Example store (preview)"}],submissions:[],requests:[],emails:[],email_ready:false,preview:"The approved email will be separated by LLC, then category, then store."});
       setStore("preview");setLoading(false);setMessage("Preview only: sign in to the live portal to save payroll or submit requests.");return;
     }
     try{const next=await call({action:"load"});if(seq.current!==request)return;setData(next);setStore(s=>next.stores.some((x:Store)=>x.id===s)?s:next.stores[0]?.id??"");}
@@ -201,7 +201,7 @@ export default function PayrollCenter({profile}:{profile:Profile}){
       </section>}
       {tab==="review"&&<section className="panel payroll-form"><h2>Cycle {data.cycle.status}</h2><p>{counts.submitted} of {data.stores.length} stores submitted · {counts.approved} individually approved</p>
         {data.stores.map(s=>{const sub=data.submissions.find(x=>x.store_id===s.id);return <div className="payroll-status-row" key={s.id}><strong>{s.name}</strong><span>{sub?.status??"Not submitted"}</span><button className="button secondary" onClick={()=>{if(leaveDraft()){setStore(s.id);setTab("submission");}}}>Review</button></div>;})}
-        {admin&&<><div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void checkEmail()}>Check email connection</button><span>{data.email_ready?"Email sender configured":"Email sender not configured"}</span></div><details><summary>Preview combined payroll email</summary><pre className="payroll-email-preview">{data.preview}</pre></details>
+        {admin&&<><div className="button-row"><button className="button secondary" disabled={busy} onClick={()=>void checkEmail()}>Check email connection</button><span>{data.email_ready?"Email sender configured":"Email sender not configured"}</span></div><details><summary>Preview copy-ready payroll email</summary><p>The delivered message is organized by LLC and category. Complete bracketed admin placeholders before forwarding it to payroll.</p><pre className="payroll-email-preview">{data.preview}</pre></details>
           <p>Final approval approves every submitted store, locks the entire cycle, and queues one combined email. Missing, draft, or returned stores will block approval.</p>
           <button className="button primary" disabled={busy||data.cycle.status!=="open"||!data.stores.length||counts.submitted!==data.stores.length} onClick={()=>{if(window.confirm(`Approve all ${data.stores.length} submitted stores, lock this payroll cycle, and queue the combined payroll email?`))void mutate({action:"approve_cycle"},"All store submissions approved and the payroll cycle was locked. See email status below.");}}>Approve all submitted stores & queue email</button>
           {data.emails.map(e=><p key={e.id}>{e.kind==="payroll"?"Combined payroll":"GM reminder"} → {e.recipient}: <strong>{e.status==="sent"?"Accepted by email provider":e.status}</strong>{e.status==="queued"?" — sends automatically within about five minutes":""}{e.last_error?` — ${e.last_error}`:""}</p>)}
