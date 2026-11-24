@@ -154,7 +154,7 @@ export function emailHtml(title: string, text: string, portalUrl: string) {
     const next = lines[index+1]?.trim() ?? "";
     const company = companyTitles.has(clean);
     const category = payrollCategoryTitles.has(clean);
-    const store = next.startsWith("• ") && !category && !company;
+    const store = !line.startsWith("  ") && next.startsWith("• ") && !category && !company;
     if (company) return `<div style="margin:8px 0 2px;font-size:20px;line-height:1.35;font-weight:900;letter-spacing:.04em;text-transform:uppercase;color:#071a33">${escaped(clean)}</div>`;
     if (category || store) return `<div style="margin:${category?"14px":"10px"} 0 4px;font-size:18px;line-height:1.35;font-weight:900;letter-spacing:.025em;text-transform:uppercase;color:${category?"#0878c9":"#10233d"}">${escaped(clean)}</div>`;
     if (clean.startsWith("• ")) return `<div style="margin:5px 0 2px;font-size:16px;line-height:1.45;font-weight:800;color:#10233d">${escaped(clean)}</div>`;

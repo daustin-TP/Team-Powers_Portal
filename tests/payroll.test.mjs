@@ -76,6 +76,14 @@ test('payroll email HTML uses DASH branding and escapes submitted text',()=>{
   assert.match(payrollHtml,/font-size:18px[\s\S]*SPARTA/);
   assert.match(payrollHtml,/font-size:16px[\s\S]*Alex Smith/);
   assert.doesNotMatch(payrollHtml,/Usage: Full day/);
+  const adjacent=m.emailBody('2026-11-02',[{store_name:'Sparta',entries:[
+    {section:'pay',type:'Position Change / Promotion',employee:'Eli Alexander',employee_id:'',effective_date:'2026-11-16',day_portion:'Full day',new_position:'Delivery Expert',amount:'9.5',hours:'',details:''},
+    {section:'pay',type:'Position Change / Promotion',employee:'Aaron Burke',employee_id:'',effective_date:'2026-11-16',day_portion:'Full day',new_position:'Closing Delivery Driver',amount:'11.5',hours:'',details:''},
+  ]}]);
+  const adjacentHtml=m.emailHtml('Payroll review',adjacent,'https://dash.example/');
+  assert.match(adjacentHtml,/font-size:16px[^>]*>• Eli Alexander/);
+  assert.match(adjacentHtml,/font-size:14px[^>]*>Amount \/ rate: \$9\.50/);
+  assert.doesNotMatch(adjacentHtml,/font-size:18px[^>]*>Amount \/ rate:/);
 });
 test('Payroll Monday reminders clearly identify the 9 a.m. and 2 p.m. checkpoints',()=>{
   const morning=m.reminderBody('2026-11-16','Alex Manager','Smithville','morning');
