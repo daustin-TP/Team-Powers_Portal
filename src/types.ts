@@ -37,6 +37,9 @@ export type CatalogCategory = "uniform" | "smallware";
 export type CatalogItem = {
   id: string;
   category: CatalogCategory;
+  subcategory: string;
+  supplierItemNumber: string | null;
+  unitLabel: string;
   name: string;
   description: string;
   price: number;

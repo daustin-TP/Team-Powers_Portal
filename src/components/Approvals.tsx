@@ -2,6 +2,7 @@ import {useEffect,useState} from "react";
 import {Check,Clock3,Package,Trash2,X} from "lucide-react";
 import type {Profile} from "../types";
 import {supabase} from "../lib/supabase";
+import {catalogImageUrl} from "../lib/catalog";
 type Item={item_name:string;quantity:number;size:string|null;unit_price:number;line_total:number;catalog_items?:{image_path:string|null;description:string}|null};
 type Order={id:string;category:string;employee_name:string|null;store_name:string|null;total:number;decision:string|null;decision_notes:string|null;created_at:string;responsibility:string;payroll_acknowledged:boolean;notes:string|null;profiles?:{full_name:string}|null;portal_order_items?:Item[]};
 export default function Approvals({profile}:{profile:Profile}){
@@ -9,7 +10,7 @@ export default function Approvals({profile}:{profile:Profile}){
  const canReview=profile.role==="supervisor"||profile.role==="accounting"||profile.role==="admin";
  const load=async()=>{if(!supabase)return;const{data,error}=await supabase.from("portal_orders").select("id,category,employee_name,store_name,total,decision,decision_notes,created_at,responsibility,payroll_acknowledged,notes,profiles!portal_orders_ordered_by_fkey(full_name),portal_order_items(item_name,quantity,size,unit_price,line_total,catalog_items(image_path,description))").order("created_at",{ascending:false});if(error)setMessage(error.message);else setOrders((data??[])as any)};
  useEffect(()=>{load()},[]);
- const imageUrl=(path:string|null|undefined)=>path&&supabase?supabase.storage.from("catalog-images").getPublicUrl(path).data.publicUrl:null;
+ const imageUrl=(path:string|null|undefined)=>catalogImageUrl(path);
  const save=async()=>{if(!supabase||!selected)return;const{error}=await supabase.from("portal_orders").update({decision,decision_notes:note,status:decision==="approved"?"approved":"returned",decided_by:profile.id,decided_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",selected.id);if(error){setMessage(error.message);return}setSelected(null);setNote("");setMessage("Decision saved and visible to the submitter.");window.dispatchEvent(new Event("dashos:requests-changed"));load()};
  const canDelete=profile.role==="admin"||profile.role==="accounting";
  const remove=async()=>{if(!supabase||!selected||!canDelete)return;if(!window.confirm("Permanently delete this order request? This cannot be undone."))return;const{error}=await supabase.from("portal_orders").delete().eq("id",selected.id);if(error){setMessage(error.message);return}setSelected(null);setNote("");setMessage("Order request deleted.");window.dispatchEvent(new Event("dashos:requests-changed"));load()};
