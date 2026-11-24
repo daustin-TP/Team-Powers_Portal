@@ -73,7 +73,7 @@ export function validateEntries(entries: unknown, complete = true, due = "", rol
 }
 function entryText(e: Entry) {
   const date = (value: string) => value ? new Date(`${value}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "2-digit", day: "2-digit", year: "numeric" }) : "";
-  const facts = [e.effective_date&&`Date: ${date(e.effective_date)}`,e.end_date&&e.end_date!==e.effective_date&&`Through: ${date(e.end_date)}`,e.day_portion&&`Usage: ${e.day_portion}`,e.position&&`Position: ${e.position}`,e.new_position&&`New position: ${e.new_position}`,e.new_name&&`New legal name: ${e.new_name}`,e.new_address&&`New address: ${e.new_address}`,e.amount&&`Amount / rate: $${Number(e.amount).toFixed(2)}`,e.hours&&`Hours: ${e.hours}`,e.acknowledged&&"Required documentation: confirmed emailed",e.attachment_name&&`DASH attachment: ${e.attachment_name}`].filter(Boolean);
+  const facts = [e.effective_date&&`Date: ${date(e.effective_date)}`,e.end_date&&e.end_date!==e.effective_date&&`Through: ${date(e.end_date)}`,e.type==="PTO / Vacation"&&e.day_portion&&`Usage: ${e.day_portion}`,e.position&&`Position: ${e.position}`,e.new_position&&`New position: ${e.new_position}`,e.new_name&&`New legal name: ${e.new_name}`,e.new_address&&`New address: ${e.new_address}`,e.amount&&`Amount / rate: $${Number(e.amount).toFixed(2)}`,e.hours&&`Hours: ${e.hours}`,e.acknowledged&&"Required documentation: confirmed emailed",e.attachment_name&&`DASH attachment: ${e.attachment_name}`].filter(Boolean);
   const employee = e.employee ? `${e.employee}${e.employee_id ? ` (${e.employee_id})` : ""}` : "General payroll update";
   const detailLabel = e.type === "Additional Payroll Update" ? "Description" : "Notes";
   const followup = e.type === "Direct Deposit Update"
@@ -122,7 +122,7 @@ export function emailBody(due: string, submissions: { store_name: string; entrie
     const categoryBlocks = payrollCategories.map(category => {
       const storeBlocks = stores.map(store => {
         const entries = store.entries.filter(entry => (category.types as readonly string[]).includes(entry.type));
-        return entries.length ? `${store.store_name}\n${entries.map(entryText).join("\n")}` : "";
+        return entries.length ? `${store.store_name.toUpperCase()}\n${entries.map(entryText).join("\n")}` : "";
       }).filter(Boolean);
       return storeBlocks.length ? `${category.title}\n${storeBlocks.join("\n\n")}` : "";
     }).filter(Boolean);
@@ -143,13 +143,30 @@ export function emailHtml(title: string, text: string, portalUrl: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-  const body = escaped(text);
+  const payrollCategoryTitles = new Set<string>(payrollCategories.map(category => category.title));
+  const companyTitles = new Set<string>([...payrollCompanies.map(company => company.name.toUpperCase()), "LLC NOT ASSIGNED"]);
+  const lines = text.split("\n");
+  const payrollLayout = lines.some(line => line === "PAYROLL UPDATE");
+  const body = payrollLayout ? lines.map((line,index) => {
+    const clean = line.trim();
+    if (!clean) return `<div style="height:12px;line-height:12px">&nbsp;</div>`;
+    if (/^=+$/.test(clean)) return "";
+    const next = lines[index+1]?.trim() ?? "";
+    const company = companyTitles.has(clean);
+    const category = payrollCategoryTitles.has(clean);
+    const store = next.startsWith("• ") && !category && !company;
+    if (company) return `<div style="margin:8px 0 2px;font-size:20px;line-height:1.35;font-weight:900;letter-spacing:.04em;text-transform:uppercase;color:#071a33">${escaped(clean)}</div>`;
+    if (category || store) return `<div style="margin:${category?"14px":"10px"} 0 4px;font-size:18px;line-height:1.35;font-weight:900;letter-spacing:.025em;text-transform:uppercase;color:${category?"#0878c9":"#10233d"}">${escaped(clean)}</div>`;
+    if (clean.startsWith("• ")) return `<div style="margin:5px 0 2px;font-size:16px;line-height:1.45;font-weight:800;color:#10233d">${escaped(clean)}</div>`;
+    if (line.startsWith("  ")) return `<div style="padding-left:20px;font-size:14px;line-height:1.55;color:#334b66">${escaped(clean)}</div>`;
+    return `<div style="font-size:14px;line-height:1.55;color:#10233d">${escaped(clean)}</div>`;
+  }).join("") : `<pre style="margin:0;color:#10233d;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;white-space:pre-wrap;word-break:break-word">${escaped(text)}</pre>`;
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
 <body style="margin:0;background:#eef3f8;font-family:Arial,Helvetica,sans-serif;color:#10233d">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef3f8"><tr><td align="center" style="padding:28px 12px">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #dce5ef;box-shadow:0 8px 24px rgba(15,35,60,.08)">
 <tr><td style="background:#07111f;padding:24px 28px"><div style="font-size:27px;font-style:italic;font-weight:900;letter-spacing:-1px"><span style="color:#ff2828">DA</span><span style="color:#168fff">SH</span><span style="color:#fff">-OS</span></div><div style="color:#a9bbcf;font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;margin-top:5px">Team Powers · Payroll</div></td></tr>
-<tr><td style="padding:28px"><div style="font-size:12px;color:#0878c9;font-weight:800;letter-spacing:.12em;text-transform:uppercase">Payroll update</div><h1 style="margin:8px 0 10px;font-size:25px;line-height:1.25;color:#071a33">${escaped(title)}</h1><p style="margin:0 0 22px;color:#65778b;font-size:13px">Copy-ready summary. Complete any bracketed admin placeholders, then remove the brackets before forwarding.</p><pre style="margin:0;padding:18px;background:#fff;border:1px solid #dce5ef;border-radius:8px;color:#10233d;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;white-space:pre-wrap;word-break:break-word">${body}</pre><div style="margin-top:26px"><a href="${escaped(portalUrl)}" style="display:inline-block;background:#0878c9;color:#fff;text-decoration:none;font-size:14px;font-weight:800;padding:12px 20px;border-radius:8px">Open Payroll in DASH-OS</a></div></td></tr>
+<tr><td style="padding:28px"><div style="font-size:12px;color:#0878c9;font-weight:800;letter-spacing:.12em;text-transform:uppercase">Payroll update</div><h1 style="margin:8px 0 10px;font-size:25px;line-height:1.25;color:#071a33">${escaped(title)}</h1><p style="margin:0 0 22px;color:#65778b;font-size:13px">Copy-ready summary. Complete any bracketed admin placeholders, then remove the brackets before forwarding.</p><div style="margin:0;padding:18px;background:#fff;border:1px solid #dce5ef;border-radius:8px">${body}</div><div style="margin-top:26px"><a href="${escaped(portalUrl)}" style="display:inline-block;background:#0878c9;color:#fff;text-decoration:none;font-size:14px;font-weight:800;padding:12px 20px;border-radius:8px">Open Payroll in DASH-OS</a></div></td></tr>
 <tr><td style="background:#f7fafc;border-top:1px solid #e3eaf2;padding:18px 28px;color:#718096;font-size:11px;line-height:1.5">Sent securely by DASH-OS for Team Powers.</td></tr>
 </table></td></tr></table></body></html>`;
 }

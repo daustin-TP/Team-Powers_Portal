@@ -7,6 +7,21 @@ import ts from 'typescript';
 const context={exports:{},Set};
 vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../supabase/functions/support-notifications/model.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
 const model=context.exports;
+const supportSource=readFileSync(new URL('../src/components/SupportTickets.tsx',import.meta.url),'utf8');
+const notificationSource=readFileSync(new URL('../supabase/functions/support-notifications/index.ts',import.meta.url),'utf8');
+const multiplePhotosMigration=readFileSync(new URL('../supabase/migrations/20261124131923_support_ticket_multiple_photos.sql',import.meta.url),'utf8');
+
+test('maintenance and technology requests accept and preserve multiple photos',()=>{
+  assert.match(supportSource,/MAX_REQUEST_PHOTOS = 6/);
+  assert.match(supportSource,/multiple type="file"/);
+  assert.match(supportSource,/image_paths: uploaded\.paths/);
+  assert.match(supportSource,/support_ticket_updates\(id,note,status,image_path,image_paths/);
+  assert.match(multiplePhotosMigration,/add column if not exists image_paths text\[\]/i);
+  assert.match(multiplePhotosMigration,/cardinality\(image_paths\) <= 6/i);
+  assert.match(multiplePhotosMigration,/name = any\(t\.image_paths\)/i);
+  assert.match(notificationSource,/Array\.isArray\(ticket\.image_paths\)/);
+  assert.match(notificationSource,/maxCombinedBytes = 12 \* 1024 \* 1024/);
+});
 
 test('support email identifies the request, store, and lifecycle event',()=>{
   const submitted=model.supportNotificationCopy({event:'submitted',area:'technology',storeName:'Smithville 5491',severity:'red',description:'Internet is down <script>alert(1)</script>',stepsTaken:'Restarted equipment',externalTicketNumber:'ISP-123',equipmentType:'Powers Router',equipmentLabel:'Office Router',photoAttached:true,photoAvailableInDash:true,submittedBy:'Store Manager',actedBy:'Responder',portalUrl:'https://dash.example/'});

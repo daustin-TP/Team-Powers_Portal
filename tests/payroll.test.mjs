@@ -42,8 +42,10 @@ test('one email groups by LLC, category, and store without empty-category filler
   ]);
   assert.ok(content.indexOf('POWERS PIZZA')<content.indexOf('PIZZA POWER'));
   assert.ok(content.indexOf('PTO / VACATION')<content.indexOf('MANAGEMENT BONUSES'));
-  assert.match(content,/Sparta\n• Alex/);
-  assert.match(content,/Jamestown\n• Sample/);
+  assert.match(content,/SPARTA\n• Alex/);
+  assert.match(content,/JAMESTOWN\n• Sample/);
+  assert.match(content,/PTO \/ VACATION[\s\S]*Usage: Full day/);
+  assert.doesNotMatch(content,/MANAGEMENT BONUSES[\s\S]*Usage:/);
   assert.doesNotMatch(content,/No changes reported|No additional fields/);
   assert.doesNotMatch(content,/Baxter/);
   const miscellaneous=m.emailBody('2026-11-02',[{store_name:'Algood',entries:[{section:'pay',type:'Additional Payroll Update',employee:'',effective_date:'',details:'Correct duplicate payroll entry.'}]}]);
@@ -68,6 +70,12 @@ test('payroll email HTML uses DASH branding and escapes submitted text',()=>{
   assert.doesNotMatch(html,/<Review>/);
   assert.match(html,/Copy-ready summary/);
   assert.match(html,/<pre/);
+  const payroll=m.emailBody('2026-11-02',[{store_name:'Sparta',entries:[{section:'pay',type:'Additional Hours',employee:'Alex Smith',employee_id:'',effective_date:'2026-10-20',day_portion:'Full day',position:'Driver',amount:'',hours:'2',details:'Coverage'}]}]);
+  const payrollHtml=m.emailHtml('Payroll review',payroll,'https://dash.example/');
+  assert.match(payrollHtml,/font-size:18px[\s\S]*ADDITIONAL HOURS/);
+  assert.match(payrollHtml,/font-size:18px[\s\S]*SPARTA/);
+  assert.match(payrollHtml,/font-size:16px[\s\S]*Alex Smith/);
+  assert.doesNotMatch(payrollHtml,/Usage: Full day/);
 });
 test('Payroll Monday reminders clearly identify the 9 a.m. and 2 p.m. checkpoints',()=>{
   const morning=m.reminderBody('2026-11-16','Alex Manager','Smithville','morning');

@@ -23,10 +23,12 @@ async function ticketAttachments(db: any, ticket: any, event: SupportEvent) {
   const maxCombinedBytes = 12 * 1024 * 1024;
   const updates = Array.isArray(ticket.support_ticket_updates) ? ticket.support_ticket_updates : [];
   const completionImages = updates
-    .filter((update: any) => event === "completed" && update.image_path)
+    .filter((update: any) => event === "completed" && (update.image_path || update.image_paths?.length))
     .sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))
-    .map((update: any) => String(update.image_path));
-  const paths = [...new Set([String(ticket.image_path ?? ""), ...completionImages].filter(Boolean))].slice(0, 3);
+    .flatMap((update: any) => [String(update.image_path ?? ""), ...(Array.isArray(update.image_paths) ? update.image_paths.map(String) : [])]);
+  const submittedImages = [String(ticket.image_path ?? ""), ...(Array.isArray(ticket.image_paths) ? ticket.image_paths.map(String) : [])];
+  const allPaths = [...new Set([...submittedImages, ...completionImages].filter(Boolean))];
+  const paths = allPaths.slice(0, 6);
   const attachments: { filename: string; content: string }[] = [];
   let attachedBytes = 0;
   for (const [index, path] of paths.entries()) {
@@ -48,7 +50,7 @@ async function ticketAttachments(db: any, ticket: any, event: SupportEvent) {
       // A missing image should not prevent the operational alert from sending.
     }
   }
-  return { attachments, storedPhotoCount: paths.length };
+  return { attachments, storedPhotoCount: allPaths.length };
 }
 
 export async function handleSupportNotification(req: Request) {
@@ -77,7 +79,7 @@ export async function handleSupportNotification(req: Request) {
 
     const ticketResult = await db
       .from("support_tickets")
-      .select("id,area,status,severity,description,steps_taken,external_ticket_number,image_path,created_at,submitted_by,technology_equipment_type,technology_equipment!support_tickets_technology_equipment_id_fkey(label),stores(name),profiles!support_tickets_submitted_by_fkey(full_name),support_ticket_updates(status,image_path,created_at)")
+      .select("id,area,status,severity,description,steps_taken,external_ticket_number,image_path,image_paths,created_at,submitted_by,technology_equipment_type,technology_equipment!support_tickets_technology_equipment_id_fkey(label),stores(name),profiles!support_tickets_submitted_by_fkey(full_name),support_ticket_updates(status,image_path,image_paths,created_at)")
       .eq("id", body.ticket_id)
       .maybeSingle();
     if (ticketResult.error || !ticketResult.data) return json({ error: "Request not found" }, 404);

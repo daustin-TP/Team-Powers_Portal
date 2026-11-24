@@ -264,6 +264,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .inline-message { background: #edf4ef; color: #315d49; border: 1px solid #ccded2; border-radius: 9px; padding: .8rem 1rem; font-size: .86rem; }
 .photo-upload-notice { margin: 0; padding: .75rem .9rem; border: 1px solid #b9d9ee; border-radius: 9px; background: #eff8ff; color: #0c4a6e; font-size: .86rem; line-height: 1.4; }
 .photo-upload-notice.error { border-color: #fecaca; background: #fff1f2; color: #991b1b; }
+.ticket-selected-photos{display:grid;gap:.45rem}.ticket-selected-photos>div{display:flex;align-items:center;justify-content:space-between;gap:.7rem;padding:.55rem .7rem;border:1px solid var(--line);border-radius:8px;background:#f7fafc}.ticket-selected-photos span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.86rem;color:var(--green-950)}.ticket-photo-links{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;padding:.7rem .8rem;border:1px solid #dce5ef;border-radius:9px;background:#f7fafc}.ticket-photo-links strong{width:100%;font-size:.82rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.ticket-photo-links a{display:inline-flex;padding:.42rem .65rem;border-radius:7px;background:white;border:1px solid #bfd3e3;font-size:.84rem;font-weight:750;color:#0878c9;text-decoration:none}
 .center-screen { min-height: 100vh; display: grid; place-content: center; text-align: center; gap: .8rem; padding: 1.5rem; }
 .access-message p { max-width: 500px; }
 .mobile-close, .sidebar-backdrop { display: none; }
