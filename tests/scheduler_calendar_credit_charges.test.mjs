@@ -39,3 +39,9 @@ test("charges require billing scope and support quick acknowledgement",()=>{
   assert.match(review,/Received & acknowledged/);
   assert.match(review,/<th>Bill to<\/th>/);
 });
+test("credit receipts have separate library and camera pickers", () => {
+ const source=readFileSync(new URL("../src/components/Receipts.tsx",import.meta.url),"utf8");
+ const picker=source.match(/<input type="file" aria-label="Choose a receipt photo or PDF"[^>]+/)[0];
+ assert.doesNotMatch(picker,/capture=/);
+ assert.match(source, /aria-label="Take a receipt photo" accept="image\/\*" capture="environment"/);
+});

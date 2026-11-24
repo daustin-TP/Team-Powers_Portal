@@ -35,3 +35,9 @@
 .kpi-rally-track.locked{display:grid;grid-auto-rows:1fr}
 .kpi-rally-track .kpi-rally-empty-lane{visibility:hidden}
 @media(prefers-reduced-motion:reduce){.kpi-rally-track .kpi-rally-marker,.kpi-rally-track .kpi-rally-progress{transition:none}}
+.regional-store-opportunities{margin:18px 0}
+.regional-store-opportunities h3{margin:0 0 4px}
+.regional-store-opportunities p{margin:0 0 10px}
+.regional-store-opportunities tr.primary-focus>*{background:#fff0ee;color:#801d24}
+.regional-store-opportunities tr.primary-focus th{box-shadow:inset 4px 0 #b63639}
+.regional-priority-label{display:block;margin-top:3px;color:#801d24;font-weight:800}

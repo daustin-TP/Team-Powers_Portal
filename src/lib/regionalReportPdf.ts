@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { rankingMetrics, metricValue, type RankingKey } from '../../supabase/functions/kpi-dashboard/analytics';
 import type { Action, Snapshot } from '../../supabase/functions/kpi-dashboard/planning';
+import { regionalStoreOpportunities } from './regionalStoreOpportunities';
 
 type ReportPlan = { supervisor_id:string; week_end:string; followup_date:string; status:string; admin_notes:string; director_notes:string; followup_notes:string; actions:Action[]; snapshot:Snapshot & {supervisor_name:string} };
 type Result = {store_id:string;week_end:string;metrics:Record<string,unknown>};
@@ -77,6 +78,19 @@ export function buildRegionalReportPdf(plan:ReportPlan,results:Result[],dirty=fa
  const cardWidth=(width-9)/4;const cardTop=y;
  rankingMetrics.forEach((m,i)=>{const x=left+(i%4)*(cardWidth+3);y=cardTop+Math.floor(i/4)*29;pdf.setFillColor(...pale);pdf.roundedRect(x,y,cardWidth,26,2,2,'F');text(m.label,x+3,y+6,9,true,blue);text(value(plan.snapshot.summary.values[m.key],m.key),x+3,y+14,12,true);text(`${plan.snapshot.summary.counts[m.key]} reporting`,x+3,y+21,8,false,muted);});y=cardTop+61;
  text('Sales = region total. PCYA = comparable-store growth. Other KPIs = store averages.',left,y,8,false,muted);y+=7;
+ const opportunities = regionalStoreOpportunities(plan.snapshot, options.history ?? [], plan.week_end);
+ if (opportunities.length) {
+  room(47);
+  title('Biggest opportunity by store');
+  table(['Store', 'Biggest opportunity', 'Rally score'], [60, 95, 31], opportunities.map(store => {
+   const emphasis = store.priority ? {fill:redFill,color:red,bold:true} : {};
+   return [
+    {text:`${store.name}${store.number ? ` / ${store.number}` : ''}${store.priority ? '\nNeeds most attention' : ''}`,bold:true,...emphasis},
+    {text:store.reason ? `${store.label}\n${store.reason}` : store.label,...emphasis},
+    {text:store.score === null ? '-' : store.score.toFixed(0),...emphasis},
+   ];
+  }));
+ }
  title('Store comparison');
  for(const group of [rankingMetrics.slice(0,4),rankingMetrics.slice(4)])table(['Store',...group.map(m=>m.label)],[40,...group.map(()=>36)],plan.snapshot.stores.map(s=>[{text:`${s.name}${s.store_number?` / ${s.store_number}`:''}`,bold:true},...group.map(m=>{const v=s.metrics[m.key];return {text:`${value(v.value,m.key)}${v.missed?'\nMissed goal':''}${v.outlier?'\nOutlier':''}`,fill:v.missed?redFill:v.outlier?amberFill:undefined,color:v.missed?red:v.outlier?amber:ink};})]));
  room(14);text('Red: missed goal. Amber: unfavorable regional outlier. Status is also shown in text.',left,y,8,false,muted);y+=5;text('Missing results are not treated as zero. Store pages show targets and subsequent results.',left,y,8,false,muted);y+=8;

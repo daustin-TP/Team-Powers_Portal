@@ -624,3 +624,6 @@ button.status-pill{border:0;cursor:pointer;font:inherit;font-size:.71rem;font-we
 .training-visit-photo a{display:grid;gap:4px;justify-items:start}
 .training-visit-photo img{display:block;max-width:100%;max-height:260px;border-radius:8px;object-fit:contain}
 .training-visit-photo label svg{vertical-align:middle}
+.receipt-camera{position:relative;justify-self:start;cursor:pointer}
+.receipt-camera input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.receipt-camera:focus-within{outline:2px solid currentColor;outline-offset:3px}
