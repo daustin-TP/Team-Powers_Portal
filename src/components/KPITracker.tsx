@@ -23,6 +23,7 @@ import { rankStores, rankingMetrics, summarizeGroup, type StoreRanking } from ".
 import KPITrends from './KPITrends';
 import './kpi-planning.css';
 import KPIRegionalPlans from './KPIRegionalPlans';
+import KPIPerformanceRally from './KPIPerformanceRally';
 import { planningWeek } from '../../supabase/functions/kpi-dashboard/goals';
 
 type KpiMetric = {
@@ -74,7 +75,7 @@ type KpiAccess = {
   supervisorGroups: SupervisorGroup[];
 };
 type ViewLevel = "company" | "supervisor" | "store";
-type DashboardMode = "commitments" | "details" | "trends" | "plans" | "followup";
+type DashboardMode = "commitments" | "details" | "trends" | "rally" | "plans" | "followup";
 type WeeklyMetricRow = {
   store_id?: string;
   store: string;
@@ -802,12 +803,13 @@ export default function KPITracker({ profile }: { profile: Profile }) {
         <button role="tab" aria-selected={dashboardMode === "commitments"} className={dashboardMode === "commitments" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("commitments")}><LayoutList size={18} /><span>Commitments<small>Goals, status, and action plans</small></span></button>
         <button role="tab" aria-selected={dashboardMode === "details"} className={dashboardMode === "details" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("details")}><TableProperties size={18} /><span>Weekly metric totals<small>Every imported KPI in one view</small></span></button>
         <button role="tab" aria-selected={dashboardMode === "trends"} className={dashboardMode === "trends" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("trends")}><BarChart3 size={18}/><span>Trends<small>Compare progress over time</small></span></button>
+        <button role="tab" aria-selected={dashboardMode === "rally"} className={dashboardMode === "rally" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("rally")}><Trophy size={18}/><span>Performance Rally<small>Watch stores and regions move</small></span></button>
         {['admin','supervisor'].includes(profile.role)&&<button role="tab" aria-selected={dashboardMode === "plans"} className={dashboardMode === "plans" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("plans")}><Target size={18}/><span>Regional plans<small>Reports, actions, and follow-up</small></span></button>}
         {['admin','supervisor'].includes(profile.role)&&<button role="tab" aria-selected={dashboardMode === "followup"} className={dashboardMode === "followup" ? "active" : ""} onClick={() => (!reportDirty || window.confirm('Discard unsaved report changes?')) && setDashboardMode("followup")}><BellRing size={18}/><span>Follow-Up<small>Released plans needing action</small></span>{followupActionCount>0&&<b className="kpi-tab-notification" aria-label={`${followupActionCount} plans need action`}>{followupActionCount>99?'99+':followupActionCount}</b>}</button>}
 
       </div>
 
-      {dashboardMode === 'trends' ? (currentLoading ? <p>Loading trends…</p> : <KPITrends history={historyRows} stores={trendStores}/>) : dashboardMode === 'plans' || dashboardMode === 'followup' ? <KPIRegionalPlans profile={profile} weekEnd={weekEnd} groups={access.supervisorGroups} onDirtyChange={setReportDirty} mode={dashboardMode === 'followup'?'followup':'plans'} onActionCount={setFollowupActionCount}/> : <>
+      {dashboardMode === 'trends' ? (currentLoading ? <p>Loading trends…</p> : <KPITrends history={historyRows} stores={trendStores}/>) : dashboardMode === 'rally' ? (currentLoading ? <p>Loading Performance Rally…</p> : <KPIPerformanceRally profile={profile} history={historyRows} stores={trendStores} groups={access.supervisorGroups} assignedStores={access.assignedStores} onOpenPlans={() => setDashboardMode('plans')}/>) : dashboardMode === 'plans' || dashboardMode === 'followup' ? <KPIRegionalPlans profile={profile} weekEnd={weekEnd} groups={access.supervisorGroups} onDirtyChange={setReportDirty} mode={dashboardMode === 'followup'?'followup':'plans'} onActionCount={setFollowupActionCount}/> : <>
       {levelControls}
       {viewLevel === "supervisor" && access.canViewAll && (
         <section className="kpi-scope-bar"><label>Area Supervisor group<select disabled={profile.role === "supervisor"} value={selectedGroup?.id ?? ""} onChange={(event) => setSelectedSupervisor(event.target.value)}>{(profile.role === "supervisor" ? access.supervisorGroups.filter((group) => group.id === profile.id) : access.supervisorGroups).map((group) => <option value={group.id} key={group.id}>{group.name} · {group.stores.length} stores</option>)}</select></label><p>Showing {selectedGroup?.stores.map(storeLabel).join(", ") || "no assigned stores"}</p></section>
