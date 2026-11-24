@@ -364,7 +364,7 @@ export default function App() {
     kpi: <KPITracker profile={profile} />,
     labor: <LaborManagement profile={profile} />,
     calendar: <OperationsCalendar profile={profile} onOpenVisitLog={(scheduleId)=>{window.sessionStorage.setItem('dashos:visit-schedule',scheduleId);window.sessionStorage.setItem('dashos:supervisor-workspace-view','visits');selectSection('supervisor-dashboard');}} />,
-    "supervisor-dashboard": <AreaSupervisorDashboard profile={profile} onOpenVisitLog={(scheduleId)=>{window.sessionStorage.setItem('dashos:visit-schedule',scheduleId);window.sessionStorage.setItem('dashos:supervisor-workspace-view','visits');selectSection('supervisor-dashboard');}} />,
+    "supervisor-dashboard": <AreaSupervisorDashboard profile={profile} />,
     "visit-log": <SupervisorVisitLog profile={profile} initialScheduleId={window.sessionStorage.getItem('dashos:visit-schedule')} />,
     hr: <HumanResources profile={profile} />,
     evaluations: <TeamEvaluations profile={profile} />,

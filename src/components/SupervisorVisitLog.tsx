@@ -19,8 +19,9 @@ import {
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
-import { templateCompletion, templateForVisit, VisitTemplateSectionForm, type TemplateData } from "./VisitTemplateForm";
+import { templateCompletion, templateForVisit, visitTemplates, VisitTemplateSectionForm, type TemplateData, type TemplateField } from "./VisitTemplateForm";
 import VisitPrintRecap from "./VisitPrintRecap";
+import VisitPaperForm, { type PaperSection } from "./VisitPaperForm";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Rating = "" | "yes" | "no" | "na";
@@ -35,6 +36,7 @@ type FollowUp = { item: string; owner: string; dueDate: string; completed: boole
 type VisitForm = {
   visitType: string;
   templateData: TemplateData;
+  visitNotes: Record<string, string>;
   managerName: string;
   visitDate: string;
   visitTime: string;
@@ -142,6 +144,53 @@ const steps: Step[] = [
   { key: "review", label: "Review & submit", short: "Review" },
 ];
 
+const paperCheckFields = (items: readonly (readonly [string, string])[]): TemplateField[] =>
+  items.flatMap(([key, label]) => [
+    { key: `checks.${key}.rating`, label, options: ["Yes", "No", "N/A"] },
+    { key: `checks.${key}.comment`, label: "Comment" },
+  ]);
+
+const paperDetails: PaperSection = { key: "details", label: "Visit details", fields: [
+  { key: "store_id", label: "Store number or name" },
+  { key: "visitDate", label: "Visit date (MM/DD/YYYY)" },
+  { key: "visitTime", label: "Visit time (include AM or PM)" },
+  { key: "managerName", label: "Manager on duty" },
+] };
+const generalPaperFields: Record<string, TemplateField[]> = {
+  carry: paperCheckFields(checkGroups.carry),
+  product: productItems.flatMap((label, index) => [
+    { key: `products.product_${index}.rating`, label, options: ["Great", "Remake"] },
+    { key: `products.product_${index}.comment`, label: "Comment" },
+  ]),
+  dough_food: paperCheckFields([...checkGroups.dough, ...checkGroups.food]),
+  employee: paperCheckFields(checkGroups.employee),
+  urgent: Array.from({ length: 4 }, (_, index) => [
+    { key: `urgentItems.${index}.item`, label: `Urgent item ${index + 1}` },
+    { key: `urgentItems.${index}.assignedTo`, label: "Assigned to" },
+    { key: `urgentItems.${index}.completionTime`, label: "Completion time (include AM or PM)" },
+  ]).flat(),
+  systems: paperCheckFields(checkGroups.systems),
+  goals: [
+    { key: "goals.posted", label: "Are store goals posted and updated?", options: ["Yes", "No"] },
+    { key: "goals.needsAdjustment", label: "Goals needing adjustment", type: "textarea" },
+    { key: "goals.onTrack", label: "Goals on track", type: "textarea" },
+  ],
+  recap: [
+    ...paperCheckFields(checkGroups.overall),
+    ...Array.from({ length: 3 }, (_, index) => [
+      { key: `keyWins.${index}`, label: `Key win ${index + 1}` },
+      { key: `opportunities.${index}`, label: `Coaching opportunity ${index + 1}` },
+    ]).flat(),
+    ...Array.from({ length: 4 }, (_, index) => [
+      { key: `followUps.${index}.item`, label: `Follow-up item ${index + 1}` },
+      { key: `followUps.${index}.owner`, label: "Owner" },
+      { key: `followUps.${index}.dueDate`, label: "Due date (MM/DD/YYYY)" },
+      { key: `followUps.${index}.completed`, label: "Completed?", options: ["Yes", "No"] },
+    ]).flat(),
+  ],
+};
+const generalPaperSections = steps.slice(1, -1).map(step => ({ ...step, fields: generalPaperFields[step.key] }));
+
 const centralDate = () => {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" })
     .formatToParts(new Date()).reduce<Record<string, string>>((result, part) => ({ ...result, [part.type]: part.value }), {});
@@ -151,6 +200,7 @@ const centralDate = () => {
 const emptyForm = (): VisitForm => ({
   visitType: "General Supervisor Visit",
   templateData: {},
+  visitNotes: {},
   managerName: "",
   visitDate: centralDate(),
   visitTime: "",
@@ -168,6 +218,7 @@ const normalizeForm = (value?: Partial<VisitForm> | null): VisitForm => ({
   ...(value ?? {}),
   visitType: value?.visitType ?? "General Supervisor Visit",
   templateData: value?.templateData ?? {},
+  visitNotes: value?.visitNotes ?? {},
   checks: value?.checks ?? {},
   products: value?.products ?? {},
   goals: value?.goals ?? { posted: "", needsAdjustment: "", onTrack: "" },
@@ -188,7 +239,7 @@ const formStats = (form: VisitForm, storeId: string) => {
     return {
       percent: expected ? Math.round((complete / expected) * 100) : 0,
       missing: expected - complete,
-      sections: template.sections.filter((section) => section.fields.some((field) => Boolean(form.templateData[field.key]?.trim()))).length + Number(Boolean(storeId || form.managerName || form.visitTime)),
+      sections: template.sections.filter((section) => form.visitNotes[section.key]?.trim() || section.fields.some((field) => Boolean(form.templateData[field.key]?.trim()))).length + Number(Boolean(storeId || form.managerName || form.visitTime || form.visitNotes.details?.trim())),
       issues: templateStats.issues,
     };
   }
@@ -216,7 +267,7 @@ const formStats = (form: VisitForm, storeId: string) => {
   return {
     percent: Math.round((complete / expected) * 100),
     missing: expected - complete,
-    sections: steps.slice(0, -1).filter((step) => sectionTouched(step.key)).length,
+    sections: steps.slice(0, -1).filter((step) => sectionTouched(step.key) || form.visitNotes[step.key]?.trim()).length,
     issues,
   };
 };
@@ -226,7 +277,7 @@ const formatTime = (value: string | null) => value ? new Date(`2000-01-01T${valu
 const scheduledTemplateData = (visitType: string, startTime: string, endTime: string): TemplateData => {
   const start = startTime.slice(0, 5); const end = endTime.slice(0, 5);
   if (visitType === "Rush observation") return { rush_start: start, rush_end: end };
-  if (visitType === "Opening visit") return { supervisor_arrival: start, lunch_to: end };
+  if (visitType === "Opening visit") return { supervisor_arrival: start };
   if (visitType === "Closing visit") return { closing_arrival: start, closing_departure: end };
   return {};
 };
@@ -316,7 +367,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     setLogId(log.id);
     setStoreId(log.store_id);
     setForm(normalized);
-    setStepIndex(log.status === "submitted" ? (template ? template.sections.length + 1 : 9) : 0);
+    setStepIndex(log.status === "submitted" || log.supervisor_id !== profile.id ? (template ? template.sections.length + 1 : steps.length - 1) : 0);
     setShowEditor(true);
     setMessage("");
     setScheduleId(log.schedule_id);
@@ -327,15 +378,35 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     if(!initialScheduleId||loading||openedSchedule.current===initialScheduleId||!supabase)return;
     openedSchedule.current=initialScheduleId;
     window.sessionStorage.removeItem('dashos:visit-schedule');
-    const linked=logs.find(log=>log.schedule_id===initialScheduleId);
-    if(linked){void openLog(linked);return;}
-    void supabase.from('supervisor_visit_schedules').select('id,supervisor_id,store_id,visit_date,start_time,end_time,purpose').eq('id',initialScheduleId).maybeSingle().then(({data,error})=>{
-      if(error||!data){setMessage(error?.message||'This calendar visit is not available.');return;}
-      if(profile.role==='admin'){setMessage('No DM Visit Form has been started for this scheduled visit yet. The assigned Area Supervisor can open it from their calendar.');return;}
-      const visitType = templateForVisit(data.purpose) ? data.purpose : "General Supervisor Visit";
-      setSelected(null);setLogId(null);setScheduleId(data.id);setStoreId(data.store_id);setForm({...emptyForm(),visitType,visitDate:data.visit_date,visitTime:data.start_time.slice(0,5),templateData:scheduledTemplateData(visitType,data.start_time,data.end_time)});setPhotos([]);setStepIndex(0);setShowEditor(true);setMessage(`Store, date, scheduled time, and visit type were filled from the weekly plan. You can adjust them in this form if the visit changed.`);
-    });
-  },[initialScheduleId,loading,logs,profile.role]);
+    const db = supabase;
+    setMessage("Opening scheduled visit…");
+    void (async () => {
+      const linked = await db.from("supervisor_visit_logs").select("*")
+        .eq("schedule_id", initialScheduleId).order("submitted_at", { ascending: false, nullsFirst: false })
+        .order("updated_at", { ascending: false }).limit(1).maybeSingle();
+      if (linked.error) { setMessage(linked.error.message); return; }
+      if (linked.data) { await openLog(linked.data as VisitLog); return; }
+      const { data, error } = await db.from("supervisor_visit_schedules")
+        .select("id,supervisor_id,store_id,visit_date,start_time,end_time,purpose")
+        .eq("id", initialScheduleId).neq("status", "cancelled").maybeSingle();
+      if (error || !data) { setMessage(error?.message || "This scheduled visit is unavailable."); return; }
+      if (data.supervisor_id !== profile.id) {
+        setMessage("The assigned Area Supervisor can start this visit from their schedule.");
+        return;
+      }
+      const visitType = data.purpose?.trim() || "General Supervisor Visit";
+      setSelected(null);
+      setLogId(null);
+      setScheduleId(data.id);
+      setStoreId(data.store_id);
+      setForm({ ...emptyForm(), visitType, visitDate: data.visit_date, visitTime: data.start_time.slice(0, 5),
+        templateData: scheduledTemplateData(visitType, data.start_time, data.end_time) });
+      setPhotos([]);
+      setStepIndex(0);
+      setShowEditor(true);
+      setMessage("Visit type, store, date, and time filled from the schedule.");
+    })();
+  }, [initialScheduleId, loading, profile.id]);
 
   const persist = async (status: VisitStatus = "draft") => {
     if (!supabase || saving) return null;
@@ -448,8 +519,8 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
 
   const activeStep = activeSteps[stepIndex] ?? activeSteps[0];
   const sectionPhotos = photos.filter((photo) => photo.section_key === activeStep.key);
-  const photoArea = stepIndex > 0 && stepIndex < activeSteps.length - 1 ? <section className="visit-photo-area">
-    <div><Camera size={21} /><div><strong>{activeStep.key === "goals" ? "Photo of the posted goals" : "Optional photos for this section"}</strong><small>{activeStep.key === "goals" ? "Add a current photo of the in-store goal board or posted goals." : "Use the phone camera or photo library when a photo improves the visit record."}</small></div></div>
+  const photoArea = !readOnly || sectionPhotos.length > 0 ? <section className="visit-photo-area">
+    <div><Camera size={21} /><div><strong>{activeStep.key === "goals" ? "Photo of the posted goals" : "Optional photos for this section"}</strong><small>{activeStep.key === "goals" ? "Attach the goal board or the completed paper page." : "Attach evidence or a photo of the completed paper page. Photos are saved with the visit."}</small></div></div>
     {!readOnly && <label className="button secondary visit-photo-button"><ImagePlus size={17} />{uploading ? "Uploading…" : "Add photos"}<input type="file" accept="image/*,.heic,.heif" multiple disabled={uploading} onChange={(event) => void uploadPhotos(event.target.files)} /></label>}
     {sectionPhotos.length > 0 && <div className="visit-photo-grid">{sectionPhotos.map((photo) => <article key={photo.id}>
       {photo.url ? <img src={photo.url} alt={photo.caption || photo.original_name} /> : <div className="visit-photo-placeholder">Photo</div>}
@@ -463,6 +534,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     if (key === "details") return <div className="visit-details-grid">
       <label>Visit form<select value={form.visitType} onChange={(event) => { setForm((current) => ({ ...current, visitType: event.target.value, templateData: {} })); setStepIndex(0); }} disabled={readOnly}>
         <option>General Supervisor Visit</option><option>Game Day visit</option><option>Opening visit</option><option>Closing visit</option><option>Rush observation</option>
+        {!templateForVisit(form.visitType) && form.visitType !== "General Supervisor Visit" && <option>{form.visitType}</option>}
       </select></label>
       <label>Store<select value={storeId} onChange={(event) => setStoreId(event.target.value)} disabled={readOnly}><option value="">Select store</option>{stores.map((store) => <option value={store.id} key={store.id}>{store.name} {store.store_number ?? ""}</option>)}</select></label>
       <label>Date<input type="date" value={form.visitDate} onChange={(event) => setForm((current) => ({ ...current, visitDate: event.target.value }))} disabled={readOnly} /></label>
@@ -504,12 +576,14 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     ...allChecks.map(([key, label]) => ({ label, value: [form.checks[key]?.rating?.toUpperCase(), form.checks[key]?.comment].filter(Boolean).join(" · ") || "—" })),
     ...productItems.map((label, index) => ({ label, value: [form.products[`product_${index}`]?.rating, form.products[`product_${index}`]?.comment].filter(Boolean).join(" · ") || "—" })),
   ];
-  const printVisit = () => {
-    const source = document.querySelector<HTMLElement>(".visit-print-sheet");
+  const printVisit = (paper: boolean) => {
+    const source = printSource.current?.querySelector<HTMLElement>(paper ? ".visit-paper-source" : ".visit-print-sheet");
     if (!source) return;
     const portal = document.createElement("div");
     portal.className = "visit-print-portal";
     portal.appendChild(source.cloneNode(true));
+    const notes = printSource.current?.querySelector<HTMLElement>(".visit-notes-appendix");
+    if (!paper && notes) portal.appendChild(notes.cloneNode(true));
     const pageStyle = document.createElement("style");
     pageStyle.dataset.visitPrintPage = "true";
     pageStyle.textContent = "@page { size: letter portrait; margin: 0.25in; }";
@@ -522,15 +596,41 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
 
   const visibleLogs = logs.filter((log) => (statusFilter === "all" || log.status === statusFilter) && (storeFilter === "all" || log.store_id === storeFilter));
   const storeName = (id: string) => { const store = stores.find((item) => item.id === id); return store ? `${store.name}${store.store_number ? ` ${store.store_number}` : ""}` : "Store"; };
+  const printSource = useRef<HTMLDivElement>(null);
+  const notesBySection = Object.entries(form.visitNotes).filter(([, value]) => value.trim()).map(([key, value]) => ({
+    key, value, label: activeSteps.find(step => step.key === key)?.label
+      ?? Object.values(visitTemplates).flatMap(template => template.sections).find(section => section.key === key)?.label
+      ?? steps.find(step => step.key === key)?.label ?? key,
+  }));
 
   if (showEditor) return <div className="page-stack visit-log-page">
-    <header className={`page-header visit-branded-heading visit-heading-${form.visitType.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}><div><button className="link-button" type="button" onClick={() => { setShowEditor(false); setSelected(null); }}><ArrowLeft size={16} />Back to visit log</button><p className="eyebrow">Area Supervisor visit</p><h1>{activeTemplate?.title ?? (readOnly ? "Visit record" : logId ? "Continue visit draft" : "New store visit")}</h1><p>{activeTemplate?.subtitle ?? (readOnly ? "Submitted records are preserved as a read-only store visit history." : "Move through sections in any order. Save now and finish later if the visit does not require every section.")}</p></div><div className="visit-header-status"><span className={`visit-status ${readOnly ? "submitted" : "draft"}`}>{readOnly ? "Submitted" : "Draft"}</span><strong>{stats.percent}% complete</strong><button type="button" className="button secondary compact" onClick={printVisit}><Printer size={16}/>Print one-page recap</button></div></header>
+    <header className={`page-header visit-branded-heading visit-heading-${form.visitType.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}><div><button className="link-button" type="button" onClick={() => { setShowEditor(false); setSelected(null); }}><ArrowLeft size={16} />Back to visit log</button><p className="eyebrow">Area Supervisor visit</p><h1>{activeTemplate?.title ?? (readOnly ? "Visit record" : logId ? "Continue visit draft" : "New store visit")}</h1><p>{activeTemplate?.subtitle ?? (readOnly ? "Submitted records are preserved as a read-only store visit history." : "Move through sections in any order. Save now and finish later if the visit does not require every section.")}</p></div><div className="visit-header-status"><span className={`visit-status ${readOnly ? "submitted" : "draft"}`}>{readOnly ? "Submitted" : "Draft"}</span><strong>{stats.percent}% complete</strong><button type="button" className="button secondary compact" onClick={() => printVisit(false)}><Printer size={16}/>Print visit recap</button><button type="button" className="button secondary compact" onClick={() => printVisit(true)}><Printer size={16}/>Print paper form</button></div></header>
     {message && <div className="notice">{message}</div>}
     <nav className="visit-step-nav" aria-label="Visit form sections">{activeSteps.map((step, index) => <button type="button" key={step.key} className={index === stepIndex ? "active" : ""} onClick={() => setStepIndex(index)}><span>{index + 1}</span>{step.short}</button>)}</nav>
     <section className={`panel visit-form-panel ${activeTemplate ? "templated" : ""}`}><div className="visit-section-heading"><div><p className="eyebrow">Section {stepIndex + 1} of {activeSteps.length}</p><h2>{activeStep.label}</h2></div>{!readOnly && <small>All fields may be skipped</small>}</div>{renderStep()}{photoArea}
+      <label className="visit-section-notes">
+        Visit notes <span className="optional-label">Optional</span>
+        <textarea key={activeStep.key} rows={3} value={form.visitNotes[activeStep.key] ?? ""} readOnly={readOnly}
+          onChange={event => setForm(current => ({ ...current, visitNotes: { ...current.visitNotes, [activeStep.key]: event.target.value } }))}/>
+      </label>
+      {activeStep.key === "review" && notesBySection.length > 0 && <section className="visit-section-notes">
+        <h3>Visit notes by section</h3>
+        {notesBySection.map(note => <div key={note.key}><strong>{note.label}</strong><p>{note.value}</p></div>)}
+      </section>}
       <footer className="visit-form-actions"><button className="button secondary" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((value) => value - 1)}><ArrowLeft size={17} />Previous</button><div>{!readOnly && <button className="button secondary" type="button" disabled={saving} onClick={() => void persist("draft")}><Save size={17} />{saving ? "Saving…" : "Save draft"}</button>}{stepIndex < activeSteps.length - 1 ? <button className="button primary" type="button" onClick={() => setStepIndex((value) => value + 1)}>Next<ArrowRight size={17} /></button> : !readOnly ? <button className="button primary" type="button" disabled={saving} onClick={() => void submitVisit()}><ClipboardCheck size={17} />Submit visit</button> : null}</div></footer>
     </section>
-    <VisitPrintRecap form={form} store={storeName(storeId)} supervisor={selected?.supervisor_name ?? profile.fullName} status={readOnly ? "Submitted" : "Draft"} completion={stats.percent} photoCount={photos.length} genericRows={genericPrintRows}/>
+    <div ref={printSource} hidden>
+      <VisitPrintRecap form={form} store={storeName(storeId)} supervisor={selected?.supervisor_name ?? profile.fullName} status={readOnly ? "Submitted" : "Draft"} completion={stats.percent} photoCount={photos.length} genericRows={genericPrintRows}/>
+      <VisitPaperForm title={activeTemplate?.title ?? form.visitType} visitType={form.visitType}
+        sections={[paperDetails, ...(activeTemplate ? activeTemplate.sections.map(section => ({ ...section, fields: section.fields.map(field => ({ ...field, key: `templateData.${field.key}`, label: field.type === "time" ? `${field.label} (include AM or PM)` : field.type === "date" ? `${field.label} (MM/DD/YYYY)` : field.label })) })) : generalPaperSections),
+          { key: "review", label: "Final review", fields: [] }]}
+        store={scheduleId ? storeName(storeId) : ""} date={scheduleId ? formatDate(form.visitDate) : ""}
+        time={scheduleId && form.visitTime ? formatTime(form.visitTime) : ""}/>
+      {notesBySection.length > 0 && <article className="visit-notes-appendix visit-paper-page">
+        <h1>Visit notes</h1><p>{storeName(storeId)} · {formatDate(form.visitDate)}</p>
+        {notesBySection.map(note => <section key={note.key}><h2>{note.label}</h2><p>{note.value}</p></section>)}
+      </article>}
+    </div>
   </div>;
 
   return <div className="page-stack visit-log-page">

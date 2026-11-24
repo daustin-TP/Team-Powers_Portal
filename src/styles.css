@@ -614,3 +614,24 @@ button.status-pill{border:0;cursor:pointer;font:inherit;font-size:.71rem;font-we
 /* Team member recurring availability */
 .member-recurring-overview{width:min(1180px,calc(100% - 2rem));margin:1rem auto 0}.member-recurring-overview .panel-heading p{margin:.15rem 0}.member-availability-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:.45rem}.member-availability-week button{min-height:76px;border:1px solid #cddbe5;border-radius:10px;background:#f6fbff;color:#254b6d;padding:.6rem .45rem;display:grid;align-content:center;gap:.25rem;text-align:center;cursor:pointer}.member-availability-week button:hover{border-color:#087dcc;box-shadow:0 4px 12px rgba(8,125,204,.12)}.member-availability-week button strong{font-size:.72rem}.member-availability-week button span{font-size:.65rem;line-height:1.25}.member-availability-week button.limited{background:#fff8df;border-color:#e6c76d;color:#73520b}.member-availability-week button.unavailable{background:#fff0ee;border-color:#e6aaa4;color:#913d36}.recurring-reason-warning{display:grid;grid-template-columns:auto 1fr;column-gap:.55rem;row-gap:.1rem;border:1px solid #e6aaa4;border-left:4px solid #c7352e;border-radius:9px;background:#fff3f1;color:#842d28;padding:.7rem .8rem}.recurring-reason-warning svg{grid-row:1/3}.recurring-reason-warning span{font-size:.69rem;line-height:1.35}.required-label{float:right;color:#b52e28;font-size:.62rem;font-weight:900;text-transform:uppercase}
 @media(max-width:760px){.member-availability-week{grid-template-columns:repeat(7,112px);overflow-x:auto;padding-bottom:.35rem}}
+.visit-form-panel .visit-section-notes{display:block;margin-top:18px;padding:14px;border:1px solid #c9dce9;border-radius:10px;background:#f6fbff}
+.visit-section-notes textarea{display:block;width:100%;margin-top:6px}
+.visit-section-notes p{white-space:pre-wrap;overflow-wrap:anywhere}
+.visit-paper-source,.visit-notes-appendix{display:none}
+@media print{
+  .printing-visit-recap .visit-paper-source,.printing-visit-recap .visit-notes-appendix{display:block}
+  .printing-visit-recap .visit-paper-page{box-sizing:border-box;padding:.15in .22in;color:#000;background:#fff;font:11pt/1.25 Arial,sans-serif}
+  .printing-visit-recap .visit-paper-page + .visit-paper-page{break-before:page}
+  .printing-visit-recap .visit-notes-appendix{break-before:page}
+  .printing-visit-recap .visit-paper-page h1{font-size:19pt;margin:.04in 0}
+  .printing-visit-recap .visit-paper-page h2{font-size:14pt;margin:.12in 0 .04in}
+  .printing-visit-recap .visit-paper-page p{margin:.04in 0 .08in}
+  .printing-visit-recap .visit-paper-page header{border-bottom:2px solid #000;padding-bottom:.06in}
+  .printing-visit-recap .visit-paper-field{break-inside:avoid;margin-top:.055in}
+  .printing-visit-recap .visit-paper-field code{margin-left:8pt;font:8pt monospace}
+  .printing-visit-recap .visit-paper-options{display:flex;flex-wrap:wrap;gap:.1in .24in;margin:.035in 0 .075in}
+  .printing-visit-recap .visit-paper-options i{display:inline-block;width:.16in;height:.16in;border:1.3pt solid #000;vertical-align:middle}
+  .printing-visit-recap .visit-paper-writing{height:.24in;border:1px solid #000;margin-top:.035in}
+  .printing-visit-recap .visit-paper-writing.long{height:.63in}
+  .printing-visit-recap .visit-notes-appendix p{white-space:pre-wrap;overflow-wrap:anywhere}
+}
