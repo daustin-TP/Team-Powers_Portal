@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Profile } from '../types';
 import { rankingMetrics, metricValue } from '../../supabase/functions/kpi-dashboard/analytics';
-import type { Action, Snapshot } from '../../supabase/functions/kpi-dashboard/planning';
+import { rallyAnalysis, type Action, type Snapshot } from '../../supabase/functions/kpi-dashboard/planning';
 import { kpiDisplay } from './KPITrends';
 type Plan={id:string;version:number;supervisor_id:string;reviewer_id:string|null;week_end:string;followup_date:string;status:string;admin_notes:string;director_notes:string;followup_notes:string;actions:Action[];snapshot:Snapshot&{supervisor_name:string}};
 type Result={store_id:string;week_end:string;metrics:Record<string,unknown>};
@@ -57,7 +57,7 @@ export default function KPIRegionalPlans({profile,weekEnd,groups,onDirtyChange,m
  const visiblePlans=mode==='followup'?followupPlans:plans;
  const activeCount=followupPlans.filter(plan=>plan.status==='released'&&plan.actions.some(action=>action.status!=='done')).length;
  const overdueCount=followupPlans.filter(plan=>plan.status==='released'&&plan.followup_date<new Date().toISOString().slice(0,10)&&plan.actions.some(action=>action.status!=='done')).length;
- const rally=selected?.snapshot.rally;
+ const rally=selected?.snapshot.rally??(selected&&historyReady?rallyAnalysis(selected.snapshot.stores,history,selected.week_end):undefined);
  return <section className="panel kpi-workspace"><div className="table-toolbar"><div><p className="eyebrow">{mode==='followup'?'KPI follow-up':'Regional plans'}</p><h2>{mode==='followup'?'Action needed and completed follow-up':'Review and hand off regional plans'}</h2><p>{mode==='followup'?'Released plans stay here until every action is completed and leadership closes the follow-up.':'Admin draft → Director review → release to the Area Supervisor.'}</p></div></div>
  {error&&<p role="alert" className="inline-message kpi-error">{error}</p>}{message&&<p role="status" className="inline-message">{message}</p>}
  {!selected?<>{mode==='followup'&&<div className="kpi-followup-summary"><article className={activeCount?'needs-action':''}><span>Needs action</span><strong>{activeCount}</strong><small>Released plans with open work</small></article><article className={overdueCount?'overdue':''}><span>Past follow-up date</span><strong>{overdueCount}</strong><small>Still has unfinished actions</small></article><article><span>Completed</span><strong>{followupPlans.filter(plan=>plan.status==='closed').length}</strong><small>Closed follow-ups retained for reference</small></article></div>}{admin&&mode==='plans'&&<div className="kpi-plan-controls"><label>Area Supervisor<select value={region||groups[0]?.id||''} onChange={e=>setRegion(e.target.value)}>{groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select></label><label>Follow up<select value={weeks} onChange={e=>setWeeks(Number(e.target.value))}><option value={1}>Next Monday</option><option value={2}>In two Mondays</option></select></label><button className="button primary" disabled={busy||!groups.length} onClick={()=>void create()}>Prepare report for {weekEnd}</button></div>}
