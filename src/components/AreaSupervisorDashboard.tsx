@@ -5,13 +5,14 @@ import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import SupervisorVisitLog from "./SupervisorVisitLog";
 import AreaSupervisorExpectations from "./AreaSupervisorExpectations";
+import TrainingVisitPhoto, { isTrainingVisit } from "./TrainingVisitPhoto";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Supervisor = { id: string; full_name: string; store_id: string | null };
 type Visit = {
   id: string;
   supervisor_id: string;
-  store_id: string;
+  store_id: string | null;
   visit_date: string;
   start_time: string;
   end_time: string;
@@ -76,8 +77,8 @@ const visitRequirements = [
   { key: "game-day", label: "Game Day visits", target: "per-store" as const, match: (purpose: string) => purpose === "Game Day visit", add: "Game Day visit" },
   { key: "feel-good", label: "Feel-good visit", target: 1, match: (purpose: string) => purpose === "Feel-good visit", add: "Feel-good visit" },
 ];
-const visitOptions = ["General Supervisor Visit", "Game Day visit", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "KPI / goal follow-up", "Operations review", "Schedule review", "Other"];
-const connectedLogTypes = new Set(visitOptions.filter((option) => option !== "Other"));
+const visitOptions = ["General Supervisor Visit", "Game Day visit", "Opening visit", "Closing visit", "Closed visit", "Rush observation", "Feel-good visit", "KPI / goal follow-up", "Operations review", "Schedule review", "Training", "Other"];
+const connectedLogTypes = new Set(visitOptions.filter((option) => option !== "Other" && !isTrainingVisit(option)));
 const timeOptions = Array.from({ length: 88 }, (_, index) => {
   const totalMinutes = (6 * 60 + index * 15) % (24 * 60);
   return `${String(Math.floor(totalMinutes / 60)).padStart(2, "0")}:${String(totalMinutes % 60).padStart(2, "0")}`;
@@ -144,6 +145,8 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingVisitId, setEditingVisitId] = useState<string | null>(null);
   const [newVisit, setNewVisit] = useState({ store_id: "", visit_date: monday(), start_time: "09:00", end_time: "12:00", purpose: "General Supervisor Visit", notes: "" });
+  const visitHasDetails = newVisit.purpose === "Other" ? Boolean(newVisit.notes.trim()) : Boolean(newVisit.store_id);
+  const [trainingPhotoVisit, setTrainingPhotoVisit] = useState<Visit | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -168,7 +171,7 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
   const weekEnd = addIsoDays(weekStart, 6);
   const storeMap = useMemo(() => new Map(stores.map((store) => [store.id, store])), [stores]);
   const assignedStores = useMemo(() => stores.filter((store) => assignedStoreIds.includes(store.id)), [stores, assignedStoreIds]);
-  const storesForVisit = (_purpose: string, currentStoreId?: string) => stores.filter((store) => assignedStoreIds.includes(store.id) || store.id === currentStoreId);
+  const storesForVisit = (_purpose: string, currentStoreId?: string | null) => stores.filter((store) => assignedStoreIds.includes(store.id) || store.id === currentStoreId);
   const supervisorName = supervisors.find((item) => item.id === supervisorId)?.full_name ?? profile.fullName;
   const visibleVisits = useMemo(() => visits.filter((visit) => !visit._deleted), [visits]);
   const pendingVisitCount = visits.filter((visit) => visit._draft || visit._dirty || visit._deleted).length;
@@ -268,27 +271,28 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
     const nextStart = startTime ?? newVisit.start_time;
     const nextEnd = startTime ? scheduleClock(Math.min(scheduleMinutes(startTime) + 60, timelineEndMinutes)) : newVisit.end_time;
     setEditingVisitId(null);
-    setNewVisit((current) => ({ ...current, purpose, visit_date: visitDate, start_time: nextStart, end_time: nextEnd, store_id: eligibleStores.some((store) => store.id === current.store_id) ? current.store_id : (eligibleStores[0]?.id ?? "") }));
+    setNewVisit((current) => ({ ...current, purpose, notes: "", visit_date: visitDate, start_time: nextStart, end_time: nextEnd, store_id: eligibleStores.some((store) => store.id === current.store_id) ? current.store_id : (eligibleStores[0]?.id ?? "") }));
     setEditorOpen(true);
   };
   const openEditVisit = (visit: Visit) => {
     setEditingVisitId(visit.id);
-    setNewVisit({ store_id: visit.store_id, visit_date: visit.visit_date, start_time: visit.start_time.slice(0, 5), end_time: visit.end_time.slice(0, 5), purpose: visit.purpose, notes: visit.notes ?? "" });
+    setNewVisit({ store_id: visit.store_id ?? "", visit_date: visit.visit_date, start_time: visit.start_time.slice(0, 5), end_time: visit.end_time.slice(0, 5), purpose: isTrainingVisit(visit.purpose) ? "Training" : visit.purpose, notes: visit.notes ?? "" });
     setEditorOpen(true);
   };
   const addVisit = () => {
-    if (!newVisit.store_id || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)) return;
+    if (!visitHasDetails || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)) return;
+    const details = { ...newVisit, store_id: newVisit.purpose === "Other" ? null : newVisit.store_id, notes: newVisit.notes.trim() };
     if (editingVisitId) {
       const original = visits.find((visit) => visit.id === editingVisitId);
-      const changed = Boolean(original && ["store_id", "visit_date", "start_time", "end_time", "purpose", "notes"].some((key) => String(original[key as keyof Visit] ?? "").slice(0, key.includes("time") ? 5 : undefined) !== String(newVisit[key as keyof typeof newVisit] ?? "")));
+      const changed = Boolean(original && ["store_id", "visit_date", "start_time", "end_time", "purpose", "notes"].some((key) => String(original[key as keyof Visit] ?? "").slice(0, key.includes("time") ? 5 : undefined) !== String(details[key as keyof typeof details] ?? "")));
       const reason = original && !original._draft && changed ? window.prompt("Why did the planned visit change? (optional)") ?? "" : original?.last_change_reason ?? "";
-      editVisit(editingVisitId, { ...newVisit, last_change_reason: reason });
+      editVisit(editingVisitId, { ...details, last_change_reason: reason });
       setEditorOpen(false);
       setEditingVisitId(null);
       setMessage("Visit updated on the weekly board. Select Save all updates when the plan is ready.");
       return;
     }
-    const stagedVisit: Visit = { id: crypto.randomUUID(), ...newVisit, supervisor_id: supervisorId, weekly_plan_id: plan?.id ?? null, status: "tentative", edited_from_original: false, last_change_reason: null, _draft: true, _dirty: true };
+    const stagedVisit: Visit = { id: crypto.randomUUID(), ...details, supervisor_id: supervisorId, weekly_plan_id: plan?.id ?? null, status: "tentative", edited_from_original: false, last_change_reason: null, _draft: true, _dirty: true };
     setVisits((current) => [...current, stagedVisit].sort((left, right) => left.visit_date.localeCompare(right.visit_date) || scheduleMinutes(left.start_time) - scheduleMinutes(right.start_time)));
     setVisitDirty(true);
     setEditorOpen(false);
@@ -299,6 +303,7 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
     setVisitDirty(true);
   };
   const stageVisitAt = (purpose: string, visitDate: string, startTime: string) => {
+    if (purpose === "Other") { openAddVisit(purpose, visitDate, startTime); return; }
     const eligibleStores = storesForVisit(purpose);
     if (!eligibleStores.length) { setMessage("No assigned store is available for this visit type."); return; }
     const stagedVisit: Visit = {
@@ -337,7 +342,7 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
     editVisit(visit.id, { end_time: scheduleClock(nextEnd), edited_from_original: visit.edited_from_original || !visit._draft, last_change_reason: visit._draft ? visit.last_change_reason : "Duration adjusted on the weekly timeline" });
   };
   const selectVisitType = (visit: Visit, purpose: string) => {
-    editVisit(visit.id, { purpose });
+    editVisit(visit.id, { purpose, store_id: purpose === "Other" ? null : visit.store_id ?? storesForVisit(purpose)[0]?.id ?? null });
     if (!connectedLogTypes.has(purpose)) return;
     setMessage(`${purpose} has a connected visit log. Save the schedule, then use Complete visit log after the visit.`);
   };
@@ -362,6 +367,11 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
   };
   const saveVisitUpdates = async () => {
     if (!supabase || (!visitDirty && !dirty)) return;
+    if (visits.some(visit => visit._dirty && !visit._deleted &&
+      (visit.purpose === "Other" ? !visit.notes?.trim() : !visit.store_id))) {
+      setMessage("Enter an activity for each Other entry and choose a store for each store visit.");
+      return;
+    }
     const client = supabase;
     let savedPlan = plan;
     if (!savedPlan || dirty) savedPlan = await savePlan();
@@ -371,10 +381,10 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
     const drafts = visits.filter((visit) => visit._draft && !visit._deleted);
     const changed = visits.filter((visit) => !visit._draft && visit._dirty && !visit._deleted);
     const removed = visits.filter((visit) => !visit._draft && visit._deleted);
-    const insertPayload = drafts.map((visit) => ({ id: visit.id, supervisor_id: supervisorId, store_id: visit.store_id, visit_date: visit.visit_date, start_time: visit.start_time.slice(0, 5), end_time: visit.end_time.slice(0, 5), purpose: visit.purpose, notes: visit.notes, weekly_plan_id: savedPlan?.id ?? null, status: "tentative", created_by: profile.id, updated_by: profile.id }));
+    const insertPayload = drafts.map((visit) => ({ id: visit.id, supervisor_id: supervisorId, store_id: visit.purpose === "Other" ? null : visit.store_id, visit_date: visit.visit_date, start_time: visit.start_time.slice(0, 5), end_time: visit.end_time.slice(0, 5), purpose: visit.purpose, notes: visit.notes?.trim(), weekly_plan_id: savedPlan?.id ?? null, status: "tentative", created_by: profile.id, updated_by: profile.id }));
     const results = await Promise.all([
       insertPayload.length ? client.from("supervisor_visit_schedules").upsert(insertPayload, { onConflict: "id" }) : Promise.resolve({ error: null }),
-      ...changed.map((visit) => client.from("supervisor_visit_schedules").update({ store_id: visit.store_id, visit_date: visit.visit_date, start_time: visit.start_time.slice(0, 5), end_time: visit.end_time.slice(0, 5), purpose: visit.purpose, notes: visit.notes, weekly_plan_id: savedPlan?.id ?? visit.weekly_plan_id, last_change_reason: visit.last_change_reason, updated_by: profile.id }).eq("id", visit.id)),
+      ...changed.map((visit) => client.from("supervisor_visit_schedules").update({ store_id: visit.purpose === "Other" ? null : visit.store_id, visit_date: visit.visit_date, start_time: visit.start_time.slice(0, 5), end_time: visit.end_time.slice(0, 5), purpose: visit.purpose, notes: visit.notes?.trim(), weekly_plan_id: savedPlan?.id ?? visit.weekly_plan_id, last_change_reason: visit.last_change_reason, updated_by: profile.id }).eq("id", visit.id)),
       ...(removed.length ? [client.from("supervisor_visit_schedules").update({ status: "cancelled", updated_by: profile.id }).in("id", removed.map((visit) => visit.id))] : []),
     ]);
     const error = results.find((result) => result.error)?.error;
@@ -515,8 +525,8 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
                 const top = Math.max(0, (scheduleMinutes(visit.start_time) - timelineStartMinutes) / 30 * timelineRowHeight);
                 const height = Math.max(timelineRowHeight, (scheduleMinutes(visit.end_time) - scheduleMinutes(visit.start_time)) / 30 * timelineRowHeight);
                 return <article draggable className={`timeline-visit ${state}`} key={visit.id} style={{ top, height }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/scheduled-visit", visit.id); }}>
-                  <button type="button" className="timeline-visit-main" onClick={() => openEditVisit(visit)}><b>{timeLabel(visit.start_time)}–{timeLabel(visit.end_time)}</b><span>{visit.purpose}</span><small>{storeMap.get(visit.store_id)?.name ?? "Select store"}</small><em>{state === "completed" ? "Completed" : state === "started" ? `Draft ${log.completion_percent}%` : state === "unsaved" ? "Unsaved" : "Planned"}</em></button>
-                  <div className="timeline-visit-tools">{connectedLogTypes.has(visit.purpose) && <button type="button" className="timeline-log-button" aria-label={state === "completed" ? "Review completed visit log" : "Complete visit log"} title={state === "completed" ? "Review completed log" : "Complete log"} onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={16}/></button>}<button type="button" className="timeline-delete-button" aria-label={`Delete ${visit.purpose}`} title="Delete visit" onClick={() => cancelVisit(visit)}><Trash2 size={16}/></button></div>
+                  <button type="button" className="timeline-visit-main" onClick={() => openEditVisit(visit)}><b>{timeLabel(visit.start_time)}–{timeLabel(visit.end_time)}</b><span>{visit.purpose === "Other" ? visit.notes?.trim() || "Other activity" : visit.purpose}</span><small>{visit.purpose === "Other" ? "Other activity" : storeMap.get(visit.store_id ?? "")?.name ?? "Select store"}</small><em>{state === "completed" ? "Completed" : state === "started" ? `Draft ${log.completion_percent}%` : state === "unsaved" ? "Unsaved" : "Planned"}</em></button>
+                  <div className="timeline-visit-tools">{isTrainingVisit(visit.purpose) && <button type="button" className="timeline-log-button" aria-label="Training photo" title="Training photo" onClick={() => visit._draft || visit._dirty ? setMessage("Save the Training visit before adding its photo.") : setTrainingPhotoVisit(visit)}><Camera size={16}/></button>}{connectedLogTypes.has(visit.purpose) && <button type="button" className="timeline-log-button" aria-label={state === "completed" ? "Review completed visit log" : "Complete visit log"} title={state === "completed" ? "Review completed log" : "Complete log"} onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={16}/></button>}<button type="button" className="timeline-delete-button" aria-label={`Delete ${visit.purpose}`} title="Delete visit" onClick={() => cancelVisit(visit)}><Trash2 size={16}/></button></div>
                   <button type="button" className="timeline-resize-handle" aria-label={`Resize ${visit.purpose}`} title="Drag to change the end time" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); const end = scheduleMinutes(visit.end_time); resizeVisitRef.current = { id: visit.id, startY: event.clientY, originalEnd: end, lastEnd: end }; }} onPointerMove={(event) => resizeVisit(event, visit)} onPointerUp={(event) => { event.currentTarget.releasePointerCapture(event.pointerId); resizeVisitRef.current = null; }}><span/></button>
                 </article>;
               })}
@@ -533,7 +543,7 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
         </div>
       </section>
 
-      <section className="panel live-visit-schedule"><div className="table-toolbar"><div><p className="eyebrow">Working schedule</p><h2>Visits and field work</h2><p>Plan freely without waiting. Nothing is published to the Team Calendar until Save updates is selected.</p></div><div className="visit-save-controls">{pendingVisitCount > 0 && <span>{pendingVisitCount} unsaved</span>}<button className="button secondary" onClick={() => openAddVisit()}><Plus size={16}/>Add visit</button><button className="button primary" disabled={busy || (!visitDirty && !dirty)} onClick={() => void saveVisitUpdates()}><Save size={16}/>{busy ? "Saving…" : "Save updates"}</button></div></div>{visibleVisits.length ? <div className="visit-schedule-list">{visibleVisits.map((visit) => <article id={`visit-${visit.id}`} key={visit.id} className={`${visit.edited_from_original ? "edited " : ""}${visit._draft || visit._dirty ? "pending" : ""}`}><div className="visit-schedule-date"><b>{fromIso(visit.visit_date).toLocaleDateString(undefined, { weekday: "short" })}</b><span>{dateLabel(visit.visit_date)}</span>{visit._draft || visit._dirty ? <small>Unsaved</small> : null}</div><div className="visit-schedule-fields"><label>Store<select value={visit.store_id} onChange={(event) => editVisit(visit.id, { store_id: event.target.value })}>{storesForVisit(visit.purpose, visit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label><label>Start<select value={visit.start_time.slice(0, 5)} onChange={(event) => editVisit(visit.id, { start_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>End<select value={visit.end_time.slice(0, 5)} onChange={(event) => editVisit(visit.id, { end_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>Type<select value={visit.purpose} onChange={(event) => selectVisitType(visit, event.target.value)}>{visitOptions.map((option) => <option key={option}>{option}</option>)}</select></label><label className="visit-notes">Notes<input value={visit.notes ?? ""} onChange={(event) => editVisit(visit.id, { notes: event.target.value })}/></label></div><div className="visit-schedule-actions">{visit.edited_from_original && <small>Edited from original{visit.last_change_reason ? ` · ${visit.last_change_reason}` : ""}</small>}{connectedLogTypes.has(visit.purpose) && (visit._draft || visit._dirty ? <small>Visit log available after save</small> : <button className="button secondary compact" onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={14}/>Complete visit log</button>)}<button className="icon-button danger" aria-label="Remove visit" onClick={() => cancelVisit(visit)}><Trash2 size={16}/></button></div></article>)}</div> : <div className="activity-empty compact">No visits are scheduled yet. Drag a required visit onto a day or use Add visit.</div>}</section>
+      <section className="panel live-visit-schedule"><div className="table-toolbar"><div><p className="eyebrow">Working schedule</p><h2>Visits and field work</h2><p>Plan freely without waiting. Nothing is published to the Team Calendar until Save updates is selected.</p></div><div className="visit-save-controls">{pendingVisitCount > 0 && <span>{pendingVisitCount} unsaved</span>}<button className="button secondary" onClick={() => openAddVisit()}><Plus size={16}/>Add visit</button><button className="button primary" disabled={busy || (!visitDirty && !dirty)} onClick={() => void saveVisitUpdates()}><Save size={16}/>{busy ? "Saving…" : "Save updates"}</button></div></div>{visibleVisits.length ? <div className="visit-schedule-list">{visibleVisits.map((visit) => <article id={`visit-${visit.id}`} key={visit.id} className={`${visit.edited_from_original ? "edited " : ""}${visit._draft || visit._dirty ? "pending" : ""}`}><div className="visit-schedule-date"><b>{fromIso(visit.visit_date).toLocaleDateString(undefined, { weekday: "short" })}</b><span>{dateLabel(visit.visit_date)}</span>{visit._draft || visit._dirty ? <small>Unsaved</small> : null}</div><div className="visit-schedule-fields">{visit.purpose !== "Other" && <label>Store<select value={visit.store_id ?? ""} onChange={(event) => editVisit(visit.id, { store_id: event.target.value })}>{storesForVisit(visit.purpose, visit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label>}<label>Start<select value={visit.start_time.slice(0, 5)} onChange={(event) => editVisit(visit.id, { start_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>End<select value={visit.end_time.slice(0, 5)} onChange={(event) => editVisit(visit.id, { end_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>Type<select value={visit.purpose} onChange={(event) => selectVisitType(visit, event.target.value)}>{visitOptions.map((option) => <option key={option}>{option}</option>)}</select></label><label className="visit-notes">{visit.purpose === "Other" ? "What is the activity?" : "Notes"}<input value={visit.notes ?? ""} onChange={(event) => editVisit(visit.id, { notes: event.target.value })}/></label></div><div className="visit-schedule-actions">{visit.edited_from_original && <small>Edited from original{visit.last_change_reason ? ` · ${visit.last_change_reason}` : ""}</small>}{isTrainingVisit(visit.purpose) && <button type="button" className="timeline-log-button" aria-label="Training photo" title="Training photo" onClick={() => visit._draft || visit._dirty ? setMessage("Save the Training visit before adding its photo.") : setTrainingPhotoVisit(visit)}><Camera size={16}/></button>}{connectedLogTypes.has(visit.purpose) && (visit._draft || visit._dirty ? <small>Visit log available after save</small> : <button className="button secondary compact" onClick={() => openScheduledVisitLog(visit)}><ClipboardCheck size={14}/>Complete visit log</button>)}<button className="icon-button danger" aria-label="Remove visit" onClick={() => cancelVisit(visit)}><Trash2 size={16}/></button></div></article>)}</div> : <div className="activity-empty compact">No visits are scheduled yet. Drag a required visit onto a day or use Add visit.</div>}</section>
 
       <section className="panel store-weekly-checklist"><div className="table-toolbar"><div><p className="eyebrow">Per-store checklist</p><h2>Complete for every assigned store</h2><p>One cut test is required per store each week. Add as many additional tests as coaching requires.</p></div></div><div className="responsive-table"><table><thead><tr><th>Store</th><th>Cut tests</th>{storeChecks.map(([, label]) => <th key={label}>{label}</th>)}</tr></thead><tbody>{assignedStores.map((store) => { const storeCutTests = cutTests.filter((test) => test.store_id === store.id); const latest = storeCutTests[0]; return <tr key={store.id}><td><b>{store.name}</b><small>{store.store_number}</small></td><td><div className="cut-test-cell"><span className={storeCutTests.length ? "cut-test-status complete" : "cut-test-status required"}>{storeCutTests.length ? `${storeCutTests.length} complete` : "Required"}</span>{latest && <small><b>{latest.result === "great" ? "Great" : "Remake"}</b> · {latest.made_by}</small>}<button className="button secondary compact" onClick={() => openCutTest(store)}><Camera size={14}/>{storeCutTests.length ? "Add another" : "Add cut test"}</button></div></td>{storeChecks.map(([key]) => <td key={key}><input aria-label={`${store.name} ${key}`} type="checkbox" checked={Boolean(draft.store_checklist[store.id]?.[key])} onChange={(event) => changeDraft({ store_checklist: { ...draft.store_checklist, [store.id]: { ...(draft.store_checklist[store.id] ?? {}), [key]: event.target.checked } } })}/></td>)}</tr>; })}</tbody></table></div></section>
 
@@ -542,12 +552,18 @@ export default function AreaSupervisorDashboard({ profile }: { profile: Profile 
 
     {editorOpen && <div className="modal-backdrop" onClick={() => { setEditorOpen(false); setEditingVisitId(null); }}><section className="ticket-modal supervisor-visit-editor" onClick={(event) => event.stopPropagation()}>
       <p className="eyebrow">Weekly visit schedule</p><h2>{editingVisitId ? "Edit planned visit" : "Add an Area Supervisor visit"}</h2>
-      <div className="calendar-form-row"><label>Date<input type="date" min={weekStart} max={weekEnd} value={newVisit.visit_date} onChange={(event) => setNewVisit({ ...newVisit, visit_date: event.target.value })}/></label><label>Store<select value={newVisit.store_id} onChange={(event) => setNewVisit({ ...newVisit, store_id: event.target.value })}>{storesForVisit(newVisit.purpose, newVisit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label></div>
+      <div className="calendar-form-row"><label>Date<input type="date" min={weekStart} max={weekEnd} value={newVisit.visit_date} onChange={(event) => setNewVisit({ ...newVisit, visit_date: event.target.value })}/></label>{newVisit.purpose !== "Other" && <label>Store<select value={newVisit.store_id} onChange={(event) => setNewVisit({ ...newVisit, store_id: event.target.value })}>{storesForVisit(newVisit.purpose, newVisit.store_id).map((store) => <option key={store.id} value={store.id}>{store.name} {store.store_number}</option>)}</select></label>}</div>
       <div className="calendar-form-row"><label>Start<select value={newVisit.start_time} onChange={(event) => setNewVisit({ ...newVisit, start_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label><label>End<select value={newVisit.end_time} onChange={(event) => setNewVisit({ ...newVisit, end_time: event.target.value })}>{timeOptions.map((time) => <option key={time} value={time}>{timeLabel(time)}</option>)}</select></label></div>
       <label>Visit type<select value={newVisit.purpose} onChange={(event) => { const purpose = event.target.value; const eligible = storesForVisit(purpose, newVisit.store_id); setNewVisit({ ...newVisit, purpose, store_id: eligible.some((store) => store.id === newVisit.store_id) ? newVisit.store_id : (eligible[0]?.id ?? "") }); }}>{!visitOptions.includes(newVisit.purpose) && <option disabled>{newVisit.purpose}</option>}{visitOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
       <small>Only stores assigned to this Area Supervisor are available.</small>
-      <label>Notes <small>(optional)</small><textarea rows={3} value={newVisit.notes} onChange={(event) => setNewVisit({ ...newVisit, notes: event.target.value })}/></label><p className="visit-editor-preview">{newVisit.visit_date ? `${dateLabel(newVisit.visit_date)} · ${timeLabel(newVisit.start_time)}–${timeLabel(newVisit.end_time)}` : "Choose a date and time"}</p>
-      <div className="button-row"><button className="button secondary" onClick={() => { setEditorOpen(false); setEditingVisitId(null); }}>Cancel</button><button className="button primary" disabled={!newVisit.store_id || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)} onClick={addVisit}>{editingVisitId ? <Save size={16}/> : <Plus size={16}/>} {editingVisitId ? "Save visit changes" : "Add to weekly board"}</button></div>
+      <label>{newVisit.purpose === "Other" ? "What is the activity?" : <>Notes <small>(optional)</small></>}<textarea rows={3} value={newVisit.notes} onChange={(event) => setNewVisit({ ...newVisit, notes: event.target.value })}/></label><p className="visit-editor-preview">{newVisit.visit_date ? `${dateLabel(newVisit.visit_date)} · ${timeLabel(newVisit.start_time)}–${timeLabel(newVisit.end_time)}` : "Choose a date and time"}</p>
+      <div className="button-row"><button className="button secondary" onClick={() => { setEditorOpen(false); setEditingVisitId(null); }}>Cancel</button><button className="button primary" disabled={!visitHasDetails || scheduleMinutes(newVisit.end_time) <= scheduleMinutes(newVisit.start_time)} onClick={addVisit}>{editingVisitId ? <Save size={16}/> : <Plus size={16}/>} {editingVisitId ? "Save visit changes" : "Add to weekly board"}</button></div>
+    </section></div>}
+    {trainingPhotoVisit && <div className="modal-backdrop" onClick={() => setTrainingPhotoVisit(null)}><section className="ticket-modal" role="dialog" aria-modal="true" aria-label="Training photo" onClick={event => event.stopPropagation()}>
+      <h2>Training · {storeMap.get(trainingPhotoVisit.store_id ?? "")?.name ?? "Store"}</h2>
+      <p>{dateLabel(trainingPhotoVisit.visit_date)}</p>
+      <TrainingVisitPhoto key={trainingPhotoVisit.id} visitId={trainingPhotoVisit.id}/>
+      <div className="button-row"><button type="button" className="button secondary" onClick={() => setTrainingPhotoVisit(null)}>Close</button></div>
     </section></div>}
     {cutTestStore && <div className="modal-backdrop" onClick={() => !cutTestBusy && setCutTestStore(null)}><section className="ticket-modal cut-test-editor" onClick={(event) => event.stopPropagation()}>
       <p className="eyebrow">Per-store weekly checklist</p><h2>Add cut test · {cutTestStore.name} {cutTestStore.store_number}</h2><p>Record the product result, who made it, and one photo. You may add more than one test for this store.</p>

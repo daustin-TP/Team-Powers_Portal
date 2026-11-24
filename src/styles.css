@@ -619,3 +619,8 @@ button.status-pill{border:0;cursor:pointer;font:inherit;font-size:.71rem;font-we
 .visit-paper-review{display:grid;gap:12px;margin-top:14px}
 .visit-paper-review label{display:grid;gap:4px}
 .visit-paper-review-actions{display:flex;flex-wrap:wrap;gap:8px}
+.training-visit-photo{display:grid;gap:8px;margin:12px 0}
+.training-visit-photo h3,.training-visit-photo p{margin:0}
+.training-visit-photo a{display:grid;gap:4px;justify-items:start}
+.training-visit-photo img{display:block;max-width:100%;max-height:260px;border-radius:8px;object-fit:contain}
+.training-visit-photo label svg{vertical-align:middle}

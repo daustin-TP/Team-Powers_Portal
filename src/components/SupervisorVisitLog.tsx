@@ -22,6 +22,7 @@ import type { Profile } from "../types";
 import { templateCompletion, templateForVisit, visitTemplates, VisitTemplateSectionForm, type TemplateData, type TemplateField } from "./VisitTemplateForm";
 import type { PaperSection } from "../lib/visitPdf";
 import { mergePaperAnswers, readPaperPages, type PaperAnswer } from "../lib/visitPaperImport";
+import { isTrainingVisit } from "./TrainingVisitPhoto";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Rating = "" | "yes" | "no" | "na";
@@ -476,6 +477,10 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
         .select("id,supervisor_id,store_id,visit_date,start_time,end_time,purpose")
         .eq("id", requestedScheduleId).neq("status", "cancelled").maybeSingle();
       if (error || !data) { setMessage(error?.message || "This scheduled visit is unavailable."); return; }
+      if (data.purpose === "Other" || isTrainingVisit(data.purpose) || !data.store_id) {
+        setMessage("Open this entry from the schedule to view its activity or training photo.");
+        return;
+      }
       const ownVisit = data.supervisor_id === profile.id;
       setScheduledOwner(ownVisit ? profile.fullName : "Assigned Area Supervisor");
       const backup = ownVisit ? readRecovery(recoveryKey(data.id, null)) : null;

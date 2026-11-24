@@ -112,9 +112,21 @@ test("visit log and delete controls remain prominent in the compact timeline", (
 });
 
 test("all visit types are restricted to the Area Supervisor's assigned stores", () => {
-  assert.match(component, /const storesForVisit = \(_purpose: string, currentStoreId\?: string\) => stores\.filter/);
+  assert.match(component, /const storesForVisit = \(_purpose: string, currentStoreId\?: string \| null\) => stores\.filter/);
   assert.match(component, /assignedStoreIds\.includes\(store\.id\)/);
   assert.doesNotMatch(component, /\/training\/i\.test\(purpose\)[\s\S]{0,80}\? stores/);
+});
+
+test("Other is a store-free activity and Training uses a private photo instead of a visit log", () => {
+  const photo = readFileSync(new URL("../src/components/TrainingVisitPhoto.tsx", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../supabase/migrations/20261124141500_supervisor_schedule_activities.sql", import.meta.url), "utf8");
+  assert.match(component, /What is the activity\?/);
+  assert.match(component, /store_id: visit\.purpose === "Other" \? null/);
+  assert.match(component, /option !== "Other" && !isTrainingVisit\(option\)/);
+  assert.match(component, /<TrainingVisitPhoto/);
+  assert.match(photo, /createSignedUrl/);
+  assert.match(migration, /purpose = 'Other' and nullif\(btrim\(notes\), ''\) is not null/);
+  assert.match(migration, /visit\.supervisor_id = \(select auth\.uid\(\)\)/);
 });
 
 test("the weekly board owns schedule editing and visit completion status", () => {
