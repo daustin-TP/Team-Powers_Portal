@@ -125,7 +125,7 @@ test("the weekly board owns schedule editing and visit completion status", () =>
 
 test("scheduled visits prefill their linked form and provide a printable recap", () => {
   const log = readFileSync(new URL("../src/components/SupervisorVisitLog.tsx", import.meta.url), "utf8");
-  const print = readFileSync(new URL("../src/components/VisitPrintRecap.tsx", import.meta.url), "utf8");
+  const print = readFileSync(new URL("../src/lib/visitPdf.ts", import.meta.url), "utf8");
   assert.match(log, /scheduledTemplateData/);
   assert.match(log, /store_id,visit_date,start_time,end_time,purpose/);
   assert.match(log, /Print visit recap/);
@@ -136,8 +136,8 @@ test("scheduled visits prefill their linked form and provide a printable recap",
   assert.match(log, /setStepIndex\(backup\?\.stepIndex \?\? 0\)/);
   assert.match(log, /sessionStorage\.setItem\(key, JSON\.stringify\(snapshot\)\)/);
   assert.match(log, /Full visit recap/);
-  assert.match(print, /Generated from the permanent DASH visit record/);
-  assert.match(print, /team-powers-logo\.png/);
+  assert.match(print, /format: "letter"/);
+  assert.match(print, /columns.length > 2 \* size.perPage/);
 });
 
 test("released KPI action plans appear in Area Focus and can be updated without leaving the field dashboard", () => {

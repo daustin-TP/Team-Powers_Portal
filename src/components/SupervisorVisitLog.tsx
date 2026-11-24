@@ -20,8 +20,7 @@ import {
 import { supabase } from "../lib/supabase";
 import type { Profile } from "../types";
 import { templateCompletion, templateForVisit, visitTemplates, VisitTemplateSectionForm, type TemplateData, type TemplateField } from "./VisitTemplateForm";
-import VisitPrintRecap from "./VisitPrintRecap";
-import VisitPaperForm, { type PaperSection } from "./VisitPaperForm";
+import type { PaperSection } from "../lib/visitPdf";
 import { mergePaperAnswers, readPaperPages, type PaperAnswer } from "../lib/visitPaperImport";
 
 type Store = { id: string; name: string; store_number: string | null };
@@ -191,6 +190,22 @@ const generalPaperFields: Record<string, TemplateField[]> = {
   ],
 };
 const generalPaperSections = steps.slice(1, -1).map(step => ({ ...step, fields: generalPaperFields[step.key] }));
+export const visitPaperSections = (visitType: string): PaperSection[] => {
+  const template = templateForVisit(visitType);
+  return [
+    paperDetails,
+    ...(template ? template.sections.map(section => ({
+      ...section,
+      fields: section.fields.map(field => ({
+        ...field,
+        key: `templateData.${field.key}`,
+        label: field.type === "time" ? `${field.label} (include AM or PM)`
+          : field.type === "date" ? `${field.label} (MM/DD/YYYY)` : field.label,
+      })),
+    })) : generalPaperSections),
+    { key: "review", label: "Final review", fields: [] },
+  ];
+};
 
 const centralDate = () => {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" })
@@ -338,19 +353,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
 
   const readOnly = preview || selected?.status === "submitted" || Boolean(selected && selected.supervisor_id !== profile.id);
   const activeTemplate = useMemo(() => templateForVisit(form.visitType), [form.visitType]);
-  const paperSections: PaperSection[] = useMemo(() => [
-    paperDetails,
-    ...(activeTemplate ? activeTemplate.sections.map(section => ({
-      ...section,
-      fields: section.fields.map(field => ({
-        ...field,
-        key: `templateData.${field.key}`,
-        label: field.type === "time" ? `${field.label} (include AM or PM)`
-          : field.type === "date" ? `${field.label} (MM/DD/YYYY)` : field.label,
-      })),
-    })) : generalPaperSections),
-    { key: "review", label: "Final review", fields: [] },
-  ], [activeTemplate]);
+  const paperSections = useMemo(() => visitPaperSections(form.visitType), [form.visitType]);
   const activeSteps = useMemo<Step[]>(() => activeTemplate ? [
     steps[0],
     ...activeTemplate.sections.map((section) => ({ key: section.key, label: section.label, short: section.label })),
@@ -698,27 +701,46 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     ...allChecks.map(([key, label]) => ({ label, value: [form.checks[key]?.rating?.toUpperCase(), form.checks[key]?.comment].filter(Boolean).join(" · ") || "—" })),
     ...productItems.map((label, index) => ({ label, value: [form.products[`product_${index}`]?.rating, form.products[`product_${index}`]?.comment].filter(Boolean).join(" · ") || "—" })),
   ];
-  const printVisit = (paper: boolean) => {
-    const source = printSource.current?.querySelector<HTMLElement>(paper ? ".visit-paper-source" : ".visit-print-sheet");
-    if (!source) return;
-    const portal = document.createElement("div");
-    portal.className = "visit-print-portal";
-    portal.appendChild(source.cloneNode(true));
-    const notes = printSource.current?.querySelector<HTMLElement>(".visit-notes-appendix");
-    if (!paper && notes) portal.appendChild(notes.cloneNode(true));
-    const pageStyle = document.createElement("style");
-    pageStyle.dataset.visitPrintPage = "true";
-    pageStyle.textContent = "@page { size: letter portrait; margin: 0.25in; }";
-    document.body.appendChild(portal); document.head.appendChild(pageStyle); document.body.classList.add("printing-visit-recap");
-    let cleaned = false;
-    const cleanup = () => { if (cleaned) return; cleaned = true; document.body.classList.remove("printing-visit-recap"); portal.remove(); pageStyle.remove(); };
-    window.addEventListener("afterprint", cleanup, { once: true });
-    window.print(); window.setTimeout(cleanup, 60000);
+  const printVisit = async (worksheet: boolean) => {
+    const previewWindow = window.open("", "_blank");
+    if (previewWindow) previewWindow.document.body.textContent = "Preparing your DASH visit PDF…";
+    try {
+      const { buildVisitPdf } = await import("../lib/visitPdf");
+      const sections = paperSections;
+      const values: Record<string, string> = {};
+      if (!worksheet) {
+        for (const section of sections) {
+          for (const field of section.fields) {
+            const value = field.key.split(".").reduce<unknown>((object, key) =>
+              object && typeof object === "object" ? (object as Record<string, unknown>)[key] : undefined, form);
+            if (typeof value === "string" && value.trim() && field.key !== "visitDate" && field.key !== "visitTime") {
+              values[field.key] = field.type === "time" ? formatTime(value) : field.type === "date" ? formatDate(value)
+                : field.key.endsWith(".rating") || field.key === "goals.posted" ? (value === "na" ? "N/A" : value.toUpperCase()) : value;
+            } else if (value === true) values[field.key] = "Yes";
+          }
+        }
+        for (const note of notesBySection) values[`visitNotes.${note.key}`] = note.value;
+      }
+      const details = worksheet && !scheduleId ? ["Paper worksheet", "Store, date and time to be entered below"] :
+        [storeId ? storeName(storeId) : "Store not entered", formatDate(form.visitDate),
+          form.visitTime ? formatTime(form.visitTime) : "", worksheet ? "Paper worksheet" :
+            `${selected?.supervisor_name ?? (preview ? scheduledOwner : profile.fullName)} · ${photos.length} photos`].filter(Boolean);
+      const title = activeTemplate?.title ?? form.visitType;
+      const pdf = buildVisitPdf({ title, worksheet, details, sections, values });
+      const filename = `DASH-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${worksheet ? "worksheet" : "recap"}.pdf`;
+      if (previewWindow && !previewWindow.closed) {
+        const url = URL.createObjectURL(pdf.output("blob"));
+        previewWindow.location.replace(url);
+        window.setTimeout(() => URL.revokeObjectURL(url), 120000);
+      } else pdf.save(filename);
+    } catch (error) {
+      previewWindow?.close();
+      setMessage(error instanceof Error ? error.message : "The visit PDF could not be opened.");
+    }
   };
 
   const visibleLogs = logs.filter((log) => (statusFilter === "all" || log.status === statusFilter) && (storeFilter === "all" || log.store_id === storeFilter));
   const storeName = (id: string) => { const store = stores.find((item) => item.id === id); return store ? `${store.name}${store.store_number ? ` ${store.store_number}` : ""}` : "Store"; };
-  const printSource = useRef<HTMLDivElement>(null);
   const notesBySection = Object.entries(form.visitNotes).filter(([, value]) => value.trim()).map(([key, value]) => ({
     key, value, label: activeSteps.find(step => step.key === key)?.label
       ?? Object.values(visitTemplates).flatMap(template => template.sections).find(section => section.key === key)?.label
@@ -757,17 +779,6 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
       </section>}
       <footer className="visit-form-actions"><button className="button secondary" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((value) => value - 1)}><ArrowLeft size={17} />Previous</button><div>{!readOnly && <button className="button secondary" type="button" disabled={saving} onClick={() => void persist("draft")}><Save size={17} />{saving ? "Saving…" : "Save draft"}</button>}{stepIndex < activeSteps.length - 1 ? <button className="button primary" type="button" onClick={() => setStepIndex((value) => value + 1)}>Next<ArrowRight size={17} /></button> : !readOnly ? <button className="button primary" type="button" disabled={saving} onClick={() => void submitVisit()}><ClipboardCheck size={17} />Submit visit</button> : null}</div></footer>
     </section>
-    <div ref={printSource} hidden>
-      <VisitPrintRecap form={form} store={storeName(storeId)} supervisor={selected?.supervisor_name ?? (preview ? scheduledOwner : profile.fullName)} status={preview ? "Schedule preview" : selected?.status === "submitted" ? "Submitted" : "Draft"} completion={stats.percent} photoCount={photos.length} genericRows={genericPrintRows}/>
-      <VisitPaperForm title={activeTemplate?.title ?? form.visitType} visitType={form.visitType}
-        sections={paperSections}
-        store={scheduleId ? storeName(storeId) : ""} date={scheduleId ? formatDate(form.visitDate) : ""}
-        time={scheduleId && form.visitTime ? formatTime(form.visitTime) : ""}/>
-      {notesBySection.length > 0 && <article className="visit-notes-appendix visit-paper-page">
-        <h1>Visit notes</h1><p>{storeName(storeId)} · {formatDate(form.visitDate)}</p>
-        {notesBySection.map(note => <section key={note.key}><h2>{note.label}</h2><p>{note.value}</p></section>)}
-      </article>}
-    </div>
   </div>;
 
   return <div className="page-stack visit-log-page">
