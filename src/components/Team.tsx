@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { MailPlus, MoreHorizontal, Plus, Search, ShieldCheck, UserCheck, UserX } from "lucide-react";
 import type { Profile, Role } from "../types";
 import { supabase } from "../lib/supabase";
@@ -27,10 +27,33 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
   const [nameSaving, setNameSaving] = useState<string | null>(null);
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [directorySearch, setDirectorySearch] = useState("");
+  const [directoryRole, setDirectoryRole] = useState<"all" | Role>("all");
+  const [directoryLocation, setDirectoryLocation] = useState("all");
+  const [directoryStatus, setDirectoryStatus] = useState<"all" | "active" | "disabled">("all");
   const [groupSupervisor, setGroupSupervisor] = useState("");
   const [assignmentSaving, setAssignmentSaving] = useState(false);
   const supervisors = members.filter((member) => member.role === "supervisor" && member.active);
   const selectedGroupSupervisor = supervisors.find((member) => member.id === groupSupervisor) ?? supervisors[0];
+  const directoryLocations = useMemo(() => Array.from(new Set(members.map((member) => member.location || "Unassigned"))).sort((a, b) => a.localeCompare(b)), [members]);
+  const filteredMembers = useMemo(() => {
+    const search = directorySearch.trim().toLowerCase();
+    return members.filter((member) => {
+      const matchesSearch = !search || [member.fullName, member.email, roleLabel(member.role), member.location || "Unassigned"]
+        .some((value) => value.toLowerCase().includes(search));
+      const matchesRole = directoryRole === "all" || member.role === directoryRole;
+      const matchesLocation = directoryLocation === "all" || (member.location || "Unassigned") === directoryLocation;
+      const matchesStatus = directoryStatus === "all" || (directoryStatus === "active" ? member.active : !member.active);
+      return matchesSearch && matchesRole && matchesLocation && matchesStatus;
+    });
+  }, [directoryLocation, directoryRole, directorySearch, directoryStatus, members]);
+  const directoryFiltersActive = Boolean(directorySearch.trim()) || directoryRole !== "all" || directoryLocation !== "all" || directoryStatus !== "all";
+  const clearDirectoryFilters = () => {
+    setDirectorySearch("");
+    setDirectoryRole("all");
+    setDirectoryLocation("all");
+    setDirectoryStatus("all");
+  };
 
   const loadDirectory=async()=>{
     if(!supabase)return;
@@ -213,11 +236,17 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
       {directoryWarning&&<div className="panel" role="status"><p>{directoryWarning}</p><button type="button" className="button secondary" onClick={loadDirectory}>Retry</button></div>}
       {!directoryError&&pendingInvites.length>0&&<section className="panel pending-invitations"><div><p className="eyebrow">Authorized email</p><h2>Pending invitations</h2><p>These emails have an active invitation but no matching portal profile. An Auth user alone does not grant access; if someone has already signed in, ask an administrator to check their profile.</p></div><div className="pending-invite-list">{pendingInvites.map(invite=><div key={invite.id}><div><strong>{invite.fullName}</strong><small>{invite.email}</small></div><span className="role-pill">{roleLabel(invite.role)}</span><span>{invite.location}</span></div>)}</div></section>}
       <section className="panel table-panel">
-        <div className="table-toolbar"><div><h2>Employee directory</h2><p>{directoryLoading ? "Loading team accounts…" : directoryError ? "Directory unavailable" : `${members.filter((member) => member.active).length} active accounts`}</p></div><label className="search-field"><Search size={17} /><input placeholder="Search team" /></label></div>
+        <div className="table-toolbar team-directory-toolbar"><div><h2>Employee directory</h2><p>{directoryLoading ? "Loading team accounts…" : directoryError ? "Directory unavailable" : directoryFiltersActive ? `${filteredMembers.length} of ${members.length} accounts shown` : `${members.filter((member) => member.active).length} active accounts`}</p></div><label className="search-field"><span className="sr-only">Search by team member name or email</span><Search size={17} /><input value={directorySearch} onChange={(event) => setDirectorySearch(event.target.value)} placeholder="Search name or email" /></label></div>
+        <div className="team-directory-filters" aria-label="Employee directory column filters">
+          <label>Role<select value={directoryRole} onChange={(event) => setDirectoryRole(event.target.value as "all" | Role)}><option value="all">All roles</option><option value="employee">Employee</option><option value="manager">Manager</option><option value="supervisor">Area Supervisor</option><option value="accounting">Accounting</option><option value="admin">Administrator</option></select></label>
+          <label>Location<select value={directoryLocation} onChange={(event) => setDirectoryLocation(event.target.value)}><option value="all">All locations</option>{directoryLocations.map((locationName) => <option key={locationName} value={locationName}>{locationName}</option>)}</select></label>
+          <label>Status<select value={directoryStatus} onChange={(event) => setDirectoryStatus(event.target.value as "all" | "active" | "disabled")}><option value="all">All statuses</option><option value="active">Active</option><option value="disabled">Disabled</option></select></label>
+          <button type="button" className="button secondary team-directory-clear" disabled={!directoryFiltersActive} onClick={clearDirectoryFilters}>Clear filters</button>
+        </div>
         <div className="responsive-table">
           <table>
             <thead><tr><th>Team member</th><th>Role</th><th>Location</th><th>Access</th><th></th></tr></thead>
-            <tbody>{members.map((member) => (
+            <tbody>{filteredMembers.map((member) => (
               <tr key={member.id}>
                 <td><div className="person-cell"><span className="avatar small">{member.fullName.slice(0, 1).toUpperCase()}</span><span><strong>{member.fullName}</strong><small>{member.email}</small></span></div></td>
                 <td><span className="role-pill">{roleLabel(member.role)}{member.email.toLowerCase() === OWNER_EMAIL ? " · Owner" : ""}</span></td><td>{member.location}</td>
@@ -238,7 +267,7 @@ export default function Team({ currentProfile }: { currentProfile: Profile }) {
                   </div>}
                 </td>
               </tr>
-            ))}{!directoryLoading&&!directoryError&&members.length===0&&<tr><td colSpan={5}>No portal profiles found. Active invitations, if any, are shown above.</td></tr>}</tbody>
+            ))}{!directoryLoading&&!directoryError&&members.length===0&&<tr><td colSpan={5}>No portal profiles found. Active invitations, if any, are shown above.</td></tr>}{!directoryLoading&&!directoryError&&members.length>0&&filteredMembers.length===0&&<tr><td colSpan={5} className="team-directory-empty">No team members match these filters. Clear or change a filter to see more accounts.</td></tr>}</tbody>
           </table>
         </div>
       </section>
