@@ -45,7 +45,7 @@ export async function handlePlans(req:Request) {
    const results=history.filter(r=>r.week_end===week && individual.some(s=>s.id===r.store_id));
    if(!results.length) return json({error:'No results have arrived for this region and week.'},400);
    const effective=individual.map(store=>{const defaults=autos.find(a=>a.store_id===store.id)?.goals??automaticGoals(history.filter(r=>r.store_id===store.id),week);const overrides=goals.find(g=>g.store_id===store.id)?.goals??{};return {store_id:store.id,goals:{...defaults,...Object.fromEntries(Object.entries(overrides).filter(([,v])=>v!==null))}};});
-   const snapshot={...regionSnapshot(individual,results,effective),supervisor_name:supervisor.data.full_name,week_end:week};
+   const snapshot={...regionSnapshot(individual,results,effective,history,week),supervisor_name:supervisor.data.full_name,week_end:week};
    const due=addDays(week,body.followup_weeks===2?15:8);
    const {data,error}=await db.from('kpi_regional_plans').insert({supervisor_id:body.supervisor_id,week_end:week,followup_date:due,snapshot,actions:suggestedActions(snapshot,due),created_by:profile.id,updated_by:profile.id}).select().single();
    if(error?.code==='23505') return json({error:'This region already has a report for that week. Open the existing report.'},409);
