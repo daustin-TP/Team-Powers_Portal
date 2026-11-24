@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { CalendarDays, ChevronRight, Pause, Play, RotateCcw, Trophy, Users } from 'lucide-react';
 import type { Profile } from '../types';
 import { metricValue, rankingMetrics, type RankingKey } from '../../supabase/functions/kpi-dashboard/analytics';
@@ -54,6 +54,10 @@ export default function KPIPerformanceRally({ profile, history, stores, groups, 
   const [playing, setPlaying] = useState(false);
   const [selectedScoreId, setSelectedScoreId] = useState('');
   const [zoom, setZoom] = useState(85);
+  const [lockedOrder, setLockedOrder] = useState<string[] | null>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const previousLanes = useRef<{ order: string; zoom: number; offsets: Map<string, number> } | null>(null);
+  const rowAnimations = useRef(new Map<string, Animation>());
 
   const validGroups = useMemo(() => groups.map(group => ({ ...group, ids: (group.store_ids?.length ? group.store_ids : accessibleStores.filter(store => group.stores.includes(store.id) || group.stores.includes(store.store_number ?? '')).map(store => store.id)).filter(id => accessibleStores.some(store => store.id === id)) })).filter(group => group.ids.length), [accessibleStores, groups]);
   useEffect(() => { if (!groupId && validGroups[0]) setGroupId(validGroups[0].id); }, [groupId, validGroups]);
@@ -134,6 +138,47 @@ export default function KPIPerformanceRally({ profile, history, stores, groups, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessibleStores, frameIndex, groupId, scope, selectedIds, validGroups, frames, history]);
 
+  const rankedScores = new Map(scores.map((score, index) => [score.id, { score, rank: index + 1 }]));
+  const roster = scope === 'regions' ? validGroups.map(group => group.id)
+    : scope === 'region' ? validGroups.find(group => group.id === groupId)?.ids ?? []
+    : scope === 'custom' ? selectedIds : accessibleStores.map(store => store.id);
+  const lanes = lockedOrder === null ? scores.map(score => score.id)
+    : [...lockedOrder.filter(id => roster.includes(id)), ...roster.filter(id => !lockedOrder.includes(id))];
+  const laneOrder = JSON.stringify(lanes);
+  const trackVisible = scores.length > 0 || (frames.length > 0 && lockedOrder !== null && lanes.length > 0);
+
+  useLayoutEffect(() => {
+    const rows = Array.from(trackRef.current?.querySelectorAll<HTMLElement>('[data-rally-lane]') ?? []);
+    const offsets = new Map(rows.map(row => [row.dataset.rallyLane!, row.offsetTop]));
+    const previous = previousLanes.current;
+    previousLanes.current = { order: laneOrder, zoom, offsets };
+    const animations = rowAnimations.current;
+    if (lockedOrder !== null || !trackVisible) {
+      animations.forEach(animation => animation.cancel());
+      animations.clear();
+      return;
+    }
+    if (!previous || previous.order === laneOrder || previous.zoom !== zoom ||
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    for (const row of rows) {
+      const id = row.dataset.rallyLane!;
+      const oldTop = previous.offsets.get(id);
+      if (oldTop === undefined) continue;
+      const inFlight = animations.get(id);
+      const remainingOffset = inFlight ? row.getBoundingClientRect().top - (row.parentElement!.getBoundingClientRect().top + row.parentElement!.clientTop + row.offsetTop) : 0;
+      inFlight?.cancel();
+      const distance = oldTop - row.offsetTop + remainingOffset;
+      if (Math.abs(distance) < 1) continue;
+      const animation = row.animate(
+        [{ transform: `translateY(${distance}px)`, zIndex: 2 }, { transform: 'translateY(0)', zIndex: 2 }],
+        { duration: 720, easing: 'cubic-bezier(.22,.72,.25,1)' },
+      );
+      animations.set(id, animation);
+      animation.onfinish = () => { if (animations.get(id) === animation) animations.delete(id); };
+    }
+  }, [laneOrder, lockedOrder, trackVisible, zoom]);
+
   const frame = frames[frameIndex];
   const leader = scores[0];
   const focus = scores.at(-1);
@@ -146,15 +191,40 @@ export default function KPIPerformanceRally({ profile, history, stores, groups, 
       {leadership && <label>View<select value={scope} onChange={event => setScope(event.target.value as Scope)}><option value="region">One region</option><option value="regions">Compare regions</option><option value="company">Whole company</option><option value="custom">Choose stores</option></select></label>}
       {leadership && scope === 'region' && <label>Region<select value={groupId} onChange={event => setGroupId(event.target.value)}>{validGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>}
       <label>Playback<select value={cadence} onChange={event => setCadence(event.target.value as Cadence)}>{Object.entries(cadenceLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      <label className="kpi-rally-lock">
+        <input type="checkbox" checked={lockedOrder !== null} onChange={event => {
+          setLockedOrder(event.target.checked ? [...new Set([...scores.map(score => score.id), ...roster])] : null);
+        }}/>
+        {scope === 'regions' ? 'Lock region positions' : 'Lock store positions'}
+      </label>
       {cadence === 'custom' && <><label>From<input type="date" value={customStart} min={allWeeks[0]} max={customEnd || allWeeks.at(-1)} onChange={event => setCustomStart(event.target.value)}/></label><label>Through<input type="date" value={customEnd} min={customStart || allWeeks[0]} max={allWeeks.at(-1)} onChange={event => setCustomEnd(event.target.value)}/></label></>}
     </div>
     {leadership && scope === 'custom' && <details className="kpi-rally-store-picker" open><summary><Users size={17}/> Choose stores across any region</summary><div>{accessibleStores.map(store => <label key={store.id}><input type="checkbox" checked={selectedIds.includes(store.id)} onChange={event => setSelectedIds(current => event.target.checked ? [...new Set([...current, store.id])] : current.filter(id => id !== store.id))}/>{storeLabel(store)}</label>)}</div></details>}
-    {!frames.length || !scores.length ? <div className="empty-card"><h3>Not enough comparable KPI history yet</h3><p>A store enters the rally automatically after at least four of the six performance measures are available.</p></div> : <>
+    {!frame || !trackVisible ? <div className="empty-card"><h3>Not enough comparable KPI history yet</h3><p>A store enters the rally automatically after at least four of the six performance measures are available.</p></div> : <>
       <div className="kpi-rally-summary"><div><span>Viewing</span><strong>{scopeLabel}</strong></div><div><span>Results window</span><strong>{frame.start === frame.end ? shortDate(frame.end) : `${shortDate(frame.start)}–${shortDate(frame.end)}`}</strong></div><div><span>Business period</span><strong>{periodLabel(frame.end)}</strong></div><div><span>Priority focus</span><strong>{focus?.name}</strong></div></div>
       <div className="kpi-rally-playback"><button className="button secondary" onClick={() => { setPlaying(false); setFrameIndex(0); }} title="Return to the first available result"><RotateCcw size={16}/></button><button className="button primary" onClick={() => setPlaying(value => !value)}>{playing ? <Pause size={17}/> : <Play size={17}/>} {playing ? 'Pause' : 'Play history'}</button><input aria-label="Performance rally history" type="range" min="0" max={Math.max(0, frames.length - 1)} value={frameIndex} onChange={event => { setPlaying(false); setFrameIndex(Number(event.target.value)); }}/><b>{frameIndex + 1} / {frames.length}</b><label className="kpi-rally-zoom">View size<input aria-label="Rally view size" type="range" min="65" max="100" step="5" value={zoom} onChange={event => setZoom(Number(event.target.value))}/><span>{zoom}%</span></label></div>
-      <div className="kpi-rally-track" aria-label={`${scopeLabel} performance standings`} style={{'--rally-zoom':zoom/100} as CSSProperties}>
+      <div ref={trackRef} className={`kpi-rally-track${lockedOrder ? ' locked' : ''}`} aria-label={`${scopeLabel} performance standings`} style={{'--rally-zoom':zoom/100} as CSSProperties}>
         {[75, 50, 25].map(mark => <span key={mark} className="kpi-rally-gridline" style={{left:`${mark}%`}}>{mark}</span>)}
-        {scores.map((item, index) => <button type="button" key={item.id} className={`kpi-rally-lane ${item.id === focus?.id ? 'focus' : ''} ${item.id === selectedScoreId ? 'selected' : ''}`} onClick={() => item.metrics && setSelectedScoreId(current => current === item.id ? '' : item.id)} aria-expanded={item.id === selectedScoreId}><div className="kpi-rally-rank">{index + 1}</div><div className="kpi-rally-name"><strong>{item.name}</strong><small>{item.change > .5 ? `▲ ${item.change.toFixed(1)} improving` : item.change < -.5 ? `▼ ${Math.abs(item.change).toFixed(1)} slipping` : '● holding steady'}</small></div><div className="kpi-rally-course"><div className="kpi-rally-progress" style={{width:`${Math.max(4, item.score)}%`, background:item.color}}/><span className="kpi-rally-marker" style={{left:`clamp(8px, ${item.score}%, calc(100% - 30px))`, borderColor:item.color}}>{item.id === leader?.id ? '★' : index + 1}</span></div><div className="kpi-rally-score"><strong>{item.score.toFixed(0)}</strong><small>Opportunity: {item.opportunity}</small><span>{item.metrics?'Click for score details':''}</span></div></button>)}
+        {lanes.map(id => {
+          const entry = rankedScores.get(id);
+          if (!entry) return <div className="kpi-rally-lane kpi-rally-empty-lane" key={id} aria-hidden="true"/>;
+          const { score: item, rank } = entry;
+          return <button type="button" key={id} data-rally-lane={id}
+            className={`kpi-rally-lane ${id === focus?.id ? 'focus' : ''} ${id === selectedScoreId ? 'selected' : ''}`}
+            onClick={() => item.metrics && setSelectedScoreId(current => current === id ? '' : id)}
+            aria-expanded={id === selectedScoreId}>
+            <div className="kpi-rally-rank" aria-label={`Rank ${rank}`}>{rank}</div>
+            <div className="kpi-rally-name">
+              <strong>{item.name}</strong>
+              <small>{item.change > .5 ? `▲ ${item.change.toFixed(1)} improving` : item.change < -.5 ? `▼ ${Math.abs(item.change).toFixed(1)} slipping` : '● holding steady'}</small>
+            </div>
+            <div className="kpi-rally-course">
+              <div className="kpi-rally-progress" style={{ width: `${Math.max(4, item.score)}%`, background: item.color }}/>
+              <span className="kpi-rally-marker" style={{ left: `clamp(8px, ${item.score}%, calc(100% - 30px))`, borderColor: item.color }}>{id === leader?.id ? '★' : rank}</span>
+            </div>
+            <div className="kpi-rally-score"><strong>{item.score.toFixed(0)}</strong><small>Opportunity: {item.opportunity}</small><span>{item.metrics ? 'Click for score details' : ''}</span></div>
+          </button>;
+        })}
       </div>
       {selectedScore && <section className="kpi-rally-breakdown"><header><div><p className="eyebrow">Why this score</p><h3>{selectedScore.name} · {selectedScore.score.toFixed(0)} points</h3><p>Each available KPI contributes equally. Points show the store’s position against all reporting company stores in this same results window.</p></div><button type="button" className="icon-button" aria-label="Close score details" onClick={() => setSelectedScoreId('')}>×</button></header><div>{scoreMetrics.map(key => {const detail=selectedScore.metrics?.[key];const metric=rankingMetrics.find(item=>item.key===key)!;return <article key={key} className={detail&&detail.points<35?'needs-attention':detail&&detail.points>=70?'strong':''}><span>{metric.label}</span><strong>{detail?kpiDisplay(detail.value,key):'No data'}</strong><div><b>{detail?`${detail.points.toFixed(0)} pts`:'—'}</b><small>{detail?`Rank ${detail.rank} of ${detail.eligible}`:'Not scored'}</small></div><progress max="100" value={detail?.points??0}/>{detail&&<p>{detail.points<35?'Primary opportunity':detail.points>=70?'Current strength':'Middle of the company field'}</p>}</article>})}</div><footer><strong>Overall score = average of the available KPI points.</strong><span>Missing information is omitted and never counted as zero. Raw sales dollars are not scored.</span></footer></section>}
       <footer className="kpi-rally-focus"><div><span>Recommended field focus</span><strong>{focus?.name}</strong><p>{focus?.opportunity} is the largest relative opportunity in this results window. Use this as the starting point—not as a judgment of the team.</p></div>{leadership && onOpenPlans && <button className="button secondary" type="button" onClick={onOpenPlans}>Open action planning <ChevronRight size={17}/></button>}</footer>
