@@ -635,3 +635,19 @@ button.status-pill{border:0;cursor:pointer;font:inherit;font-size:.71rem;font-we
   .printing-visit-recap .visit-paper-writing.long{height:.63in}
   .printing-visit-recap .visit-notes-appendix p{white-space:pre-wrap;overflow-wrap:anywhere}
 }
+.visit-recovery-status{margin:0;color:#516b7e;font-size:.875rem}
+@media print{
+  .printing-visit-recap .visit-paper-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.18in}
+  .printing-visit-recap .visit-paper-columns h2{font-size:10pt;border-bottom:1px solid #000;margin:.07in 0 .03in}
+  .printing-visit-recap .visit-paper-columns .visit-paper-field{margin-top:.045in;font-size:8.5pt}
+  .printing-visit-recap .visit-paper-columns .visit-paper-field code{font-size:6.5pt}
+  .printing-visit-recap .visit-paper-columns .visit-paper-writing{height:.20in}
+  .printing-visit-recap .visit-paper-columns .visit-paper-writing.long{height:.42in}
+  .printing-visit-recap .visit-paper-columns .visit-paper-options{margin:.02in 0 .04in;gap:.03in .08in}
+  .printing-visit-recap .visit-paper-columns .visit-paper-options i{width:.12in;height:.12in}
+}
+.visit-paper-import{padding:14px 18px}
+.visit-paper-import summary{cursor:pointer;font-weight:700}
+.visit-paper-review{display:grid;gap:12px;margin-top:14px}
+.visit-paper-review label{display:grid;gap:4px}
+.visit-paper-review-actions{display:flex;flex-wrap:wrap;gap:8px}

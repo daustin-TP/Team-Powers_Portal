@@ -2,8 +2,12 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "team-powers-portal",
   "compatibility_date": "2026-08-10",
+  "main": "workers/visit-paper-import.js",
+  "ai": { "binding": "AI" },
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/visit-paper-import"],
     "not_found_handling": "single-page-application"
   }
 }

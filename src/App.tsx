@@ -123,6 +123,7 @@ export default function App() {
     isSupabaseConfigured ? null : demoProfile,
   );
   const [loading, setLoading] = useState(isSupabaseConfigured);
+  const resolvedAccount = useRef<string | null>(null);
   const [memberAccess, setMemberAccess] = useState<MemberAccess | null>(null);
   const [section, setSection] = useState<PortalSection>("home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -155,6 +156,7 @@ export default function App() {
         if (!active || request !== authRequestId.current) return;
         setSession(data.session);
         setProfile(resolvedProfile);
+        resolvedAccount.current = resolvedProfile?.id ?? null;
         if (!resolvedProfile) {
           const memberResult = await client.rpc("team_member_portal_action", { action: "session", payload: {} });
           if (!active || request !== authRequestId.current) return;
@@ -175,12 +177,13 @@ export default function App() {
         const request = ++authRequestId.current;
         setSession(nextSession);
         if (!nextSession?.user) {
+          resolvedAccount.current = null;
           setProfile(null);
           setMemberAccess(null);
           setLoading(false);
           return;
         }
-        setLoading(true);
+        if (nextSession.user.id !== resolvedAccount.current) setLoading(true);
         // Keep the auth callback synchronous. Supabase serializes auth events;
         // awaiting another Supabase call inside this callback can race a newer event.
         void (async () => {
@@ -189,6 +192,7 @@ export default function App() {
             ?? await new Promise<Profile | null>((resolve) => window.setTimeout(() => void loadProfile(user.id, user.email ?? "").then(resolve), 250));
           if (!active || request !== authRequestId.current) return;
           setProfile(resolvedProfile);
+          resolvedAccount.current = resolvedProfile?.id ?? null;
           if (!resolvedProfile) {
             const memberResult = await client.rpc("team_member_portal_action", { action: "session", payload: {} });
             if (!active || request !== authRequestId.current) return;

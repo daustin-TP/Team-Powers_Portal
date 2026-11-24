@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -22,6 +22,7 @@ import type { Profile } from "../types";
 import { templateCompletion, templateForVisit, visitTemplates, VisitTemplateSectionForm, type TemplateData, type TemplateField } from "./VisitTemplateForm";
 import VisitPrintRecap from "./VisitPrintRecap";
 import VisitPaperForm, { type PaperSection } from "./VisitPaperForm";
+import { mergePaperAnswers, readPaperPages, type PaperAnswer } from "../lib/visitPaperImport";
 
 type Store = { id: string; name: string; store_number: string | null };
 type Rating = "" | "yes" | "no" | "na";
@@ -152,8 +153,8 @@ const paperCheckFields = (items: readonly (readonly [string, string])[]): Templa
 
 const paperDetails: PaperSection = { key: "details", label: "Visit details", fields: [
   { key: "store_id", label: "Store number or name" },
-  { key: "visitDate", label: "Visit date (MM/DD/YYYY)" },
-  { key: "visitTime", label: "Visit time (include AM or PM)" },
+  { key: "visitDate", label: "Visit date (MM/DD/YYYY)", type: "date" },
+  { key: "visitTime", label: "Visit time (include AM or PM)", type: "time" },
   { key: "managerName", label: "Manager on duty" },
 ] };
 const generalPaperFields: Record<string, TemplateField[]> = {
@@ -167,7 +168,7 @@ const generalPaperFields: Record<string, TemplateField[]> = {
   urgent: Array.from({ length: 4 }, (_, index) => [
     { key: `urgentItems.${index}.item`, label: `Urgent item ${index + 1}` },
     { key: `urgentItems.${index}.assignedTo`, label: "Assigned to" },
-    { key: `urgentItems.${index}.completionTime`, label: "Completion time (include AM or PM)" },
+    { key: `urgentItems.${index}.completionTime`, label: "Completion time (include AM or PM)", type: "time" as const },
   ]).flat(),
   systems: paperCheckFields(checkGroups.systems),
   goals: [
@@ -184,7 +185,7 @@ const generalPaperFields: Record<string, TemplateField[]> = {
     ...Array.from({ length: 4 }, (_, index) => [
       { key: `followUps.${index}.item`, label: `Follow-up item ${index + 1}` },
       { key: `followUps.${index}.owner`, label: "Owner" },
-      { key: `followUps.${index}.dueDate`, label: "Due date (MM/DD/YYYY)" },
+      { key: `followUps.${index}.dueDate`, label: "Due date (MM/DD/YYYY)", type: "date" as const },
       { key: `followUps.${index}.completed`, label: "Completed?", options: ["Yes", "No"] },
     ]).flat(),
   ],
@@ -282,6 +283,25 @@ const scheduledTemplateData = (visitType: string, startTime: string, endTime: st
   return {};
 };
 
+type VisitRecovery = {
+  form: VisitForm;
+  storeId: string;
+  stepIndex: number;
+  scheduleId: string | null;
+  logId: string | null;
+  revision: string | null;
+};
+
+function readRecovery(key: string): VisitRecovery | null {
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    const value = raw ? JSON.parse(raw) as VisitRecovery : null;
+    return value?.form && typeof value.storeId === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function SupervisorVisitLog({ profile, initialScheduleId }: { profile: Profile; initialScheduleId?: string | null }) {
   const [stores, setStores] = useState<Store[]>([]);
   const [logs, setLogs] = useState<VisitLog[]>([]);
@@ -300,16 +320,54 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
   const [statusFilter, setStatusFilter] = useState<"all" | VisitStatus>("all");
   const [storeFilter, setStoreFilter] = useState("all");
   const [scheduleId,setScheduleId]=useState<string|null>(null);
-  const openedSchedule=useRef<string|null>(null);
+  const openedInitial = useRef(false);
+  const [preview, setPreview] = useState(false);
+  const [scheduledOwner, setScheduledOwner] = useState("");
+  const [readingPaper, setReadingPaper] = useState(false);
+  const [paperReview, setPaperReview] = useState<PaperAnswer[]>([]);
+  const [recoveryAvailable, setRecoveryAvailable] = useState(true);
+  const recoveryPrefix = `dashos:visit-recovery:v1:${profile.id}:`;
+  const activeRecoveryKey = `${recoveryPrefix}active`;
+  const recoveryKey = (schedule: string | null, log: string | null) => `${recoveryPrefix}${schedule ?? log ?? "new"}`;
+  const recoveryPointer = () => {
+    try {
+      const key = window.sessionStorage.getItem(activeRecoveryKey);
+      return key?.startsWith(recoveryPrefix) ? key : null;
+    } catch { return null; }
+  };
 
-  const readOnly = selected?.status === "submitted" || Boolean(selected && selected.supervisor_id !== profile.id);
+  const readOnly = preview || selected?.status === "submitted" || Boolean(selected && selected.supervisor_id !== profile.id);
   const activeTemplate = useMemo(() => templateForVisit(form.visitType), [form.visitType]);
+  const paperSections: PaperSection[] = useMemo(() => [
+    paperDetails,
+    ...(activeTemplate ? activeTemplate.sections.map(section => ({
+      ...section,
+      fields: section.fields.map(field => ({
+        ...field,
+        key: `templateData.${field.key}`,
+        label: field.type === "time" ? `${field.label} (include AM or PM)`
+          : field.type === "date" ? `${field.label} (MM/DD/YYYY)` : field.label,
+      })),
+    })) : generalPaperSections),
+    { key: "review", label: "Final review", fields: [] },
+  ], [activeTemplate]);
   const activeSteps = useMemo<Step[]>(() => activeTemplate ? [
     steps[0],
     ...activeTemplate.sections.map((section) => ({ key: section.key, label: section.label, short: section.label })),
     steps[steps.length - 1],
   ] : steps, [activeTemplate]);
   const stats = useMemo(() => formStats(form, storeId), [form, storeId]);
+
+  useLayoutEffect(() => {
+    if (!showEditor || readOnly) return;
+    const key = recoveryKey(scheduleId, logId);
+    const snapshot: VisitRecovery = { form, storeId, stepIndex, scheduleId, logId, revision: selected?.updated_at ?? null };
+    try {
+      window.sessionStorage.setItem(key, JSON.stringify(snapshot));
+      window.sessionStorage.setItem(activeRecoveryKey, key);
+      setRecoveryAvailable(true);
+    } catch { setRecoveryAvailable(false); }
+  }, [showEditor, readOnly, form, storeId, stepIndex, scheduleId, logId, profile.id, selected?.updated_at]);
 
   useEffect(() => { if (stepIndex >= activeSteps.length) setStepIndex(0); }, [activeSteps.length, stepIndex]);
 
@@ -349,67 +407,93 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
   };
 
   const openNew = () => {
+    setPreview(false);
     setSelected(null);
     setLogId(null);
-    setStoreId(stores[0]?.id ?? "");
-    setForm(emptyForm());
+    const recovery = readRecovery(recoveryKey(null, null));
+    setStoreId(recovery?.storeId ?? stores[0]?.id ?? "");
+    setForm(recovery ? normalizeForm(recovery.form) : emptyForm());
     setPhotos([]);
-    setStepIndex(0);
+    setStepIndex(recovery?.stepIndex ?? 0);
     setShowEditor(true);
-    setMessage("");
+    setMessage(recovery ? "Recovered your in-progress visit." : "");
     setScheduleId(null);
   };
 
+  const closeEditor = () => {
+    try { window.sessionStorage.removeItem(activeRecoveryKey); } catch { /* Storage can be disabled. */ }
+    setShowEditor(false);
+    setSelected(null);
+    setPaperReview([]);
+  };
+
   const openLog = async (log: VisitLog) => {
-    const normalized = normalizeForm(log.form_data);
+    const editable = log.status === "draft" && log.supervisor_id === profile.id;
+    const key = recoveryKey(log.schedule_id, log.id);
+    const backup = editable ? readRecovery(key) : null;
+    const recovery = backup?.revision === log.updated_at ? backup : null;
+    const normalized = normalizeForm(recovery?.form ?? log.form_data);
     const template = templateForVisit(normalized.visitType);
     setSelected(log);
+    setPreview(false);
     setLogId(log.id);
-    setStoreId(log.store_id);
+    setStoreId(recovery?.storeId ?? log.store_id);
     setForm(normalized);
-    setStepIndex(log.status === "submitted" || log.supervisor_id !== profile.id ? (template ? template.sections.length + 1 : steps.length - 1) : 0);
+    setStepIndex(!editable ? (template ? template.sections.length + 1 : steps.length - 1) : recovery?.stepIndex ?? 0);
     setShowEditor(true);
-    setMessage("");
+    setMessage(recovery ? "Recovered your in-progress visit." : "");
     setScheduleId(log.schedule_id);
     await loadPhotos(log.id);
   };
 
   useEffect(()=>{
-    if(!initialScheduleId||loading||openedSchedule.current===initialScheduleId||!supabase)return;
-    openedSchedule.current=initialScheduleId;
+    if (loading || openedInitial.current || !supabase) return;
+    openedInitial.current = true;
+    const pointer = recoveryPointer();
+    const recovery = pointer ? readRecovery(pointer) : null;
+    const requestedScheduleId = initialScheduleId ?? recovery?.scheduleId;
+    if (!requestedScheduleId && !recovery) return;
     window.sessionStorage.removeItem('dashos:visit-schedule');
     const db = supabase;
-    setMessage("Opening scheduled visit…");
+    setMessage("Opening visit…");
     void (async () => {
+      if (!requestedScheduleId) {
+        if (!recovery?.logId) { openNew(); return; }
+        const record = await db.from("supervisor_visit_logs").select("*").eq("id", recovery.logId).maybeSingle();
+        if (record.data) await openLog(record.data as VisitLog);
+        else setMessage(record.error?.message || "This visit draft is unavailable.");
+        return;
+      }
       const linked = await db.from("supervisor_visit_logs").select("*")
-        .eq("schedule_id", initialScheduleId).order("submitted_at", { ascending: false, nullsFirst: false })
+        .eq("schedule_id", requestedScheduleId).order("submitted_at", { ascending: false, nullsFirst: false })
         .order("updated_at", { ascending: false }).limit(1).maybeSingle();
       if (linked.error) { setMessage(linked.error.message); return; }
       if (linked.data) { await openLog(linked.data as VisitLog); return; }
       const { data, error } = await db.from("supervisor_visit_schedules")
         .select("id,supervisor_id,store_id,visit_date,start_time,end_time,purpose")
-        .eq("id", initialScheduleId).neq("status", "cancelled").maybeSingle();
+        .eq("id", requestedScheduleId).neq("status", "cancelled").maybeSingle();
       if (error || !data) { setMessage(error?.message || "This scheduled visit is unavailable."); return; }
-      if (data.supervisor_id !== profile.id) {
-        setMessage("The assigned Area Supervisor can start this visit from their schedule.");
-        return;
-      }
+      const ownVisit = data.supervisor_id === profile.id;
+      setScheduledOwner(ownVisit ? profile.fullName : "Assigned Area Supervisor");
+      const backup = ownVisit ? readRecovery(recoveryKey(data.id, null)) : null;
+      setPreview(!ownVisit);
       const visitType = data.purpose?.trim() || "General Supervisor Visit";
       setSelected(null);
       setLogId(null);
       setScheduleId(data.id);
-      setStoreId(data.store_id);
-      setForm({ ...emptyForm(), visitType, visitDate: data.visit_date, visitTime: data.start_time.slice(0, 5),
+      setStoreId(backup?.storeId ?? data.store_id);
+      setForm(backup ? normalizeForm(backup.form) : { ...emptyForm(), visitType, visitDate: data.visit_date, visitTime: data.start_time.slice(0, 5),
         templateData: scheduledTemplateData(visitType, data.start_time, data.end_time) });
       setPhotos([]);
-      setStepIndex(0);
+      setStepIndex(backup?.stepIndex ?? 0);
       setShowEditor(true);
-      setMessage("Visit type, store, date, and time filled from the schedule.");
+      setMessage(!ownVisit ? "Schedule preview. The assigned Area Supervisor can fill out and submit this form." :
+        backup ? "Recovered your in-progress visit." : "Visit type, store, date, and time filled from the schedule.");
     })();
   }, [initialScheduleId, loading, profile.id]);
 
   const persist = async (status: VisitStatus = "draft") => {
-    if (!supabase || saving) return null;
+    if (!supabase || saving || readOnly) return null;
     if (!storeId) { setMessage("Choose a store before saving this visit."); return null; }
     setSaving(true);
     setMessage("");
@@ -435,6 +519,10 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     setSaving(false);
     if (result.error || !result.data) { setMessage(result.error?.message ?? "The visit could not be saved."); return null; }
     const saved = { ...result.data, form_data: normalizeForm(result.data.form_data) } as VisitLog;
+    try {
+      if (status === "submitted" || (!scheduleId && !logId)) window.sessionStorage.removeItem(recoveryKey(scheduleId, logId));
+      if (status === "submitted") window.sessionStorage.removeItem(activeRecoveryKey);
+    } catch { /* The server copy was saved. */ }
     setLogId(saved.id);
     setSelected(saved);
     setMessage(status === "submitted" ? "Visit submitted and preserved in the DM Visit Logs." : "Draft saved. You can leave and return to finish it later.");
@@ -446,6 +534,40 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
     if (stats.percent < 100 && !window.confirm(`This visit is ${stats.percent}% complete and has ${stats.missing} unanswered items. Submit it anyway?`)) return;
     const saved = await persist("submitted");
     if (saved) { setShowEditor(false); setSelected(null); }
+  };
+
+  const importPaper = async (files: File[]) => {
+    if (!supabase || !files.length || readOnly || readingPaper) return;
+    if (files.length > 10) { setMessage("Choose up to 10 pages at a time."); return; }
+    setReadingPaper(true);
+    setPaperReview([]);
+    setMessage("");
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) throw new Error("Sign in to import a visit.");
+      const fields = paperSections.flatMap(section => [
+        ...section.fields.filter(field => field.key !== "store_id").map(field => ({
+          ...field, label: `${section.label}: ${field.label}`,
+        })),
+        { key: `visitNotes.${section.key}`, label: `${section.label}: Visit notes`, type: "textarea" as const },
+      ]);
+      const { answers, failures, conflicts } = await readPaperPages(files, data.session.access_token, activeTemplate?.title ?? form.visitType, fields);
+      setPaperReview(answers);
+      setMessage([
+        answers.length ? `${answers.length} possible answers found. Review them before adding them to your draft.`
+          : "No clear answers were found. Try a straight, well-lit photo of the full page.",
+        conflicts ? `${conflicts} conflicting answers were skipped.` : "",
+        ...failures,
+      ].filter(Boolean).join(" "));
+    } catch (error) { setMessage(error instanceof Error ? error.message : "The paper form could not be read."); }
+    finally { setReadingPaper(false); }
+  };
+
+  const applyPaperReview = () => {
+    const merged = mergePaperAnswers(form, paperReview);
+    setForm(merged.form);
+    setPaperReview([]);
+    setMessage(`${merged.applied} answers added to blank fields. Review the visit and edit any answers before submitting.`);
   };
 
   const uploadPhotos = async (files: FileList | null) => {
@@ -532,7 +654,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
   const renderStep = () => {
     const key = activeStep.key;
     if (key === "details") return <div className="visit-details-grid">
-      <label>Visit form<select value={form.visitType} onChange={(event) => { setForm((current) => ({ ...current, visitType: event.target.value, templateData: {} })); setStepIndex(0); }} disabled={readOnly}>
+      <label>Visit form<select value={form.visitType} onChange={(event) => { setPaperReview([]); setForm((current) => ({ ...current, visitType: event.target.value, templateData: {} })); setStepIndex(0); }} disabled={readOnly || readingPaper}>
         <option>General Supervisor Visit</option><option>Game Day visit</option><option>Opening visit</option><option>Closing visit</option><option>Rush observation</option>
         {!templateForVisit(form.visitType) && form.visitType !== "General Supervisor Visit" && <option>{form.visitType}</option>}
       </select></label>
@@ -540,7 +662,7 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
       <label>Date<input type="date" value={form.visitDate} onChange={(event) => setForm((current) => ({ ...current, visitDate: event.target.value }))} disabled={readOnly} /></label>
       <label>Visit time <span className="optional-label">Optional</span><input type="time" value={form.visitTime} onChange={(event) => setForm((current) => ({ ...current, visitTime: event.target.value }))} disabled={readOnly} /></label>
       <label>Manager on duty<input value={form.managerName} onChange={(event) => setForm((current) => ({ ...current, managerName: event.target.value }))} placeholder="First and last name" disabled={readOnly} /></label>
-      <div className="visit-owner-card"><ShieldCheck /><div><small>Visited by</small><strong>{profile.fullName}</strong><span>{profile.role === "admin" ? "Administrator" : "Area Supervisor"}</span></div></div>
+      <div className="visit-owner-card"><ShieldCheck /><div><small>Visited by</small><strong>{selected?.supervisor_name ?? (preview ? scheduledOwner : profile.fullName)}</strong></div></div>
     </div>;
     const templateSection = activeTemplate?.sections.find((section) => section.key === key);
     if (templateSection) return <VisitTemplateSectionForm section={templateSection} data={form.templateData} disabled={readOnly} onChange={(fieldKey, value) => setForm((current) => ({ ...current, templateData: { ...current.templateData, [fieldKey]: value } }))}/>;
@@ -604,8 +726,24 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
   }));
 
   if (showEditor) return <div className="page-stack visit-log-page">
-    <header className={`page-header visit-branded-heading visit-heading-${form.visitType.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}><div><button className="link-button" type="button" onClick={() => { setShowEditor(false); setSelected(null); }}><ArrowLeft size={16} />Back to visit log</button><p className="eyebrow">Area Supervisor visit</p><h1>{activeTemplate?.title ?? (readOnly ? "Visit record" : logId ? "Continue visit draft" : "New store visit")}</h1><p>{activeTemplate?.subtitle ?? (readOnly ? "Submitted records are preserved as a read-only store visit history." : "Move through sections in any order. Save now and finish later if the visit does not require every section.")}</p></div><div className="visit-header-status"><span className={`visit-status ${readOnly ? "submitted" : "draft"}`}>{readOnly ? "Submitted" : "Draft"}</span><strong>{stats.percent}% complete</strong><button type="button" className="button secondary compact" onClick={() => printVisit(false)}><Printer size={16}/>Print visit recap</button><button type="button" className="button secondary compact" onClick={() => printVisit(true)}><Printer size={16}/>Print paper form</button></div></header>
+    <header className={`page-header visit-branded-heading visit-heading-${form.visitType.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}><div><button className="link-button" type="button" onClick={closeEditor}><ArrowLeft size={16} />Back to visit log</button><p className="eyebrow">Area Supervisor visit</p><h1>{activeTemplate?.title ?? (readOnly ? "Visit record" : logId ? "Continue visit draft" : "New store visit")}</h1><p>{activeTemplate?.subtitle ?? (readOnly ? "Submitted records are preserved as a read-only store visit history." : "Move through sections in any order. Save now and finish later if the visit does not require every section.")}</p></div><div className="visit-header-status"><span className={`visit-status ${readOnly ? "submitted" : "draft"}`}>{preview ? "Schedule preview" : selected?.status === "submitted" ? "Submitted" : "Draft"}</span><strong>{stats.percent}% complete</strong><button type="button" className="button secondary compact" onClick={() => printVisit(false)}><Printer size={16}/>Print visit recap</button><button type="button" className="button secondary compact" onClick={() => printVisit(true)}><Printer size={16}/>Print paper form</button></div></header>
+    {!readOnly && <p role="status" className="visit-recovery-status">{recoveryAvailable ? "Changes are kept in this tab if DASH refreshes. Save draft to continue on another device." : "This browser could not keep a recovery copy. Use Save draft before leaving."}</p>}
     {message && <div className="notice">{message}</div>}
+    {!readOnly && <details className="panel visit-paper-import" open={readingPaper || paperReview.length ? true : undefined}>
+      <summary>Import completed paper form</summary>
+      <p>Choose photos of the current visit form, one page per photo. Review detected answers and add them to blank fields in this draft.</p>
+      <input aria-label="Completed paper form photos" type="file" accept="image/*" multiple disabled={readingPaper || saving}
+        onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ""; void importPaper(files); }}/>
+      {readingPaper && <p role="status">Reading paper pages…</p>}
+      {paperReview.length > 0 && <div className="visit-paper-review">
+        {paperReview.map(({ field, value }, index) => <label key={field.key}>{field.label}
+          {field.options ? <select value={value} onChange={event => setPaperReview(current => current.map((answer, i) => i === index ? { ...answer, value: event.target.value } : answer))}>
+            <option value="">Skip this answer</option>{field.options.map(option => <option key={option}>{option}</option>)}
+          </select> : <textarea rows={2} value={value} onChange={event => setPaperReview(current => current.map((answer, i) => i === index ? { ...answer, value: event.target.value } : answer))}/>}
+        </label>)}
+        <div className="visit-paper-review-actions"><button type="button" className="button secondary" onClick={() => setPaperReview([])}>Discard suggestions</button><button type="button" className="button primary" onClick={applyPaperReview}>Add reviewed answers to draft</button></div>
+      </div>}
+    </details>}
     <nav className="visit-step-nav" aria-label="Visit form sections">{activeSteps.map((step, index) => <button type="button" key={step.key} className={index === stepIndex ? "active" : ""} onClick={() => setStepIndex(index)}><span>{index + 1}</span>{step.short}</button>)}</nav>
     <section className={`panel visit-form-panel ${activeTemplate ? "templated" : ""}`}><div className="visit-section-heading"><div><p className="eyebrow">Section {stepIndex + 1} of {activeSteps.length}</p><h2>{activeStep.label}</h2></div>{!readOnly && <small>All fields may be skipped</small>}</div>{renderStep()}{photoArea}
       <label className="visit-section-notes">
@@ -620,10 +758,9 @@ export default function SupervisorVisitLog({ profile, initialScheduleId }: { pro
       <footer className="visit-form-actions"><button className="button secondary" type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((value) => value - 1)}><ArrowLeft size={17} />Previous</button><div>{!readOnly && <button className="button secondary" type="button" disabled={saving} onClick={() => void persist("draft")}><Save size={17} />{saving ? "Saving…" : "Save draft"}</button>}{stepIndex < activeSteps.length - 1 ? <button className="button primary" type="button" onClick={() => setStepIndex((value) => value + 1)}>Next<ArrowRight size={17} /></button> : !readOnly ? <button className="button primary" type="button" disabled={saving} onClick={() => void submitVisit()}><ClipboardCheck size={17} />Submit visit</button> : null}</div></footer>
     </section>
     <div ref={printSource} hidden>
-      <VisitPrintRecap form={form} store={storeName(storeId)} supervisor={selected?.supervisor_name ?? profile.fullName} status={readOnly ? "Submitted" : "Draft"} completion={stats.percent} photoCount={photos.length} genericRows={genericPrintRows}/>
+      <VisitPrintRecap form={form} store={storeName(storeId)} supervisor={selected?.supervisor_name ?? (preview ? scheduledOwner : profile.fullName)} status={preview ? "Schedule preview" : selected?.status === "submitted" ? "Submitted" : "Draft"} completion={stats.percent} photoCount={photos.length} genericRows={genericPrintRows}/>
       <VisitPaperForm title={activeTemplate?.title ?? form.visitType} visitType={form.visitType}
-        sections={[paperDetails, ...(activeTemplate ? activeTemplate.sections.map(section => ({ ...section, fields: section.fields.map(field => ({ ...field, key: `templateData.${field.key}`, label: field.type === "time" ? `${field.label} (include AM or PM)` : field.type === "date" ? `${field.label} (MM/DD/YYYY)` : field.label })) })) : generalPaperSections),
-          { key: "review", label: "Final review", fields: [] }]}
+        sections={paperSections}
         store={scheduleId ? storeName(storeId) : ""} date={scheduleId ? formatDate(form.visitDate) : ""}
         time={scheduleId && form.visitTime ? formatTime(form.visitTime) : ""}/>
       {notesBySection.length > 0 && <article className="visit-notes-appendix visit-paper-page">

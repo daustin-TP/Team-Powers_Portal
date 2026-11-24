@@ -47,7 +47,7 @@ test("General Supervisor Visits are first, per-store, and open the standard link
   assert.match(component, /connectedLogTypes/);
   assert.match(log, /visitType: "General Supervisor Visit"/);
   assert.match(log, /const visitType = data\.purpose\?\.trim\(\) \|\| "General Supervisor Visit"/);
-  assert.match(log, /\.eq\("schedule_id", initialScheduleId\)/);
+  assert.match(log, /\.eq\("schedule_id", requestedScheduleId\)/);
 });
 
 test("cut tests are per-store checklist evidence rather than scheduled visits", () => {
@@ -132,6 +132,9 @@ test("scheduled visits prefill their linked form and provide a printable recap",
   assert.match(log, /Print paper form/);
   assert.match(log, /visitNotes\[activeStep\.key\]/);
   assert.match(log, /Visit notes by section/);
+  assert.match(log, /setPreview\(!ownVisit\)/);
+  assert.match(log, /setStepIndex\(backup\?\.stepIndex \?\? 0\)/);
+  assert.match(log, /sessionStorage\.setItem\(key, JSON\.stringify\(snapshot\)\)/);
   assert.match(log, /Full visit recap/);
   assert.match(print, /Generated from the permanent DASH visit record/);
   assert.match(print, /team-powers-logo\.png/);
