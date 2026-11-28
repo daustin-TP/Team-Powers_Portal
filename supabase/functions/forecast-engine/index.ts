@@ -6,6 +6,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const forecastMethod = "demand-v12";
 type MetricName = "sales" | "oven" | "deliveries";
 type ForecastRequest = {
   action?: "generate" | "get";
@@ -123,6 +124,38 @@ const eventIncludesInterval = (event: SchedulingEvent, date: string, interval: s
   if (event.all_day || !event.start_time || !event.end_time) return true;
   return isWithinBusinessHours(interval, event.start_time, event.end_time);
 };
+const isFullDayClosure = (event: SchedulingEvent) =>
+  event.impact_mode === "manual" && Number(event.sales_lift_percent) <= -100
+  && (event.all_day || !event.start_time || !event.end_time);
+
+export function unusableDemandDates(
+  rows: RecentInterval[],
+  historyWeeks: string[],
+  expectedSalesDays: Set<number>,
+  events: SchedulingEvent[],
+) {
+  const salesByDate = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.sales_source_batch_id) continue;
+    salesByDate.set(row.business_date, (salesByDate.get(row.business_date) ?? 0) + metricValue(row, "sales"));
+  }
+  const excludedDates = new Set<string>();
+  const excludedWeekEnds = new Set<string>();
+  const closures = events.filter(isFullDayClosure);
+  for (const week of historyWeeks) {
+    const dates = Array.from({ length: 7 }, (_, day) => addDays(week, day));
+    const hasSalesUpload = dates.some((date) => salesByDate.has(date));
+    for (const day of expectedSalesDays) {
+      const date = dates[day];
+      const closed = closures.some((event) => date >= event.start_date && date <= event.end_date);
+      if (closed || (hasSalesUpload && (salesByDate.get(date) ?? 0) === 0)) {
+        excludedDates.add(date);
+        excludedWeekEnds.add(dates[6]);
+      }
+    }
+  }
+  return { excludedDates, excludedWeekEnds };
+}
 const coefficientOfVariation = (values: number[]) => {
   if (values.length < 2) return null;
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -708,20 +741,24 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   const weekEnd = addDays(weekStart, 6);
   const season = isCentralDaylight(addDays(weekStart, 3)) ? "daylight" : "non_daylight";
   const historyStart = addDays(weekStart, -84);
+  const historyWeeks = Array.from({ length: 12 }, (_, index) => addDays(historyStart, index * 7));
   const kpiHistoryStart = addDays(weekStart, -420);
 
-  const [setsResult, recentResult, kpiResult, eventsResult, historicalEventsResult, settingsResult, hoursResult, storeResult, adjustmentsResult] = await Promise.all([
+  const [setsResult, recentResults, kpiResult, eventsResult, historicalEventsResult, settingsResult, hoursResult, storeResult, adjustmentsResult] = await Promise.all([
     admin.from("labor_baseline_sets").select("id,weeks_count,period_end,season").eq("store_id", storeId).eq("active", true).order("period_end", { ascending: false }),
-    admin.from("labor_metric_intervals").select("business_date,interval_start,royalty_sales,oven_items,delivery_orders,sales_source_batch_id,oven_source_batch_id,delivery_source_batch_id").eq("store_id", storeId).gte("business_date", historyStart).lt("business_date", weekStart),
+    // Each week has at most 672 quarter-hours, below the API's row limit.
+    Promise.all(historyWeeks.map((week) => admin.from("labor_metric_intervals")
+      .select("business_date,interval_start,royalty_sales,oven_items,delivery_orders,sales_source_batch_id,oven_source_batch_id,delivery_source_batch_id")
+      .eq("store_id", storeId).gte("business_date", week).lt("business_date", addDays(week, 7)))),
     admin.from("kpi_weekly_results").select("week_end,metrics").eq("store_id", storeId).gte("week_end", kpiHistoryStart).lt("week_end", weekStart).order("week_end", { ascending: false }),
     admin.from("labor_scheduling_events").select("id,name,category,start_date,end_date,all_day,start_time,end_time,impact_mode,sales_lift_percent,order_count_lift_percent,oven_items_lift_percent,delivery_lift_percent").eq("status", "active").lte("start_date", weekEnd).gte("end_date", weekStart).or(`scope.eq.company,store_id.eq.${storeId}`),
-    admin.from("labor_scheduling_events").select("id,name,category,start_date,end_date,all_day,start_time,end_time,impact_mode,sales_lift_percent,order_count_lift_percent,oven_items_lift_percent,delivery_lift_percent").eq("status", "active").lt("end_date", weekStart).gte("start_date", historyStart).or(`scope.eq.company,store_id.eq.${storeId}`),
+    admin.from("labor_scheduling_events").select("id,name,category,start_date,end_date,all_day,start_time,end_time,impact_mode,sales_lift_percent,order_count_lift_percent,oven_items_lift_percent,delivery_lift_percent").eq("status", "active").lt("start_date", weekStart).gte("end_date", historyStart).or(`scope.eq.company,store_id.eq.${storeId}`),
     admin.from("labor_store_settings").select("*").eq("store_id", storeId).maybeSingle(),
     admin.from("labor_store_hours").select("day_of_week,open_time,close_time").eq("store_id", storeId),
     admin.from("stores").select("id,name,store_number").eq("id", storeId).single(),
     admin.from("labor_interval_adjustments").select("scope,week_start,day_of_week,interval_start,handling,prep_minutes").eq("store_id", storeId).or(`scope.eq.recurring,and(scope.eq.week,week_start.eq.${weekStart})`),
   ]);
-  const firstError = setsResult.error || recentResult.error || kpiResult.error || eventsResult.error || historicalEventsResult.error || settingsResult.error || hoursResult.error || storeResult.error || adjustmentsResult.error;
+  const firstError = setsResult.error || recentResults.find((result) => result.error)?.error || kpiResult.error || eventsResult.error || historicalEventsResult.error || settingsResult.error || hoursResult.error || storeResult.error || adjustmentsResult.error;
   if (firstError) throw firstError;
 
   const allBaselineSets = (setsResult.data ?? []) as BaselineSet[];
@@ -754,19 +791,28 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   }
   if (baselineFallbackUsed) applySeasonalClockShift(baseline, season);
 
-  const recentRows = (recentResult.data ?? []) as RecentInterval[];
+  const historicalEvents = (historicalEventsResult.data ?? []) as SchedulingEvent[];
+  const expectedSalesDays = new Set(baselineRows.filter((row) => metricValue(row, "sales") > 0).map((row) => Number(row.day_of_week)));
+  const historyRows = recentResults.flatMap((result) => result.data ?? []) as RecentInterval[];
+  const { excludedDates, excludedWeekEnds } = unusableDemandDates(historyRows, historyWeeks, expectedSalesDays, historicalEvents);
+  const recentRows = historyRows.filter((row) => !excludedDates.has(row.business_date));
   const recent = new Map<string, { sales: number; salesWeight: number; oven: number; ovenWeight: number; deliveries: number; deliveryWeight: number }>();
   const recentWeekKeys = new Set<string>();
+  const seasonalWeights = new Map<string, { matches: boolean; weight: number }>();
   let transitionRowsUsed = 0;
   for (const row of recentRows) {
-    const rowMatchesSeason = isCentralDaylight(row.business_date) === (season === "daylight");
-    if (!rowMatchesSeason && !baselineFallbackUsed) continue;
     const ageWeeks = Math.max(0, daysBetween(row.business_date, weekStart) / 7);
     if (ageWeeks > 4.5) continue;
-    const transitionWeight = rowMatchesSeason ? seasonalTransitionWeight(row.business_date) : 1;
-    const weight = transitionWeight;
-    if (transitionWeight > 1) transitionRowsUsed += 1;
-    const interval = rowMatchesSeason ? row.interval_start : shiftedSeasonalInterval(row.interval_start, season);
+    let seasonal = seasonalWeights.get(row.business_date);
+    if (!seasonal) {
+      const matches = isCentralDaylight(row.business_date) === (season === "daylight");
+      seasonal = { matches, weight: matches ? seasonalTransitionWeight(row.business_date) : 1 };
+      seasonalWeights.set(row.business_date, seasonal);
+    }
+    if (!seasonal.matches && !baselineFallbackUsed) continue;
+    const { weight } = seasonal;
+    if (weight > 1) transitionRowsUsed += 1;
+    const interval = seasonal.matches ? row.interval_start : shiftedSeasonalInterval(row.interval_start, season);
     const key = keyFor(mondayIndex(row.business_date), interval);
     if (!baseline.has(key)) continue;
     const current = recent.get(key) ?? { sales: 0, salesWeight: 0, oven: 0, ovenWeight: 0, deliveries: 0, deliveryWeight: 0 };
@@ -777,7 +823,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     recentWeekKeys.add(addDays(row.business_date, -mondayIndex(row.business_date)));
   }
 
-  const kpiRows = (kpiResult.data ?? []).map((row) => ({
+  const kpiRows = (kpiResult.data ?? []).filter((row) => !excludedWeekEnds.has(String(row.week_end))).map((row) => ({
     week_end: String(row.week_end),
     sales: Number((row.metrics as Record<string, unknown>)?.royalty_sales) || 0,
     orders: Number((row.metrics as Record<string, unknown>)?.order_count) || 0,
@@ -808,11 +854,10 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     return Number(leftDay) - Number(rightDay) || leftTime.localeCompare(rightTime);
   });
   const events = (eventsResult.data ?? []) as SchedulingEvent[];
-  const historicalEvents = (historicalEventsResult.data ?? []) as SchedulingEvent[];
   const normalizeEventName = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const learnedEventLifts = new Map<string, { sales: number; orders: number; oven: number; deliveries: number; occurrences: number }>();
   for (const event of events.filter((item) => item.impact_mode === "learning")) {
-    const matches = historicalEvents.filter((prior) => prior.category === event.category && normalizeEventName(prior.name) === normalizeEventName(event.name));
+    const matches = historicalEvents.filter((prior) => prior.end_date < weekStart && prior.category === event.category && normalizeEventName(prior.name) === normalizeEventName(event.name));
     if (!matches.length) continue;
     const totals = { salesActual: 0, salesBase: 0, ovenActual: 0, ovenBase: 0, deliveryActual: 0, deliveryBase: 0 };
     let occurrences = 0;
@@ -936,7 +981,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     const storeHours = hours.get(day);
     if (!storeHours) continue;
     const closures = events.filter((event) => event.impact_mode === "manual" && Number(event.sales_lift_percent) <= -100 && date >= event.start_date && date <= event.end_date);
-    if (closures.some((event) => event.all_day || !event.start_time || !event.end_time)) { hours.delete(day); continue; }
+    if (closures.some(isFullDayClosure)) { hours.delete(day); continue; }
     const openMinute = timeMinutes(storeHours.open);
     let closeMinute = businessMinute(storeHours.close, openMinute);
     if (closeMinute === openMinute) closeMinute += 1440;
@@ -1052,6 +1097,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
     outlierCandidates ? `${outlierCandidates} isolated oven spike${outlierCandidates === 1 ? "" : "s"} detected; ${timedOrdersApplied} handled as advance-prep timed orders and ${ignoredOutliersApplied} ignored for staffing` : "No isolated oven-item spikes detected",
   ];
   if (transitionRowsUsed) reasons.push("Current-year post-clock-change interval results receive extra weight during the first four transition weeks");
+  if (excludedDates.size) reasons.push(`Skipped ${excludedDates.size} historical day(s) with closed, zero, or missing sales and ${excludedWeekEnds.size} affected weekly total(s)`);
   if (baselineFallbackUsed) reasons.push("Seasonal fallback lowers confidence until this store records its own post-change history");
   if (learningEvents) reasons.push(`${learningEvents} event${learningEvents === 1 ? " has" : "s have"} no learned lift yet`);
   if (learnedEvents.length) reasons.push(`${learnedEvents.length} event${learnedEvents.length === 1 ? " uses" : "s use"} measured demand from prior matching occurrences`);
@@ -1083,12 +1129,13 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("demand_forecast_runs").update({ is_current: false, status: "superseded", updated_at: new Date().toISOString() }).eq("store_id", storeId).eq("week_start", weekStart).eq("is_current", true);
   const { data: run, error: runError } = await admin.from("demand_forecast_runs").insert({
-    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: "demand-v11",
+    store_id: storeId, week_start: weekStart, week_end: weekEnd, season, method_version: forecastMethod,
     confidence_score: score, confidence_level: confidenceLevel(score), confidence_reasons: reasons,
     input_summary: {
       baseline_sets: baselineSets.length, baseline_weeks: baselineWeeks, baseline_fallback_used: baselineFallbackUsed,
       baseline_source_season: baselineSets[0]?.season ?? season, transition_rows_used: transitionRowsUsed, recent_kpi_weeks: kpiRows.length,
       recent_interval_weeks: recentWeekKeys.size, volatility, store: storeResult.data,
+      excluded_demand_dates: [...excludedDates].sort(), excluded_weekly_totals: [...excludedWeekEnds].sort(),
       sales_components: {
         recent_four_week: round(recentFourSales), thirteen_week: round(thirteenWeekSales),
         same_week_last_year: round(lastYearMatch?.sales || 0), momentum_percent: round(momentum * 100, 2),
@@ -1117,7 +1164,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
   let rebuildSummary = { preserved_shifts: 0, replaced_system_shifts: 0, added_system_shifts: 0, deletion_protected_groups: 0 };
   if (!existingPlan || existingPlan.status !== "published") {
     const { data: plan, error: planError } = await admin.from("labor_week_plans").upsert({
-      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: "demand-v11", forecast_run_id: run.id,
+      store_id: storeId, week_start: weekStart, status: existingPlan?.status ?? "draft", forecast_method: forecastMethod, forecast_run_id: run.id,
       created_by: userId, updated_at: new Date().toISOString(),
     }, { onConflict: "store_id,week_start" }).select("id").single();
     if (planError || !plan) throw planError ?? new Error("The labor week plan could not be prepared.");
@@ -1190,7 +1237,7 @@ async function generateForecast(admin: ReturnType<typeof createClient>, userId: 
 
   await admin.from("audit_events").insert({
     actor_id: userId, action: "forecast.generated", resource_type: "demand_forecast", resource_id: run.id,
-    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: "demand-v11", manual_weekly_sales: manualWeeklySales, reset_to_default: resetToDefault, baseline_fallback_used: baselineFallbackUsed, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied, ignored_outliers_applied: ignoredOutliersApplied },
+    metadata: { store_id: storeId, week_start: weekStart, confidence_score: score, method_version: forecastMethod, manual_weekly_sales: manualWeeklySales, reset_to_default: resetToDefault, baseline_fallback_used: baselineFallbackUsed, outlier_candidates: outlierCandidates, timed_orders_applied: timedOrdersApplied, ignored_outliers_applied: ignoredOutliersApplied },
   });
 
   return { run, daily: dailyRows, intervals: intervalRows, shifts: savedShifts ?? [], plan_id: planId, published_plan_preserved: Boolean(existingPlan?.status === "published"), edited_plan_preserved: editedPlanPreserved, rebuild_summary: rebuildSummary };
